@@ -1,0 +1,22 @@
+import logging
+
+import httpx
+
+logger = logging.getLogger(__name__)
+
+API_UNAVAILABLE_MESSAGE = "Сервис временно недоступен. Попробуйте ещё раз позже."
+
+
+async def handle_start(message: object, api_client: object) -> None:
+    telegram_user = message.from_user
+    if telegram_user is None:
+        return
+
+    try:
+        await api_client.create_or_get_user(telegram_user)
+    except httpx.HTTPError:
+        logger.exception("Could not create or get Telegram user through API")
+        await message.answer(API_UNAVAILABLE_MESSAGE)
+        return
+
+    await message.answer(f"Привет, {telegram_user.first_name}! Я помогу с поиском работы.")
