@@ -40,6 +40,7 @@ def test_telegram_user_is_created_then_profile_is_updated() -> None:
         "first_name": "Анна",
         "last_name": "Иванова",
         "username": "anna",
+        "language_code": "ru",
     }
 
     created = client.post("/users/telegram", json=payload)
@@ -50,6 +51,7 @@ def test_telegram_user_is_created_then_profile_is_updated() -> None:
             "first_name": "Анна-Мария",
             "last_name": "Петрова",
             "username": "anna_new",
+            "language_code": "en",
         },
     )
 
@@ -64,3 +66,4 @@ def test_telegram_user_is_created_then_profile_is_updated() -> None:
         assert users[0].username == "anna_new"
         assert users[0].first_name == "Анна-Мария"
         assert users[0].last_name == "Петрова"
+        assert users[0].language_code == "en"

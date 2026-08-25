@@ -34,3 +34,4 @@ def _update_telegram_profile(user: User, data: TelegramUserIn) -> None:
     user.username = data.username
     user.first_name = data.first_name
     user.last_name = data.last_name
+    user.language_code = data.language_code
