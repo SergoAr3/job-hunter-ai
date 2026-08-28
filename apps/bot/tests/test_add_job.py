@@ -11,6 +11,7 @@ from app.jobs import (
     API_UNAVAILABLE_MESSAGE,
     CANCELLED_MESSAGE,
     INVALID_URL_MESSAGE,
+    UNSAFE_URL_MESSAGE,
     REQUEST_URL_MESSAGE,
     SAVED_MESSAGE,
     AddJobStates,
@@ -70,6 +71,13 @@ class HttpErrorApiClient:
         raise httpx.HTTPStatusError("API error", request=request, response=response)
 
 
+class UnsafeUrlApiClient(HttpErrorApiClient):
+    async def save_application(self, user_id: int, source_url: str) -> dict[str, object]:
+        request = httpx.Request("POST", f"http://api/users/{user_id}/applications")
+        response = httpx.Response(422, request=request, json={"detail": "Unsafe URL"})
+        raise httpx.HTTPStatusError("unsafe URL", request=request, response=response)
+
+
 def make_state() -> tuple[MemoryStorage, FSMContext]:
     storage = MemoryStorage()
     state = FSMContext(storage=storage, key=StorageKey(bot_id=1, chat_id=1, user_id=123))
@@ -120,6 +128,19 @@ def test_duplicate_job_has_clear_message() -> None:
         assert message.answers == [ALREADY_SAVED_MESSAGE]
         await storage.close()
 
+    asyncio.run(scenario())
+
+
+def test_existing_application_shows_only_already_saved_message() -> None:
+    async def scenario() -> None:
+        storage, state = make_state()
+        await state.set_state(AddJobStates.waiting_for_url)
+        message = FakeMessage("https://example.com/jobs/123")
+        client = FakeApiClient(application_created=False)
+        client.save_application = lambda user_id, source_url: __import__("asyncio").sleep(0, result={"application_created": False, "job": {"parsing_status": "partial", "title": "Engineer"}})
+        await handle_job_url(message, state, client)
+        assert message.answers == [ALREADY_SAVED_MESSAGE]
+        await storage.close()
     asyncio.run(scenario())
 
 
@@ -183,6 +204,18 @@ def test_api_validation_error_keeps_state_and_requests_valid_url() -> None:
         assert message.answers == [INVALID_URL_MESSAGE]
         await storage.close()
 
+    asyncio.run(scenario())
+
+
+def test_unsafe_url_keeps_state_and_requests_another_url() -> None:
+    async def scenario() -> None:
+        storage, state = make_state()
+        await state.set_state(AddJobStates.waiting_for_url)
+        message = FakeMessage("http://127.0.0.1/")
+        await handle_job_url(message, state, UnsafeUrlApiClient(422))
+        assert await state.get_state() == AddJobStates.waiting_for_url.state
+        assert message.answers == [UNSAFE_URL_MESSAGE]
+        await storage.close()
     asyncio.run(scenario())
 
 

@@ -3,7 +3,7 @@ from sqlalchemy.orm import Session
 
 from app.database import get_session
 from app.schemas import ApplicationCreateIn, SavedApplicationOut, TelegramUserIn, TelegramUserOut
-from app.services.applications import UserNotFoundError, save_application_for_user
+from app.services.applications import UnsafeUrlError, UserNotFoundError, save_application_for_user
 from app.services.users import get_or_create_telegram_user
 from app.services.vacancy_enrichment import VacancyEnrichmentService
 
@@ -34,6 +34,8 @@ def save_application(
         )
     except UserNotFoundError as error:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found") from error
+    except UnsafeUrlError as error:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Unsafe URL") from error
 
     return SavedApplicationOut(
         job=job,
