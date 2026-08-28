@@ -6,6 +6,7 @@ from sqlalchemy.pool import StaticPool
 
 from app.database import Base, get_session
 from app.main import app
+import app.main as main_module
 
 engine = create_engine(
     "sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool
@@ -27,6 +28,18 @@ def override_get_session():
 
 app.dependency_overrides[get_session] = override_get_session
 client = TestClient(app)
+
+
+class StubEnrichmentService:
+    def enrich(self, url: str):
+        return None, "fetch_timeout"
+
+    @staticmethod
+    def values(data):
+        return {}
+
+
+main_module.enrichment_service = StubEnrichmentService()
 
 
 @pytest.fixture(autouse=True)

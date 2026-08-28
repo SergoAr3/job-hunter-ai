@@ -17,6 +17,7 @@ from app.jobs import (
     handle_add_job,
     handle_cancel,
     handle_job_url,
+    format_job_card,
 )
 
 
@@ -198,3 +199,10 @@ def test_api_server_error_keeps_state_and_reports_unavailability() -> None:
         await storage.close()
 
     asyncio.run(scenario())
+
+
+def test_job_card_keeps_structured_fields_when_text_is_long() -> None:
+    card = format_job_card({"title": "Engineer", "company": "Acme", "location": "Yerevan", "salary_text": "$3000", "workplace_type": "remote", "employment_type": "full_time", "description": "x" * 5000, "requirements_text": "y" * 1000})
+    assert "Вакансия: Engineer" in card
+    assert "Компания: Acme" in card
+    assert len(card) <= 3800

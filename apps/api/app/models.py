@@ -1,7 +1,7 @@
 from datetime import datetime
 from enum import Enum
 
-from sqlalchemy import BigInteger, CheckConstraint, DateTime, ForeignKey, String, UniqueConstraint, func
+from sqlalchemy import BigInteger, Boolean, CheckConstraint, DateTime, ForeignKey, Numeric, String, Text, UniqueConstraint, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.database import Base
@@ -27,17 +27,64 @@ class ApplicationStatus(str, Enum):
     REJECTED = "rejected"
 
 
+class JobSource(str, Enum):
+    LINKEDIN = "linkedin"
+    HH = "hh"
+    GREENHOUSE = "greenhouse"
+    LEVER = "lever"
+    COMPANY_SITE = "company_site"
+
+
+class IngestionMethod(str, Enum):
+    MANUAL = "manual"
+
+
+class ParsingStatus(str, Enum):
+    NOT_ATTEMPTED = "not_attempted"
+    PENDING = "pending"
+    SUCCESS = "success"
+    PARTIAL = "partial"
+    FAILED = "failed"
+
+
 class Job(Base):
     __tablename__ = "jobs"
+    __table_args__ = (
+        CheckConstraint("source IN ('linkedin', 'hh', 'greenhouse', 'lever', 'company_site')", name="ck_jobs_source"),
+        CheckConstraint("ingestion_method IN ('manual')", name="ck_jobs_ingestion_method"),
+        CheckConstraint("salary_period IN ('hour', 'day', 'week', 'month', 'year', 'unknown')", name="ck_jobs_salary_period"),
+        CheckConstraint("workplace_type IN ('remote', 'hybrid', 'onsite', 'unknown')", name="ck_jobs_workplace_type"),
+        CheckConstraint("employment_type IN ('full_time', 'part_time', 'contract', 'internship', 'temporary', 'unknown')", name="ck_jobs_employment_type"),
+        CheckConstraint("parsing_status IN ('not_attempted', 'pending', 'success', 'partial', 'failed')", name="ck_jobs_parsing_status"),
+        CheckConstraint("salary_min IS NULL OR salary_min >= 0", name="ck_jobs_salary_min_nonnegative"),
+        CheckConstraint("salary_max IS NULL OR salary_max >= 0", name="ck_jobs_salary_max_nonnegative"),
+        CheckConstraint("salary_min IS NULL OR salary_max IS NULL OR salary_max >= salary_min", name="ck_jobs_salary_range"),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True)
     source: Mapped[str] = mapped_column(String(32), nullable=False)
+    ingestion_method: Mapped[str] = mapped_column(String(16), nullable=False, default="manual", server_default="manual")
     source_url: Mapped[str] = mapped_column(String(2048), nullable=False, unique=True)
     title: Mapped[str | None] = mapped_column(String(512))
     company: Mapped[str | None] = mapped_column(String(512))
     description: Mapped[str | None] = mapped_column(String)
+    requirements_text: Mapped[str | None] = mapped_column(Text)
+    salary_text: Mapped[str | None] = mapped_column(Text)
+    salary_min: Mapped[float | None] = mapped_column(Numeric(14, 2))
+    salary_max: Mapped[float | None] = mapped_column(Numeric(14, 2))
+    salary_currency: Mapped[str | None] = mapped_column(String(3))
+    salary_period: Mapped[str] = mapped_column(String(16), nullable=False, default="unknown", server_default="unknown")
+    salary_period_inferred: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
+    location: Mapped[str | None] = mapped_column(String(512))
+    workplace_type: Mapped[str] = mapped_column(String(16), nullable=False, default="unknown", server_default="unknown")
+    employment_type: Mapped[str] = mapped_column(String(16), nullable=False, default="unknown", server_default="unknown")
+    parsing_status: Mapped[str] = mapped_column(String(16), nullable=False, default="not_attempted", server_default="not_attempted")
+    parsing_error: Mapped[str | None] = mapped_column(String(128))
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
     )
 
 

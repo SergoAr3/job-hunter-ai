@@ -5,8 +5,10 @@ from app.database import get_session
 from app.schemas import ApplicationCreateIn, SavedApplicationOut, TelegramUserIn, TelegramUserOut
 from app.services.applications import UserNotFoundError, save_application_for_user
 from app.services.users import get_or_create_telegram_user
+from app.services.vacancy_enrichment import VacancyEnrichmentService
 
 app = FastAPI(title="Job Hunter AI API")
+enrichment_service = VacancyEnrichmentService()
 
 
 @app.get("/health")
@@ -28,7 +30,7 @@ def save_application(
 ) -> SavedApplicationOut:
     try:
         job, application, job_created, application_created = save_application_for_user(
-            session, user_id, payload.source_url
+            session, user_id, payload.source_url, enrichment_service
         )
     except UserNotFoundError as error:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found") from error

@@ -33,7 +33,7 @@ class ApplicationCreateIn(BaseModel):
             parsed = urlsplit(value)
         except (ValidationError, ValueError) as error:
             raise ValueError("source_url must be a valid URL") from error
-        if parsed.scheme.lower() not in {"http", "https"} or not parsed.hostname:
+        if parsed.scheme.lower() not in {"http", "https"} or not parsed.hostname or parsed.username or parsed.password:
             raise ValueError("source_url must be an absolute http or https URL")
         return value
 
@@ -43,11 +43,25 @@ class JobOut(BaseModel):
 
     id: int
     source: str
+    ingestion_method: str
     source_url: str
     title: str | None
     company: str | None
     description: str | None
+    requirements_text: str | None
+    salary_text: str | None
+    salary_min: float | None
+    salary_max: float | None
+    salary_currency: str | None
+    salary_period: str
+    salary_period_inferred: bool
+    location: str | None
+    workplace_type: str
+    employment_type: str
+    parsing_status: str
+    parsing_error: str | None
     created_at: datetime
+    updated_at: datetime
 
 
 class ApplicationOut(BaseModel):

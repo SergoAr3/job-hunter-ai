@@ -10,7 +10,7 @@ logger = logging.getLogger(__name__)
 REQUEST_URL_MESSAGE = "Пришли ссылку на вакансию. Для отмены — /cancel"
 INVALID_URL_MESSAGE = "Нужна ссылка формата https://… или /cancel"
 API_UNAVAILABLE_MESSAGE = "Не удалось сохранить вакансию. Пришли ссылку ещё раз или /cancel"
-SAVED_MESSAGE = "Вакансия сохранена."
+SAVED_MESSAGE = "Вакансия сохранена ✅"
 ALREADY_SAVED_MESSAGE = "Эта вакансия уже сохранена."
 CANCELLED_MESSAGE = "Добавление вакансии отменено."
 NO_ACTIVE_FLOW_MESSAGE = "Нет активного добавления вакансии."
@@ -64,6 +64,17 @@ async def handle_job_url(message: object, state: FSMContext, api_client: object)
         await message.answer(SAVED_MESSAGE)
     else:
         await message.answer(ALREADY_SAVED_MESSAGE)
+    job = result.get("job")
+    if isinstance(job, dict):
+        status = job.get("parsing_status")
+        if status == "partial":
+            await message.answer("Удалось получить не все данные о вакансии.")
+        elif status == "failed":
+            await message.answer("Но автоматически разобрать вакансию не удалось.")
+        if status in {"success", "partial"}:
+            card = format_job_card(job)
+            if card:
+                await message.answer(card)
 
 
 def _is_basic_http_url(value: str) -> bool:
@@ -73,3 +84,23 @@ def _is_basic_http_url(value: str) -> bool:
     except ValueError:
         return False
     return parsed.scheme.lower() in {"http", "https"} and bool(parsed.netloc)
+
+
+def format_job_card(job: dict[str, object]) -> str:
+    salary = job.get("salary_text") or _format_structured_salary(job)
+    fields = [("Вакансия", job.get("title")), ("Компания", job.get("company")), ("Локация", job.get("location")), ("Формат", job.get("workplace_type")), ("Тип занятости", job.get("employment_type")), ("Зарплата", salary)]
+    lines = [f"{label}: {value}" for label, value in fields if value and value != "unknown"]
+    if not lines: return ""
+    for label, key, limit in (("Описание", "description", 2500), ("Требования", "requirements_text", 700)):
+        value = job.get(key)
+        if isinstance(value, str) and value:
+            lines.append(f"{label}: {value[:limit]}{'…' if len(value) > limit else ''}")
+    return "\n".join(lines)[:3800]
+
+
+def _format_structured_salary(job: dict[str, object]) -> str | None:
+    minimum, maximum, currency, period = job.get("salary_min"), job.get("salary_max"), job.get("salary_currency"), job.get("salary_period")
+    if minimum is None and maximum is None:
+        return None
+    amount = str(minimum) if maximum is None else str(maximum) if minimum is None else f"{minimum}–{maximum}"
+    return " ".join(part for part in (amount, currency, f"per {period}" if period and period != "unknown" else None) if part)
