@@ -13,6 +13,9 @@ class VacancyEnrichmentService:
         self.fetcher = fetcher or SafeHttpFetcher()
         self.extractor = extractor or JobPostingExtractor()
 
+    def preflight(self, url: str) -> None:
+        self.fetcher.preflight(url)
+
     def enrich(self, url: str) -> tuple[NormalizedJobData | None, str | None]:
         try:
             page = self.fetcher.fetch(url)

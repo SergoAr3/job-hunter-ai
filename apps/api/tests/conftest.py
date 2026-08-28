@@ -31,6 +31,9 @@ client = TestClient(app)
 
 
 class StubEnrichmentService:
+    def preflight(self, url: str) -> None:
+        return None
+
     def enrich(self, url: str):
         return None, "fetch_timeout"
 

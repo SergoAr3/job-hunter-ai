@@ -55,6 +55,17 @@ class SafeHttpFetcher:
         self._max_body_bytes = max_body_bytes
         self._clock = clock
 
+    def preflight(self, url: str) -> None:
+        """Apply the same URL and DNS safety policy before persistence.
+
+        Network failures are deliberately propagated as FetchError rather than
+        treated as unsafe; callers may still save a public-but-unreachable URL.
+        """
+        parsed = _validate_url(url)
+        addresses = self._resolver(parsed.hostname or "", parsed.port or _default_port(parsed.scheme))
+        if not addresses:
+            raise BlockedUrlError("No public address")
+
     def fetch(self, url: str) -> FetchedPage:
         current_url = url
         deadline = self._clock() + self._deadline_seconds

@@ -4,6 +4,8 @@ from sqlalchemy.exc import IntegrityError
 from app.models import Application, Job
 from app.models import User
 from app.services.applications import save_application_for_user
+from app.services.safe_http_fetcher import BlockedUrlError
+import app.main as main_module
 from conftest import TestSessionLocal, client
 
 
@@ -154,6 +156,9 @@ def test_database_foreign_key_rejects_unknown_job() -> None:
 
 def test_enrichment_runs_without_active_database_transaction() -> None:
     class ProbeEnrichment:
+        def preflight(self, url: str) -> None:
+            return None
+
         def enrich(self, url: str):
             assert session.in_transaction() is False
             return None, "fetch_timeout"
@@ -171,3 +176,28 @@ def test_enrichment_runs_without_active_database_transaction() -> None:
         )
         assert created is True
         assert job.parsing_status == "failed"
+
+
+def test_blocked_url_returns_422_without_persisting_records(monkeypatch) -> None:
+    class BlockedEnrichment:
+        def preflight(self, url: str) -> None:
+            raise BlockedUrlError("Non-public address")
+
+        def enrich(self, url: str):
+            raise AssertionError("enrichment must not run")
+
+    monkeypatch.setattr(main_module, "enrichment_service", BlockedEnrichment())
+    user_id = create_user(42)
+    response = save_application(user_id, "http://127.0.0.1/")
+    assert response.status_code == 422
+    assert response.json()["detail"] == "Unsafe URL"
+    with TestSessionLocal() as session:
+        assert session.query(Job).count() == 0
+        assert session.query(Application).count() == 0
+
+
+def test_safe_url_with_fetch_timeout_is_saved_as_failed() -> None:
+    user_id = create_user(43)
+    response = save_application(user_id, "https://example.com/jobs/timeout")
+    assert response.status_code == 200
+    assert response.json()["job"]["parsing_status"] == "failed"

@@ -9,11 +9,16 @@ from app.models import Application, ApplicationStatus, Job, User
 from app.models import IngestionMethod, ParsingStatus
 from app.services.job_sources import detect_job_source
 from app.services.vacancy_enrichment import VacancyEnrichmentService
+from app.services.safe_http_fetcher import BlockedUrlError, FetchError
 
 logger = logging.getLogger(__name__)
 
 
 class UserNotFoundError(Exception):
+    pass
+
+
+class UnsafeUrlError(Exception):
     pass
 
 
@@ -34,10 +39,18 @@ def normalize_source_url(source_url: str) -> str:
 def save_application_for_user(
     session: Session, user_id: int, source_url: str, enrichment_service: VacancyEnrichmentService | None = None
 ) -> tuple[Job, Application, bool, bool]:
+    normalized_url = normalize_source_url(source_url)
+    service = enrichment_service or VacancyEnrichmentService()
+    try:
+        service.preflight(normalized_url)
+    except BlockedUrlError as error:
+        raise UnsafeUrlError from error
+    except FetchError:
+        pass
+
     if session.get(User, user_id) is None:
         raise UserNotFoundError
 
-    normalized_url = normalize_source_url(source_url)
     job, job_created = _get_or_create_job(session, normalized_url, detect_job_source(normalized_url))
     application, application_created = _get_or_create_application(session, user_id, job.id)
     job_id = job.id
@@ -46,7 +59,6 @@ def save_application_for_user(
     if session.in_transaction():
         raise RuntimeError("Database transaction must be closed before enrichment")
     if job_created:
-        service = enrichment_service or VacancyEnrichmentService()
         data, error = service.enrich(job_url)
         try:
             job = session.get(Job, job_id)

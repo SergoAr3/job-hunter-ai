@@ -9,6 +9,7 @@ logger = logging.getLogger(__name__)
 
 REQUEST_URL_MESSAGE = "Пришли ссылку на вакансию. Для отмены — /cancel"
 INVALID_URL_MESSAGE = "Нужна ссылка формата https://… или /cancel"
+UNSAFE_URL_MESSAGE = "Эту ссылку нельзя использовать. Пришли другую ссылку или /cancel"
 API_UNAVAILABLE_MESSAGE = "Не удалось сохранить вакансию. Пришли ссылку ещё раз или /cancel"
 SAVED_MESSAGE = "Вакансия сохранена ✅"
 ALREADY_SAVED_MESSAGE = "Эта вакансия уже сохранена."
@@ -49,7 +50,11 @@ async def handle_job_url(message: object, state: FSMContext, api_client: object)
         result = await api_client.save_application(user_id, source_url)
     except httpx.HTTPStatusError as error:
         if error.response.status_code == 422:
-            await message.answer(INVALID_URL_MESSAGE)
+            try:
+                detail = error.response.json().get("detail")
+            except ValueError:
+                detail = None
+            await message.answer(UNSAFE_URL_MESSAGE if detail == "Unsafe URL" else INVALID_URL_MESSAGE)
             return
         logger.exception("Could not save job through API")
         await message.answer(API_UNAVAILABLE_MESSAGE)
@@ -64,6 +69,7 @@ async def handle_job_url(message: object, state: FSMContext, api_client: object)
         await message.answer(SAVED_MESSAGE)
     else:
         await message.answer(ALREADY_SAVED_MESSAGE)
+        return
     job = result.get("job")
     if isinstance(job, dict):
         status = job.get("parsing_status")
