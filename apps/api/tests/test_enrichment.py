@@ -1,0 +1,146 @@
+from decimal import Decimal
+from types import SimpleNamespace
+
+import pytest
+
+from app.services.job_normalizer import ExtractedJobData, normalize_job
+from app.services.job_posting_extractor import JobPostingExtractor
+from app.services.job_sources import detect_job_source
+from app.services.safe_http_fetcher import BlockedUrlError, FetchError, FetchTimeoutError, ResponseTooLargeError, SafeHttpFetcher, _resolve_public_ips, _validate_url
+
+
+def test_detects_known_sources_and_keeps_indeed_as_company_site() -> None:
+    assert detect_job_source("https://jobs.lever.co/acme/1") == "lever"
+    assert detect_job_source("https://www.linkedin.com/jobs/view/1") == "linkedin"
+    assert detect_job_source("https://indeed.com/viewjob?jk=1") == "company_site"
+
+
+def test_normalizer_does_not_infer_salary_period() -> None:
+    result = normalize_job(ExtractedJobData(title="Engineer", salary_min=Decimal("3000"), salary_max=Decimal("4000")))
+    assert result.salary_period == "unknown"
+    assert result.salary_period_inferred is False
+    assert result.parsing_status == "partial"
+
+
+def test_extracts_json_ld_and_ignores_malformed_script() -> None:
+    html = '''<script type="application/ld+json">{bad}</script><script type="application/ld+json">{"@context":"https://schema.org","@type":"JobPosting","title":"Backend Engineer","hiringOrganization":{"name":"Acme"},"description":"<p>Build APIs</p>","qualifications":"Python","employmentType":"FULL_TIME","jobLocationType":"TELECOMMUTE","jobLocation":{"address":{"addressLocality":"Yerevan","addressCountry":"AM"}},"baseSalary":{"currency":"USD","value":{"minValue":3000,"maxValue":4000,"unitText":"MONTH"}}}</script>'''
+    raw = JobPostingExtractor().extract(html)
+    result = normalize_job(raw)
+    assert result.title == "Backend Engineer"
+    assert result.company == "Acme"
+    assert result.salary_period == "month"
+    assert result.parsing_status == "success"
+
+
+def test_fetcher_rejects_private_resolved_address() -> None:
+    def private_resolver(hostname: str, port: int):
+        raise BlockedUrlError("Non-public address")
+
+    fetcher = SafeHttpFetcher(resolver=private_resolver)
+    try:
+        fetcher.fetch("https://example.com/job")
+    except BlockedUrlError:
+        pass
+    else:
+        raise AssertionError("private address must be rejected")
+
+
+@pytest.mark.parametrize("url", ["http://user@example.com/", "http://example.com:8080/"])
+def test_fetcher_rejects_unsafe_url_forms(url: str) -> None:
+    with pytest.raises(BlockedUrlError):
+        _validate_url(url)
+
+
+@pytest.mark.parametrize("address", ["10.0.0.1", "169.254.1.1", "::1", "fe80::1"])
+def test_resolver_rejects_non_public_addresses(monkeypatch, address: str) -> None:
+    monkeypatch.setattr("app.services.safe_http_fetcher.socket.getaddrinfo", lambda *args, **kwargs: [(2, 1, 6, "", (address, 443))])
+    with pytest.raises(BlockedUrlError):
+        _resolve_public_ips("example.com", 443)
+
+
+def test_resolver_rejects_mixed_public_and_private_addresses(monkeypatch) -> None:
+    monkeypatch.setattr("app.services.safe_http_fetcher.socket.getaddrinfo", lambda *args, **kwargs: [(2, 1, 6, "", ("8.8.8.8", 443)), (2, 1, 6, "", ("10.0.0.1", 443))])
+    with pytest.raises(BlockedUrlError):
+        _resolve_public_ips("example.com", 443)
+
+
+def test_fetcher_passes_verified_ip_to_connection(monkeypatch) -> None:
+    fetcher = SafeHttpFetcher(resolver=lambda host, port: [(2, "8.8.8.8")])
+    seen = {}
+    class Sock:
+        def close(self): pass
+    response = SimpleNamespace(status=200, getheader=lambda name: "text/html" if name == "Content-Type" else None, headers=SimpleNamespace(get_content_charset=lambda: "utf-8"), read=lambda size: b"")
+    def request(parsed, address, deadline):
+        seen["address"] = address
+        return response, Sock()
+    monkeypatch.setattr(fetcher, "_request", request)
+    fetcher.fetch("https://example.com/job")
+    assert seen["address"] == (2, "8.8.8.8")
+
+
+def test_fetcher_enforces_total_deadline(monkeypatch) -> None:
+    now = [0.0]
+    fetcher = SafeHttpFetcher(resolver=lambda host, port: [(2, "8.8.8.8")], deadline_seconds=1, clock=lambda: now[0])
+    class Sock:
+        def close(self): pass
+    def read(size):
+        now[0] = 2.0
+        return b"x"
+    response = SimpleNamespace(status=200, getheader=lambda name: "text/html" if name == "Content-Type" else None, headers=SimpleNamespace(get_content_charset=lambda: "utf-8"), read=read)
+    monkeypatch.setattr(fetcher, "_request", lambda *args: (response, Sock()))
+    with pytest.raises(FetchTimeoutError): fetcher.fetch("https://example.com/job")
+
+
+def test_normalizer_discards_invalid_salary_and_truncates_columns() -> None:
+    result = normalize_job(ExtractedJobData(title="x" * 600, company="y" * 600, location="z" * 600, salary_min=Decimal("10"), salary_max=Decimal("5")))
+    assert result.salary_min is None and result.salary_max is None
+    assert len(result.title or "") == 512
+    assert len(result.company or "") == 512
+    assert len(result.location or "") == 512
+
+
+def test_normalizer_discards_negative_salary() -> None:
+    result = normalize_job(ExtractedJobData(salary_min=Decimal("-1"), salary_max=Decimal("10")))
+    assert result.salary_min is None and result.salary_max is None
+
+
+def test_redirect_to_private_address_is_blocked(monkeypatch) -> None:
+    def resolver(host, port):
+        if host == "127.0.0.1": raise BlockedUrlError("Non-public address")
+        return [(2, "8.8.8.8")]
+    fetcher = SafeHttpFetcher(resolver=resolver)
+    class Sock:
+        def close(self): pass
+    redirect = SimpleNamespace(status=302, getheader=lambda name: "//127.0.0.1/admin" if name == "Location" else None)
+    monkeypatch.setattr(fetcher, "_request", lambda *args: (redirect, Sock()))
+    with pytest.raises(BlockedUrlError): fetcher.fetch("https://example.com/job")
+
+
+def test_rejects_non_html_and_oversized_body(monkeypatch) -> None:
+    fetcher = SafeHttpFetcher(resolver=lambda host, port: [(2, "8.8.8.8")], max_body_bytes=2)
+    class Sock:
+        def close(self): pass
+    non_html = SimpleNamespace(status=200, getheader=lambda name: "application/pdf" if name == "Content-Type" else None)
+    monkeypatch.setattr(fetcher, "_request", lambda *args: (non_html, Sock()))
+    with pytest.raises(Exception): fetcher.fetch("https://example.com/job")
+    body = iter([b"abc", b""])
+    html = SimpleNamespace(status=200, getheader=lambda name: "text/html" if name == "Content-Type" else None, headers=SimpleNamespace(get_content_charset=lambda: "utf-8"), read=lambda size: next(body))
+    monkeypatch.setattr(fetcher, "_request", lambda *args: (html, Sock()))
+    with pytest.raises(ResponseTooLargeError): fetcher.fetch("https://example.com/job")
+
+
+def test_request_closes_socket_when_http_protocol_is_malformed(monkeypatch) -> None:
+    closed = []
+    class Socket:
+        def settimeout(self, value): pass
+        def connect(self, value): pass
+        def sendall(self, value): pass
+        def close(self): closed.append(True)
+    class BrokenResponse:
+        def __init__(self, sock): pass
+        def begin(self): raise __import__("http.client").client.BadStatusLine("bad")
+    monkeypatch.setattr("app.services.safe_http_fetcher.socket.socket", lambda *args: Socket())
+    monkeypatch.setattr("app.services.safe_http_fetcher.http.client.HTTPResponse", BrokenResponse)
+    fetcher = SafeHttpFetcher()
+    with pytest.raises(FetchError): fetcher._request(_validate_url("http://example.com/"), (2, "8.8.8.8"), 9999999999)
+    assert closed == [True]

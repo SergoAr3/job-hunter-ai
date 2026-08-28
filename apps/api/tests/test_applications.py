@@ -2,6 +2,8 @@ import pytest
 from sqlalchemy.exc import IntegrityError
 
 from app.models import Application, Job
+from app.models import User
+from app.services.applications import save_application_for_user
 from conftest import TestSessionLocal, client
 
 
@@ -27,7 +29,8 @@ def test_first_request_creates_job_and_saved_application() -> None:
     body = response.json()
     assert body["job_created"] is True
     assert body["application_created"] is True
-    assert body["job"]["source"] == "manual"
+    assert body["job"]["source"] == "company_site"
+    assert body["job"]["ingestion_method"] == "manual"
     assert body["job"]["title"] is None
     assert body["job"]["company"] is None
     assert body["job"]["description"] is None
@@ -108,7 +111,7 @@ def test_database_unique_constraints_prevent_duplicate_jobs_and_applications() -
     job_id = response.json()["job"]["id"]
 
     with TestSessionLocal() as session:
-        session.add(Job(source="manual", source_url="https://example.com/jobs/123"))
+        session.add(Job(source="company_site", source_url="https://example.com/jobs/123"))
         with pytest.raises(IntegrityError):
             session.commit()
         session.rollback()
@@ -147,3 +150,24 @@ def test_database_foreign_key_rejects_unknown_job() -> None:
         session.add(Application(user_id=user_id, job_id=999, status="saved"))
         with pytest.raises(IntegrityError):
             session.commit()
+
+
+def test_enrichment_runs_without_active_database_transaction() -> None:
+    class ProbeEnrichment:
+        def enrich(self, url: str):
+            assert session.in_transaction() is False
+            return None, "fetch_timeout"
+
+        @staticmethod
+        def values(data):
+            return {}
+
+    with TestSessionLocal() as session:
+        user = User(telegram_id=100, first_name="Анна")
+        session.add(user)
+        session.commit()
+        job, _, created, _ = save_application_for_user(
+            session, user.id, "https://example.com/jobs/transaction", ProbeEnrichment()
+        )
+        assert created is True
+        assert job.parsing_status == "failed"
