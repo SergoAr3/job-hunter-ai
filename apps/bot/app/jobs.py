@@ -1,10 +1,14 @@
 import logging
+from typing import cast
 from urllib.parse import urlsplit
 
 import httpx
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
+from aiogram.types import Message, User
 from aiogram.utils.chat_action import ChatActionSender
+
+from app.api_client import JobHunterApiClient
 
 logger = logging.getLogger(__name__)
 
@@ -49,7 +53,12 @@ async def handle_job_url(message: object, state: FSMContext, api_client: object)
 
     processing_message = await message.answer(PROCESSING_MESSAGE)
     try:
-        result = await _save_application_with_typing(message, api_client, telegram_user, source_url)
+        result = await _save_application_with_typing(
+            cast(Message, message),
+            cast(JobHunterApiClient, api_client),
+            cast(User, telegram_user),
+            source_url,
+        )
     except httpx.HTTPStatusError as error:
         await _delete_processing_message(processing_message)
         if error.response.status_code == 422:
@@ -88,7 +97,12 @@ async def handle_job_url(message: object, state: FSMContext, api_client: object)
                 await message.answer(card)
 
 
-async def _save_application_with_typing(message: object, api_client: object, telegram_user: object, source_url: str) -> dict[str, object]:
+async def _save_application_with_typing(
+    message: Message,
+    api_client: JobHunterApiClient,
+    telegram_user: User,
+    source_url: str,
+) -> dict[str, object]:
     sender: ChatActionSender | None = None
     try:
         sender = ChatActionSender.typing(chat_id=message.chat.id, bot=message.bot)
@@ -108,7 +122,7 @@ async def _save_application_with_typing(message: object, api_client: object, tel
                 logger.warning("Could not stop Telegram typing indicator", exc_info=True)
 
 
-async def _delete_processing_message(processing_message: object) -> None:
+async def _delete_processing_message(processing_message: Message) -> None:
     try:
         await processing_message.delete()
     except Exception:
