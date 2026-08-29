@@ -1,11 +1,20 @@
+from typing import Protocol
+
 import httpx
+from aiogram.types import User
+
+
+class BotApiClient(Protocol):
+    async def create_or_get_user(self, telegram_user: User) -> int: ...
+
+    async def save_application(self, user_id: int, source_url: str) -> dict[str, object]: ...
 
 
 class JobHunterApiClient:
     def __init__(self, base_url: str) -> None:
         self._client = httpx.AsyncClient(base_url=base_url, timeout=40.0)
 
-    async def create_or_get_user(self, telegram_user: object) -> int:
+    async def create_or_get_user(self, telegram_user: User) -> int:
         response = await self._client.post(
             "/users/telegram",
             json={
@@ -17,14 +26,28 @@ class JobHunterApiClient:
             },
         )
         response.raise_for_status()
-        return response.json()["id"]
+        payload = _json_object(response)
+        user_id = payload.get("id")
+        if not isinstance(user_id, int) or isinstance(user_id, bool):
+            raise httpx.DecodingError("API response has no integer user id", request=response.request)
+        return user_id
 
     async def save_application(self, user_id: int, source_url: str) -> dict[str, object]:
         response = await self._client.post(
             f"/users/{user_id}/applications", json={"source_url": source_url}
         )
         response.raise_for_status()
-        return response.json()
+        return _json_object(response)
 
     async def close(self) -> None:
         await self._client.aclose()
+
+
+def _json_object(response: httpx.Response) -> dict[str, object]:
+    try:
+        payload: object = response.json()
+    except ValueError as error:
+        raise httpx.DecodingError("API response is not valid JSON", request=response.request) from error
+    if not isinstance(payload, dict):
+        raise httpx.DecodingError("API response must be a JSON object", request=response.request)
+    return payload
