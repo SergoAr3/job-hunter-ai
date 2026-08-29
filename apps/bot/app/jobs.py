@@ -1,14 +1,14 @@
 import logging
-from typing import cast
 from urllib.parse import urlsplit
 
 import httpx
+from aiogram import Bot
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import Message, User
 from aiogram.utils.chat_action import ChatActionSender
 
-from app.api_client import JobHunterApiClient
+from app.api_client import BotApiClient
 
 logger = logging.getLogger(__name__)
 
@@ -27,12 +27,12 @@ class AddJobStates(StatesGroup):
     waiting_for_url = State()
 
 
-async def handle_add_job(message: object, state: FSMContext) -> None:
+async def handle_add_job(message: Message, state: FSMContext) -> None:
     await state.set_state(AddJobStates.waiting_for_url)
     await message.answer(REQUEST_URL_MESSAGE)
 
 
-async def handle_cancel(message: object, state: FSMContext) -> None:
+async def handle_cancel(message: Message, state: FSMContext) -> None:
     if await state.get_state() is None:
         await message.answer(NO_ACTIVE_FLOW_MESSAGE)
         return
@@ -41,7 +41,7 @@ async def handle_cancel(message: object, state: FSMContext) -> None:
     await message.answer(CANCELLED_MESSAGE)
 
 
-async def handle_job_url(message: object, state: FSMContext, api_client: object) -> None:
+async def handle_job_url(message: Message, state: FSMContext, api_client: BotApiClient) -> None:
     source_url = message.text or ""
     if not _is_basic_http_url(source_url):
         await message.answer(INVALID_URL_MESSAGE)
@@ -53,12 +53,7 @@ async def handle_job_url(message: object, state: FSMContext, api_client: object)
 
     processing_message = await message.answer(PROCESSING_MESSAGE)
     try:
-        result = await _save_application_with_typing(
-            cast(Message, message),
-            cast(JobHunterApiClient, api_client),
-            cast(User, telegram_user),
-            source_url,
-        )
+        result = await _save_application_with_typing(message, api_client, telegram_user, source_url)
     except httpx.HTTPStatusError as error:
         await _delete_processing_message(processing_message)
         if error.response.status_code == 422:
@@ -99,13 +94,16 @@ async def handle_job_url(message: object, state: FSMContext, api_client: object)
 
 async def _save_application_with_typing(
     message: Message,
-    api_client: JobHunterApiClient,
+    api_client: BotApiClient,
     telegram_user: User,
     source_url: str,
 ) -> dict[str, object]:
     sender: ChatActionSender | None = None
     try:
-        sender = ChatActionSender.typing(chat_id=message.chat.id, bot=message.bot)
+        bot: Bot | None = message.bot
+        if bot is None:
+            raise RuntimeError("Message is not bound to a bot")
+        sender = ChatActionSender.typing(chat_id=message.chat.id, bot=bot)
         await sender.__aenter__()
     except Exception:
         sender = None
@@ -146,7 +144,11 @@ def format_job_card(job: dict[str, object]) -> str:
         for label, key, limit in (("Навыки", "required_skills", 8), ("Будет плюсом", "nice_to_have_skills", 6), ("Опыт", "experience_requirements", 4), ("Языки", "language_requirements", 4), ("Задачи", "responsibilities", 4)):
             values = job.get(key)
             if isinstance(values, list):
-                rendered = "; ".join(str(value) for value in values[:limit] if isinstance(value, str) and value)
+                display_values: list[str] = []
+                for value in values[:limit]:
+                    if isinstance(value, str) and value:
+                        display_values.append(value)
+                rendered = "; ".join(display_values)
                 if rendered:
                     lines.append(f"{label}: {rendered}")
         seniority = job.get("seniority")
@@ -165,4 +167,9 @@ def _format_structured_salary(job: dict[str, object]) -> str | None:
     if minimum is None and maximum is None:
         return None
     amount = str(minimum) if maximum is None else str(maximum) if minimum is None else f"{minimum}–{maximum}"
-    return " ".join(part for part in (amount, currency, f"per {period}" if period and period != "unknown" else None) if part)
+    parts = [amount]
+    if isinstance(currency, str) and currency:
+        parts.append(currency)
+    if isinstance(period, str) and period != "unknown":
+        parts.append(f"per {period}")
+    return " ".join(parts)

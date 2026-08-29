@@ -1,4 +1,5 @@
 from datetime import datetime
+from decimal import Decimal
 from enum import Enum
 
 from sqlalchemy import BigInteger, Boolean, CheckConstraint, DateTime, ForeignKey, JSON, Numeric, String, Text, UniqueConstraint, func
@@ -81,8 +82,8 @@ class Job(Base):
     description: Mapped[str | None] = mapped_column(String)
     requirements_text: Mapped[str | None] = mapped_column(Text)
     salary_text: Mapped[str | None] = mapped_column(Text)
-    salary_min: Mapped[float | None] = mapped_column(Numeric(14, 2))
-    salary_max: Mapped[float | None] = mapped_column(Numeric(14, 2))
+    salary_min: Mapped[Decimal | None] = mapped_column(Numeric(14, 2))
+    salary_max: Mapped[Decimal | None] = mapped_column(Numeric(14, 2))
     salary_currency: Mapped[str | None] = mapped_column(String(3))
     salary_period: Mapped[str] = mapped_column(String(16), nullable=False, default="unknown", server_default="unknown")
     salary_period_inferred: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")

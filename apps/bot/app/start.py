@@ -1,13 +1,16 @@
 import logging
 
 import httpx
+from aiogram.types import Message
+
+from app.api_client import BotApiClient
 
 logger = logging.getLogger(__name__)
 
 API_UNAVAILABLE_MESSAGE = "Сервис временно недоступен. Попробуйте ещё раз позже."
 
 
-async def handle_start(message: object, api_client: object) -> None:
+async def handle_start(message: Message, api_client: BotApiClient) -> None:
     telegram_user = message.from_user
     if telegram_user is None:
         return

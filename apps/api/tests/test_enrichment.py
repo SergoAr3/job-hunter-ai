@@ -1,4 +1,5 @@
 from decimal import Decimal
+from datetime import datetime, timezone
 from types import SimpleNamespace
 
 import pytest
@@ -7,6 +8,7 @@ from app.services.job_normalizer import ExtractedJobData, normalize_job
 from app.services.job_posting_extractor import JobPostingExtractor
 from app.services.job_sources import detect_job_source
 from app.services.safe_http_fetcher import BlockedUrlError, FetchError, FetchTimeoutError, ResponseTooLargeError, SafeHttpFetcher, _resolve_public_ips, _validate_url
+from app.schemas import JobOut
 
 
 def test_detects_known_sources_and_keeps_indeed_as_company_site() -> None:
@@ -102,6 +104,47 @@ def test_normalizer_discards_invalid_salary_and_truncates_columns() -> None:
 def test_normalizer_discards_negative_salary() -> None:
     result = normalize_job(ExtractedJobData(salary_min=Decimal("-1"), salary_max=Decimal("10")))
     assert result.salary_min is None and result.salary_max is None
+
+
+def test_job_out_preserves_float_salary_contract_for_decimal_orm_values() -> None:
+    now = datetime.now(timezone.utc)
+    job = SimpleNamespace(
+        id=1,
+        source="company_site",
+        ingestion_method="manual",
+        source_url="https://example.com/job",
+        title="Engineer",
+        company="Acme",
+        description=None,
+        requirements_text=None,
+        salary_text=None,
+        salary_min=Decimal("1000.50"),
+        salary_max=Decimal("2000.00"),
+        salary_currency="USD",
+        salary_period="month",
+        salary_period_inferred=False,
+        location=None,
+        workplace_type="remote",
+        employment_type="full_time",
+        parsing_status="success",
+        parsing_error=None,
+        required_skills=[],
+        nice_to_have_skills=[],
+        experience_requirements=[],
+        language_requirements=[],
+        responsibilities=[],
+        seniority="unknown",
+        ai_enrichment_status="not_attempted",
+        ai_enrichment_error=None,
+        created_at=now,
+        updated_at=now,
+    )
+
+    result = JobOut.model_validate(job)
+
+    assert result.salary_min == 1000.5
+    assert result.salary_max == 2000.0
+    assert result.model_dump(mode="json")["salary_min"] == 1000.5
 
 
 def test_redirect_to_private_address_is_blocked(monkeypatch) -> None:
