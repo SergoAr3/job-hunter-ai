@@ -4,6 +4,7 @@ from urllib.parse import urlsplit
 import httpx
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
+from aiogram.utils.chat_action import ChatActionSender
 
 logger = logging.getLogger(__name__)
 
@@ -15,6 +16,7 @@ SAVED_MESSAGE = "Вакансия сохранена ✅"
 ALREADY_SAVED_MESSAGE = "Эта вакансия уже сохранена."
 CANCELLED_MESSAGE = "Добавление вакансии отменено."
 NO_ACTIVE_FLOW_MESSAGE = "Нет активного добавления вакансии."
+PROCESSING_MESSAGE = "Сохраняю и анализирую вакансию…"
 
 
 class AddJobStates(StatesGroup):
@@ -45,10 +47,11 @@ async def handle_job_url(message: object, state: FSMContext, api_client: object)
     if telegram_user is None:
         return
 
+    processing_message = await message.answer(PROCESSING_MESSAGE)
     try:
-        user_id = await api_client.create_or_get_user(telegram_user)
-        result = await api_client.save_application(user_id, source_url)
+        result = await _save_application_with_typing(message, api_client, telegram_user, source_url)
     except httpx.HTTPStatusError as error:
+        await _delete_processing_message(processing_message)
         if error.response.status_code == 422:
             try:
                 detail = error.response.json().get("detail")
@@ -60,10 +63,12 @@ async def handle_job_url(message: object, state: FSMContext, api_client: object)
         await message.answer(API_UNAVAILABLE_MESSAGE)
         return
     except httpx.HTTPError:
+        await _delete_processing_message(processing_message)
         logger.exception("Could not save job through API")
         await message.answer(API_UNAVAILABLE_MESSAGE)
         return
 
+    await _delete_processing_message(processing_message)
     await state.clear()
     if result["application_created"]:
         await message.answer(SAVED_MESSAGE)
@@ -83,6 +88,33 @@ async def handle_job_url(message: object, state: FSMContext, api_client: object)
                 await message.answer(card)
 
 
+async def _save_application_with_typing(message: object, api_client: object, telegram_user: object, source_url: str) -> dict[str, object]:
+    sender: ChatActionSender | None = None
+    try:
+        sender = ChatActionSender.typing(chat_id=message.chat.id, bot=message.bot)
+        await sender.__aenter__()
+    except Exception:
+        sender = None
+        logger.warning("Could not start Telegram typing indicator", exc_info=True)
+
+    try:
+        user_id = await api_client.create_or_get_user(telegram_user)
+        return await api_client.save_application(user_id, source_url)
+    finally:
+        if sender is not None:
+            try:
+                await sender.__aexit__(None, None, None)
+            except Exception:
+                logger.warning("Could not stop Telegram typing indicator", exc_info=True)
+
+
+async def _delete_processing_message(processing_message: object) -> None:
+    try:
+        await processing_message.delete()
+    except Exception:
+        logger.warning("Could not delete Telegram processing message", exc_info=True)
+
+
 def _is_basic_http_url(value: str) -> bool:
     try:
         parsed = urlsplit(value)
@@ -96,6 +128,16 @@ def format_job_card(job: dict[str, object]) -> str:
     salary = job.get("salary_text") or _format_structured_salary(job)
     fields = [("Вакансия", job.get("title")), ("Компания", job.get("company")), ("Локация", job.get("location")), ("Формат", job.get("workplace_type")), ("Тип занятости", job.get("employment_type")), ("Зарплата", salary)]
     lines = [f"{label}: {value}" for label, value in fields if value and value != "unknown"]
+    if job.get("ai_enrichment_status") == "success":
+        for label, key, limit in (("Навыки", "required_skills", 8), ("Будет плюсом", "nice_to_have_skills", 6), ("Опыт", "experience_requirements", 4), ("Языки", "language_requirements", 4), ("Задачи", "responsibilities", 4)):
+            values = job.get(key)
+            if isinstance(values, list):
+                rendered = "; ".join(str(value) for value in values[:limit] if isinstance(value, str) and value)
+                if rendered:
+                    lines.append(f"{label}: {rendered}")
+        seniority = job.get("seniority")
+        if isinstance(seniority, str) and seniority != "unknown":
+            lines.append(f"Уровень: {seniority}")
     if not lines: return ""
     for label, key, limit in (("Описание", "description", 2500), ("Требования", "requirements_text", 700)):
         value = job.get(key)

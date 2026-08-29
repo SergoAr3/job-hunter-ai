@@ -60,6 +60,14 @@ class JobOut(BaseModel):
     employment_type: str
     parsing_status: str
     parsing_error: str | None
+    required_skills: list[str]
+    nice_to_have_skills: list[str]
+    experience_requirements: list[str]
+    language_requirements: list[str]
+    responsibilities: list[str]
+    seniority: str
+    ai_enrichment_status: str
+    ai_enrichment_error: str | None
     created_at: datetime
     updated_at: datetime
 

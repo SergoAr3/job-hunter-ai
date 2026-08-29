@@ -3,7 +3,7 @@ import httpx
 
 class JobHunterApiClient:
     def __init__(self, base_url: str) -> None:
-        self._client = httpx.AsyncClient(base_url=base_url, timeout=10.0)
+        self._client = httpx.AsyncClient(base_url=base_url, timeout=40.0)
 
     async def create_or_get_user(self, telegram_user: object) -> int:
         response = await self._client.post(

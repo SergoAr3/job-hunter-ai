@@ -1,7 +1,8 @@
 from datetime import datetime
 from enum import Enum
 
-from sqlalchemy import BigInteger, Boolean, CheckConstraint, DateTime, ForeignKey, Numeric, String, Text, UniqueConstraint, func
+from sqlalchemy import BigInteger, Boolean, CheckConstraint, DateTime, ForeignKey, JSON, Numeric, String, Text, UniqueConstraint, func
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.database import Base
@@ -47,6 +48,13 @@ class ParsingStatus(str, Enum):
     FAILED = "failed"
 
 
+class AIEnrichmentStatus(str, Enum):
+    NOT_ATTEMPTED = "not_attempted"
+    PENDING = "pending"
+    SUCCESS = "success"
+    FAILED = "failed"
+
+
 class Job(Base):
     __tablename__ = "jobs"
     __table_args__ = (
@@ -56,6 +64,9 @@ class Job(Base):
         CheckConstraint("workplace_type IN ('remote', 'hybrid', 'onsite', 'unknown')", name="ck_jobs_workplace_type"),
         CheckConstraint("employment_type IN ('full_time', 'part_time', 'contract', 'internship', 'temporary', 'unknown')", name="ck_jobs_employment_type"),
         CheckConstraint("parsing_status IN ('not_attempted', 'pending', 'success', 'partial', 'failed')", name="ck_jobs_parsing_status"),
+        CheckConstraint("seniority IN ('intern', 'junior', 'middle', 'senior', 'lead', 'unknown')", name="ck_jobs_seniority"),
+        CheckConstraint("ai_enrichment_status IN ('not_attempted', 'pending', 'success', 'failed')", name="ck_jobs_ai_enrichment_status"),
+        CheckConstraint("ai_enrichment_error IS NULL OR ai_enrichment_error IN ('timeout', 'invalid_output', 'provider_error', 'processing_failed')", name="ck_jobs_ai_enrichment_error"),
         CheckConstraint("salary_min IS NULL OR salary_min >= 0", name="ck_jobs_salary_min_nonnegative"),
         CheckConstraint("salary_max IS NULL OR salary_max >= 0", name="ck_jobs_salary_max_nonnegative"),
         CheckConstraint("salary_min IS NULL OR salary_max IS NULL OR salary_max >= salary_min", name="ck_jobs_salary_range"),
@@ -80,6 +91,14 @@ class Job(Base):
     employment_type: Mapped[str] = mapped_column(String(16), nullable=False, default="unknown", server_default="unknown")
     parsing_status: Mapped[str] = mapped_column(String(16), nullable=False, default="not_attempted", server_default="not_attempted")
     parsing_error: Mapped[str | None] = mapped_column(String(128))
+    required_skills: Mapped[list[str]] = mapped_column(JSON().with_variant(JSONB, "postgresql"), nullable=False, default=list, server_default="[]")
+    nice_to_have_skills: Mapped[list[str]] = mapped_column(JSON().with_variant(JSONB, "postgresql"), nullable=False, default=list, server_default="[]")
+    experience_requirements: Mapped[list[str]] = mapped_column(JSON().with_variant(JSONB, "postgresql"), nullable=False, default=list, server_default="[]")
+    language_requirements: Mapped[list[str]] = mapped_column(JSON().with_variant(JSONB, "postgresql"), nullable=False, default=list, server_default="[]")
+    responsibilities: Mapped[list[str]] = mapped_column(JSON().with_variant(JSONB, "postgresql"), nullable=False, default=list, server_default="[]")
+    seniority: Mapped[str] = mapped_column(String(16), nullable=False, default="unknown", server_default="unknown")
+    ai_enrichment_status: Mapped[str] = mapped_column(String(16), nullable=False, default="not_attempted", server_default="not_attempted")
+    ai_enrichment_error: Mapped[str | None] = mapped_column(String(128))
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
