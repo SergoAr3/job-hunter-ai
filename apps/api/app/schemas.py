@@ -1,9 +1,11 @@
 from datetime import datetime
+from decimal import Decimal
 from urllib.parse import urlsplit
 
-from pydantic import AnyHttpUrl, BaseModel, ConfigDict, Field, TypeAdapter, ValidationError, field_validator
+from pydantic import AnyHttpUrl, BaseModel, ConfigDict, Field, TypeAdapter, ValidationError, field_validator, model_validator
 
-from app.models import ApplicationStatus
+from app.models import ApplicationStatus, ExperienceLevel, ProfileSalaryPeriod, WorkplacePreference
+from app.services.salary_validation import is_iso_4217_currency
 
 http_url_adapter = TypeAdapter(AnyHttpUrl)
 
@@ -20,6 +22,96 @@ class TelegramUserOut(BaseModel):
     id: int
     telegram_id: int
     created: bool
+
+
+MAX_PROFILE_ITEMS = 30
+MAX_PROFILE_ITEM_LENGTH = 100
+
+
+class LanguageIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    language: str = Field(min_length=1, max_length=100)
+    level: str = Field(min_length=1, max_length=32)
+
+    @field_validator("language", "level")
+    @classmethod
+    def strip_value(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("value must not be blank")
+        return value
+
+
+class UserProfilePutIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    target_roles: list[str] = Field(min_length=1, max_length=MAX_PROFILE_ITEMS)
+    skills: list[str] = Field(default_factory=list, max_length=MAX_PROFILE_ITEMS)
+    experience: ExperienceLevel = ExperienceLevel.UNKNOWN
+    location: list[str] = Field(default_factory=list, max_length=MAX_PROFILE_ITEMS)
+    workplace_preference: WorkplacePreference = WorkplacePreference.ANY
+    salary_min: Decimal | None = Field(default=None, gt=0, max_digits=14, decimal_places=2)
+    salary_currency: str | None = Field(default=None, min_length=3, max_length=3)
+    salary_period: ProfileSalaryPeriod = ProfileSalaryPeriod.UNKNOWN
+    languages: list[LanguageIn] = Field(default_factory=list, max_length=MAX_PROFILE_ITEMS)
+
+    @field_validator("target_roles", "skills", "location")
+    @classmethod
+    def normalize_string_list(cls, values: list[str]) -> list[str]:
+        normalized: list[str] = []
+        for value in values:
+            item = value.strip()
+            if not item:
+                raise ValueError("list items must not be blank")
+            if len(item) > MAX_PROFILE_ITEM_LENGTH:
+                raise ValueError(f"list items must not exceed {MAX_PROFILE_ITEM_LENGTH} characters")
+            normalized.append(item)
+        return normalized
+
+    @field_validator("location")
+    @classmethod
+    def reject_workplace_values_as_locations(cls, values: list[str]) -> list[str]:
+        workplace_values = {item.value for item in WorkplacePreference}
+        if any(value.casefold() in workplace_values for value in values):
+            raise ValueError("location must contain geographic locations, not workplace preferences")
+        return values
+
+    @field_validator("salary_currency")
+    @classmethod
+    def validate_salary_currency(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.upper()
+        if not is_iso_4217_currency(normalized):
+            raise ValueError("salary_currency must be an active ISO 4217 code")
+        return normalized
+
+    @model_validator(mode="after")
+    def validate_salary_block(self) -> "UserProfilePutIn":
+        if self.salary_min is None:
+            if self.salary_currency is not None or self.salary_period != ProfileSalaryPeriod.UNKNOWN:
+                raise ValueError("salary must be fully absent or contain amount, currency, and month/year")
+        elif self.salary_currency is None or self.salary_period == ProfileSalaryPeriod.UNKNOWN:
+            raise ValueError("salary must contain amount, currency, and month/year")
+        return self
+
+
+class UserProfileOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    user_id: int
+    target_roles: list[str]
+    skills: list[str]
+    experience: ExperienceLevel
+    location: list[str]
+    workplace_preference: WorkplacePreference
+    salary_min: Decimal | None
+    salary_currency: str | None
+    salary_period: ProfileSalaryPeriod
+    languages: list[LanguageIn]
+    created_at: datetime
+    updated_at: datetime
 
 
 class ApplicationCreateIn(BaseModel):

@@ -5,10 +5,22 @@ from aiogram import Bot, Dispatcher, F
 from aiogram.filters import Command, CommandStart, StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.storage.memory import MemoryStorage
-from aiogram.types import Message
+from aiogram.types import CallbackQuery, Message
 
 from app.api_client import JobHunterApiClient
 from app.jobs import AddJobStates, handle_add_job, handle_cancel, handle_job_url
+from app.profile import (
+    ProfileSetupStates,
+    handle_languages,
+    handle_location,
+    handle_profile_callback,
+    handle_profile_cancel,
+    handle_profile_setup,
+    handle_salary,
+    handle_skills,
+    handle_target_roles,
+    is_profile_state,
+)
 from app.start import handle_start
 
 TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
@@ -28,14 +40,52 @@ async def add_job(message: Message, state: FSMContext) -> None:
     await handle_add_job(message, state)
 
 
+@dp.message(Command("profile_setup"))
+async def profile_setup(message: Message, state: FSMContext) -> None:
+    await handle_profile_setup(message, state)
+
+
 @dp.message(Command("cancel"), StateFilter("*"))
 async def cancel(message: Message, state: FSMContext) -> None:
-    await handle_cancel(message, state)
+    if is_profile_state(await state.get_state()):
+        await handle_profile_cancel(message, state)
+    else:
+        await handle_cancel(message, state)
 
 
 @dp.message(AddJobStates.waiting_for_url, F.text)
 async def receive_job_url(message: Message, state: FSMContext) -> None:
     await handle_job_url(message, state, api_client)
+
+
+@dp.message(ProfileSetupStates.target_roles, F.text)
+async def receive_target_roles(message: Message, state: FSMContext) -> None:
+    await handle_target_roles(message, state)
+
+
+@dp.message(ProfileSetupStates.skills, F.text)
+async def receive_skills(message: Message, state: FSMContext) -> None:
+    await handle_skills(message, state)
+
+
+@dp.message(ProfileSetupStates.location, F.text)
+async def receive_location(message: Message, state: FSMContext) -> None:
+    await handle_location(message, state)
+
+
+@dp.message(ProfileSetupStates.salary, F.text)
+async def receive_salary(message: Message, state: FSMContext) -> None:
+    await handle_salary(message, state)
+
+
+@dp.message(ProfileSetupStates.languages, F.text)
+async def receive_languages(message: Message, state: FSMContext) -> None:
+    await handle_languages(message, state)
+
+
+@dp.callback_query(F.data.startswith("profile:"))
+async def profile_callback(callback: CallbackQuery, state: FSMContext) -> None:
+    await handle_profile_callback(callback, state, api_client)
 
 
 async def main() -> None:
