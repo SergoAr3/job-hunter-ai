@@ -4,6 +4,7 @@ import httpx
 from aiogram.types import Message
 
 from app.api_client import BotApiClient
+from app.menu import main_menu_keyboard
 
 logger = logging.getLogger(__name__)
 
@@ -22,4 +23,7 @@ async def handle_start(message: Message, api_client: BotApiClient) -> None:
         await message.answer(API_UNAVAILABLE_MESSAGE)
         return
 
-    await message.answer(f"Привет, {telegram_user.first_name}! Я помогу с поиском работы.")
+    await message.answer(
+        f"Привет, {telegram_user.first_name}! Я помогу с поиском работы.",
+        reply_markup=main_menu_keyboard(),
+    )

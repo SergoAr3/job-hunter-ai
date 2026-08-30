@@ -52,6 +52,7 @@ _OPTIONAL_PROMPTS = {
     "salary": SALARY_PROMPT,
     "languages": LANGUAGES_PROMPT,
 }
+ACTIVE_PROFILE_PROMPT_MESSAGE_ID = "active_profile_prompt_message_id"
 
 
 class ProfileSetupStates(StatesGroup):
@@ -90,14 +91,17 @@ async def handle_skills(message: Message, state: FSMContext) -> None:
     if not values:
         await message.answer(INVALID_LIST_MESSAGE)
         return
-    await _remove_active_skip_keyboard(message, state)
+    await remove_active_profile_inline_keyboard(message, state)
     await state.update_data(skills=values)
     await ask_experience(message, state)
 
 
 async def ask_experience(message: Message, state: FSMContext) -> None:
     await state.set_state(ProfileSetupStates.experience)
-    await message.answer(EXPERIENCE_PROMPT, reply_markup=enum_keyboard("experience", EXPERIENCE_LABELS))
+    prompt_message = await message.answer(
+        EXPERIENCE_PROMPT, reply_markup=enum_keyboard("experience", EXPERIENCE_LABELS)
+    )
+    await state.update_data(active_profile_prompt_message_id=prompt_message.message_id)
 
 
 async def handle_location(message: Message, state: FSMContext) -> None:
@@ -108,14 +112,17 @@ async def handle_location(message: Message, state: FSMContext) -> None:
     if any(value.casefold() in WORKPLACE_LABELS for value in values):
         await message.answer("Укажи географические локации, например Yerevan или Armenia. Формат работы выберем отдельно.")
         return
-    await _remove_active_skip_keyboard(message, state)
+    await remove_active_profile_inline_keyboard(message, state)
     await state.update_data(location=values)
     await ask_workplace(message, state)
 
 
 async def ask_workplace(message: Message, state: FSMContext) -> None:
     await state.set_state(ProfileSetupStates.workplace_preference)
-    await message.answer(WORKPLACE_PROMPT, reply_markup=enum_keyboard("workplace", WORKPLACE_LABELS))
+    prompt_message = await message.answer(
+        WORKPLACE_PROMPT, reply_markup=enum_keyboard("workplace", WORKPLACE_LABELS)
+    )
+    await state.update_data(active_profile_prompt_message_id=prompt_message.message_id)
 
 
 async def handle_salary(message: Message, state: FSMContext) -> None:
@@ -123,7 +130,7 @@ async def handle_salary(message: Message, state: FSMContext) -> None:
     if salary is None:
         await message.answer(INVALID_SALARY_MESSAGE)
         return
-    await _remove_active_skip_keyboard(message, state)
+    await remove_active_profile_inline_keyboard(message, state)
     await state.update_data(**salary)
     await ask_languages(message, state)
 
@@ -138,7 +145,7 @@ async def handle_languages(message: Message, state: FSMContext) -> None:
     if languages is None:
         await message.answer(INVALID_LANGUAGES_MESSAGE)
         return
-    await _remove_active_skip_keyboard(message, state)
+    await remove_active_profile_inline_keyboard(message, state)
     await state.update_data(languages=languages)
     await show_summary(message, state)
 
@@ -223,7 +230,8 @@ async def handle_skip(message: Message, state: FSMContext, field: str) -> bool:
 async def show_summary(message: Message, state: FSMContext) -> None:
     await state.set_state(ProfileSetupStates.summary)
     data = profile_payload(await state.get_data())
-    await message.answer(format_profile_summary(data), reply_markup=summary_keyboard())
+    prompt_message = await message.answer(format_profile_summary(data), reply_markup=summary_keyboard())
+    await state.update_data(active_profile_prompt_message_id=prompt_message.message_id)
 
 
 async def save_profile(
@@ -242,7 +250,9 @@ async def save_profile(
             if isinstance(error, httpx.HTTPStatusError) and _is_invalid_salary_currency_error(error)
             else PROFILE_API_ERROR_MESSAGE
         )
-        await message.answer(error_message, reply_markup=summary_keyboard())
+        retry_message = await message.answer(error_message, reply_markup=summary_keyboard())
+        await _remove_inline_keyboard(message)
+        await state.update_data(active_profile_prompt_message_id=retry_message.message_id)
         return False
     await state.clear()
     await message.answer(PROFILE_SAVED_MESSAGE)
@@ -277,11 +287,15 @@ async def _mark_prompt_skipped(message: Message, prompt: str) -> None:
 
 async def _ask_optional_text_step(message: Message, state: FSMContext, prompt: str, field: str) -> None:
     prompt_message = await message.answer(prompt, reply_markup=skip_keyboard(field))
-    await state.update_data(skip_prompt_message_id=prompt_message.message_id)
+    await state.update_data(
+        skip_prompt_message_id=prompt_message.message_id,
+        active_profile_prompt_message_id=prompt_message.message_id,
+    )
 
 
-async def _remove_active_skip_keyboard(message: Message, state: FSMContext) -> None:
-    prompt_message_id = (await state.get_data()).get("skip_prompt_message_id")
+async def remove_active_profile_inline_keyboard(message: Message, state: FSMContext) -> None:
+    data = await state.get_data()
+    prompt_message_id = data.get(ACTIVE_PROFILE_PROMPT_MESSAGE_ID, data.get("skip_prompt_message_id"))
     if not isinstance(prompt_message_id, int) or message.bot is None:
         return
     try:
@@ -289,7 +303,7 @@ async def _remove_active_skip_keyboard(message: Message, state: FSMContext) -> N
             chat_id=message.chat.id, message_id=prompt_message_id, reply_markup=None
         )
     except TelegramAPIError:
-        logger.warning("Could not remove active profile skip keyboard", exc_info=True)
+        logger.warning("Could not remove active profile inline keyboard", exc_info=True)
 
 
 def _is_invalid_salary_currency_error(error: httpx.HTTPStatusError) -> bool:

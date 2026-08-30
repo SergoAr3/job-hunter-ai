@@ -19,7 +19,7 @@ API_UNAVAILABLE_MESSAGE = "Не удалось сохранить ваканси
 SAVED_MESSAGE = "Вакансия сохранена ✅"
 ALREADY_SAVED_MESSAGE = "Эта вакансия уже сохранена."
 CANCELLED_MESSAGE = "Добавление вакансии отменено."
-NO_ACTIVE_FLOW_MESSAGE = "Нет активного добавления вакансии."
+NO_ACTIVE_FLOW_MESSAGE = "Сейчас нет активного действия."
 PROCESSING_MESSAGE = "Сохраняю и анализирую вакансию…"
 
 

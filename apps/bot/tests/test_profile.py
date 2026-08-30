@@ -9,6 +9,7 @@ from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.methods import EditMessageReplyMarkup
 
 from app.profile import (
+    ACTIVE_PROFILE_PROMPT_MESSAGE_ID,
     INVALID_LANGUAGES_MESSAGE,
     INVALID_SALARY_MESSAGE,
     PROFILE_API_ERROR_MESSAGE,
@@ -27,6 +28,8 @@ from app.profile import (
     parse_languages,
     parse_salary,
 )
+from app.menu import ADD_JOB_BUTTON, main_menu_action
+from app.jobs import AddJobStates, REQUEST_URL_MESSAGE
 
 
 class FakeMessage:
@@ -195,8 +198,10 @@ def test_temporary_api_error_keeps_summary_draft_for_retry() -> None:
             FakeCallback("profile:save", message), state, FakeApiClient(httpx.ReadTimeout("timed out"))
         )
         assert await state.get_state() == ProfileSetupStates.summary.state
-        assert await state.get_data() == state_data
+        assert await state.get_data() == {**state_data, ACTIVE_PROFILE_PROMPT_MESSAGE_ID: 1}
         assert message.answers[-1][0] == PROFILE_API_ERROR_MESSAGE
+        assert message.answers[-1][1] is not None
+        assert message.inline_keyboards_removed == 1
 
         successful_client = FakeApiClient()
         await handle_profile_callback(FakeCallback("profile:save", message), state, successful_client)
@@ -240,7 +245,56 @@ def test_invalid_iso_currency_keeps_summary_and_explains_error() -> None:
 
         assert await state.get_state() == ProfileSetupStates.summary.state
         assert message.answers[-1][0] == PROFILE_INVALID_CURRENCY_MESSAGE
-        assert message.inline_keyboards_removed == 0
+        assert message.inline_keyboards_removed == 1
+        await storage.close()
+
+    asyncio.run(scenario())
+
+
+def test_retry_summary_keyboard_is_removed_by_main_menu_navigation() -> None:
+    async def scenario() -> None:
+        storage, state = make_state()
+        await state.set_state(ProfileSetupStates.summary)
+        await state.set_data({"target_roles": ["Engineer"]})
+        message = FakeMessage()
+
+        await handle_profile_callback(
+            FakeCallback("profile:save", message), state, FakeApiClient(httpx.ReadTimeout("timed out"))
+        )
+        retry_message_id = (await state.get_data())[ACTIVE_PROFILE_PROMPT_MESSAGE_ID]
+
+        message.text = ADD_JOB_BUTTON
+        await main_menu_action(message, state)
+
+        assert message.bot.removed_keyboards == [(456, retry_message_id)]
+        assert await state.get_state() == AddJobStates.waiting_for_url.state
+        assert message.answers[-1][0] == REQUEST_URL_MESSAGE
+        await storage.close()
+
+    asyncio.run(scenario())
+
+
+def test_retry_cleanup_errors_do_not_block_profile_error_or_menu_navigation() -> None:
+    async def scenario() -> None:
+        storage, state = make_state()
+        await state.set_state(ProfileSetupStates.summary)
+        await state.set_data({"target_roles": ["Engineer"]})
+        message = FakeMessage()
+        message.fail_edit = True
+
+        await handle_profile_callback(
+            FakeCallback("profile:save", message), state, FakeApiClient(httpx.ReadTimeout("timed out"))
+        )
+
+        assert await state.get_state() == ProfileSetupStates.summary.state
+        assert message.answers[-1][0] == PROFILE_API_ERROR_MESSAGE
+
+        message.bot.fail_edit = True
+        message.text = ADD_JOB_BUTTON
+        await main_menu_action(message, state)
+
+        assert await state.get_state() == AddJobStates.waiting_for_url.state
+        assert message.answers[-1][0] == REQUEST_URL_MESSAGE
         await storage.close()
 
     asyncio.run(scenario())

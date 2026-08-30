@@ -12,6 +12,7 @@ from app.jobs import (
     API_UNAVAILABLE_MESSAGE,
     CANCELLED_MESSAGE,
     INVALID_URL_MESSAGE,
+    NO_ACTIVE_FLOW_MESSAGE,
     PROCESSING_MESSAGE,
     UNSAFE_URL_MESSAGE,
     REQUEST_URL_MESSAGE,
@@ -234,6 +235,20 @@ def test_cancel_clears_state() -> None:
 
         assert await state.get_state() is None
         assert message.answers == [CANCELLED_MESSAGE]
+        await storage.close()
+
+    asyncio.run(scenario())
+
+
+def test_cancel_without_active_flow_uses_neutral_message() -> None:
+    async def scenario() -> None:
+        storage, state = make_state()
+        message = FakeMessage()
+
+        await handle_cancel(message, state)
+
+        assert await state.get_state() is None
+        assert message.answers == [NO_ACTIVE_FLOW_MESSAGE]
         await storage.close()
 
     asyncio.run(scenario())

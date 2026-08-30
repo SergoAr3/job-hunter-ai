@@ -9,6 +9,7 @@ from aiogram.types import CallbackQuery, Message
 
 from app.api_client import JobHunterApiClient
 from app.jobs import AddJobStates, handle_add_job, handle_cancel, handle_job_url
+from app.menu import register_main_menu_handlers
 from app.profile import (
     ProfileSetupStates,
     handle_languages,
@@ -51,6 +52,9 @@ async def cancel(message: Message, state: FSMContext) -> None:
         await handle_profile_cancel(message, state)
     else:
         await handle_cancel(message, state)
+
+
+register_main_menu_handlers(dp)
 
 
 @dp.message(AddJobStates.waiting_for_url, F.text)
