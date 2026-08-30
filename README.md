@@ -1,57 +1,56 @@
 # Job Hunter AI
 
-Job Hunter AI — будущий AI-ассистент для поиска работы. Проект находится на
-этапе начальной подготовки репозитория: продуктовые функции и интеграции пока
-не реализованы.
+Job Hunter AI — Telegram-ассистент для сохранения и структурирования вакансий,
+ведения откликов и подготовки данных пользователя для будущего matching.
 
-## Структура
+## Архитектура и структура
 
-- `apps/web` — будущая web-панель на Next.js и TypeScript.
-- `apps/api` — будущий backend API на FastAPI; здесь будет располагаться
-  бизнес-логика и доступ к данным.
-- `apps/bot` — будущий Telegram-бот на aiogram; он будет обращаться к API.
-- `docs` — короткая документация по решениям проекта по мере необходимости.
+Бизнес-логика и доступ к PostgreSQL находятся в FastAPI. Telegram-бот работает
+с данными только через API.
 
-## Стек
+- `apps/api` — FastAPI, SQLAlchemy models, services и Alembic migrations;
+- `apps/bot` — Telegram-бот на aiogram;
+- `apps/web` — заготовка будущей web-панели;
+- `docs` — проектная документация.
 
-- Web: Next.js + TypeScript
-- API: FastAPI + Python
-- Bot: aiogram + Python
-- Database: PostgreSQL
-- ORM: SQLAlchemy
-- Migrations: Alembic
-- Локальная инфраструктура: Docker Compose для PostgreSQL
+Стек: Python, FastAPI, aiogram, SQLAlchemy, PostgreSQL, Alembic и OpenAI API.
 
-## Первый вертикальный срез
+## Что работает
 
-Реализован минимальный путь `Telegram /start → bot → API → PostgreSQL`:
-
-- `GET /health` возвращает `{"status": "ok"}`;
-- `POST /users/telegram` создаёт пользователя Telegram или возвращает уже
-  существующего, актуализируя его профиль;
-- бот передаёт данные пользователя в API и после успешного ответа отправляет
-  приветствие.
-
-## Второй вертикальный срез
-
-Telegram-команда `/add_job` запускает сценарий сохранения вакансии: бот просит
-ссылку, передаёт её API, а API идемпотентно создаёт или находит `Job` и
-пользовательский `Application` со статусом `saved`. Parsing страницы вакансии
-на этом этапе не выполняется.
+- Telegram `/start` с идемпотентным созданием пользователя;
+- `/add_job` и сохранение связки `Job` / `Application`;
+- deterministic parsing поддерживаемых страниц вакансий;
+- AI enrichment вакансий через OpenAI;
+- PostgreSQL schema management через Alembic;
+- UserProfile v1 и ручная настройка через `/profile_setup`.
 
 ## Локальный запуск
 
-1. Скопируйте `.env.example` в `.env` и задайте `TELEGRAM_BOT_TOKEN`.
-2. Запустите PostgreSQL: `docker compose up -d db`.
-3. В первом терминале запустите API:
+1. Скопируйте `.env.example` в `.env` и задайте конфигурацию:
+
+   ```sh
+   TELEGRAM_BOT_TOKEN=...
+   OPENAI_API_KEY=...
+   OPENAI_MODEL=gpt-5-mini
+   OPENAI_TIMEOUT_SECONDS=15
+   ```
+
+2. Запустите PostgreSQL:
+
+   ```sh
+   docker compose up -d db
+   ```
+
+3. Установите зависимости и запустите API:
 
    ```sh
    cd apps/api
    python -m venv .venv
    . .venv/bin/activate
    pip install -r requirements.txt
-   DATABASE_URL=postgresql+psycopg://job_hunter:job_hunter@localhost:5432/job_hunter alembic upgrade head
-   DATABASE_URL=postgresql+psycopg://job_hunter:job_hunter@localhost:5432/job_hunter uvicorn app.main:app --reload
+   set -a; . ../../.env; set +a
+   alembic upgrade head
+   uvicorn app.main:app --reload
    ```
 
 4. В другом терминале запустите bot:
@@ -65,5 +64,12 @@ Telegram-команда `/add_job` запускает сценарий сохр�
    API_BASE_URL=http://localhost:8000 python -m app.main
    ```
 
-API будет доступен по адресу `http://localhost:8000`; проверка состояния —
-`http://localhost:8000/health`.
+API по умолчанию доступен на `http://localhost:8000`; health check —
+`GET /health`.
+
+## Текущий scope и roadmap
+
+Текущий scope покрывает ручное сохранение и enrichment вакансий, applications и
+UserProfile v1. CV upload, AI profile extraction, matching/ranking, relational
+skill taxonomy, Web UI и i18n (выбор/смена языка, локализованные messages и
+buttons) остаются следующими отдельными этапами.

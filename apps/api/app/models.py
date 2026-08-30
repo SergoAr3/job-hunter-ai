@@ -21,6 +21,92 @@ class User(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
+class ExperienceLevel(str, Enum):
+    INTERN = "intern"
+    JUNIOR = "junior"
+    MIDDLE = "middle"
+    SENIOR = "senior"
+    LEAD = "lead"
+    UNKNOWN = "unknown"
+
+
+class WorkplacePreference(str, Enum):
+    REMOTE = "remote"
+    HYBRID = "hybrid"
+    ONSITE = "onsite"
+    ANY = "any"
+
+
+class ProfileSalaryPeriod(str, Enum):
+    MONTH = "month"
+    YEAR = "year"
+    UNKNOWN = "unknown"
+
+
+class UserProfile(Base):
+    __tablename__ = "user_profiles"
+    __table_args__ = (
+        CheckConstraint(
+            "experience IN ('intern', 'junior', 'middle', 'senior', 'lead', 'unknown')",
+            name="ck_user_profiles_experience",
+        ),
+        CheckConstraint(
+            "workplace_preference IN ('remote', 'hybrid', 'onsite', 'any')",
+            name="ck_user_profiles_workplace_preference",
+        ),
+        CheckConstraint(
+            "salary_period IN ('month', 'year', 'unknown')",
+            name="ck_user_profiles_salary_period",
+        ),
+        CheckConstraint(
+            "(salary_min IS NULL AND salary_currency IS NULL AND salary_period = 'unknown') OR "
+            "(salary_min > 0 AND salary_currency IS NOT NULL AND salary_period IN ('month', 'year'))",
+            name="ck_user_profiles_salary_block",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False, unique=True)
+    target_roles: Mapped[list[str]] = mapped_column(
+        JSON().with_variant(JSONB, "postgresql"), nullable=False, default=list, server_default="[]"
+    )
+    skills: Mapped[list[str]] = mapped_column(
+        JSON().with_variant(JSONB, "postgresql"), nullable=False, default=list, server_default="[]"
+    )
+    experience: Mapped[str] = mapped_column(
+        String(16),
+        nullable=False,
+        default=ExperienceLevel.UNKNOWN.value,
+        server_default=ExperienceLevel.UNKNOWN.value,
+    )
+    location: Mapped[list[str]] = mapped_column(
+        JSON().with_variant(JSONB, "postgresql"), nullable=False, default=list, server_default="[]"
+    )
+    workplace_preference: Mapped[str] = mapped_column(
+        String(16),
+        nullable=False,
+        default=WorkplacePreference.ANY.value,
+        server_default=WorkplacePreference.ANY.value,
+    )
+    salary_min: Mapped[Decimal | None] = mapped_column(Numeric(14, 2))
+    salary_currency: Mapped[str | None] = mapped_column(String(3))
+    salary_period: Mapped[str] = mapped_column(
+        String(16),
+        nullable=False,
+        default=ProfileSalaryPeriod.UNKNOWN.value,
+        server_default=ProfileSalaryPeriod.UNKNOWN.value,
+    )
+    languages: Mapped[list[dict[str, str]]] = mapped_column(
+        JSON().with_variant(JSONB, "postgresql"), nullable=False, default=list, server_default="[]"
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+
+
 class ApplicationStatus(str, Enum):
     SAVED = "saved"
     APPLIED = "applied"

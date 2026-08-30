@@ -9,6 +9,8 @@ class BotApiClient(Protocol):
 
     async def save_application(self, user_id: int, source_url: str) -> dict[str, object]: ...
 
+    async def put_user_profile(self, user_id: int, profile: dict[str, object]) -> dict[str, object]: ...
+
 
 class JobHunterApiClient:
     def __init__(self, base_url: str) -> None:
@@ -36,6 +38,11 @@ class JobHunterApiClient:
         response = await self._client.post(
             f"/users/{user_id}/applications", json={"source_url": source_url}
         )
+        response.raise_for_status()
+        return _json_object(response)
+
+    async def put_user_profile(self, user_id: int, profile: dict[str, object]) -> dict[str, object]:
+        response = await self._client.put(f"/users/{user_id}/profile", json=profile)
         response.raise_for_status()
         return _json_object(response)
 

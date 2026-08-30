@@ -14,11 +14,11 @@ from app.services.job_ai_enrichment import (
     SalaryPeriod,
     SalaryPeriodEvidence,
     VacancyAIInput,
-    is_iso_4217_currency,
 )
 from app.services.job_sources import detect_job_source
-from app.services.vacancy_enrichment import VacancyEnrichmentService
 from app.services.safe_http_fetcher import BlockedUrlError, FetchError
+from app.services.salary_validation import is_iso_4217_currency
+from app.services.vacancy_enrichment import VacancyEnrichmentService
 
 logger = logging.getLogger(__name__)
 

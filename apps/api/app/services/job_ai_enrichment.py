@@ -9,6 +9,7 @@ from openai import APIError, APITimeoutError, OpenAI
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.config import OPENAI_API_KEY, OPENAI_MODEL, OPENAI_TIMEOUT_SECONDS
+from app.services.salary_validation import is_iso_4217_currency
 
 logger = logging.getLogger(__name__)
 
@@ -21,17 +22,6 @@ MAX_SKILL_CHARS = 100
 MAX_TEXT_ITEM_CHARS = 280
 REASONING_EFFORT = "minimal"
 MAX_OUTPUT_TOKENS = 768
-
-# Active ISO 4217 alphabetic codes. This check is deliberately applied when
-# accepting the AI salary block, not while parsing the whole LLM response: an
-# invalid currency must not discard otherwise valid semantic enrichment.
-ISO_4217_CURRENCIES = frozenset(
-    "AED AFN ALL AMD ANG AOA ARS AUD AWG AZN BAM BBD BDT BGN BHD BIF BMD BND BOB BOV BRL BSD BTN BWP BYN BZD CAD CDF CHE CHF CHW CLF CLP CNY COP COU CRC CUP CVE CZK DJF DKK DOP DZD EGP ERN ETB EUR FJD FKP GBP GEL GHS GIP GMD GNF GTQ GYD HKD HNL HTG HUF IDR ILS INR IQD IRR ISK JMD JOD JPY KES KGS KHR KMF KPW KRW KWD KYD KZT LAK LBP LKR LRD LSL LYD MAD MDL MGA MKD MMK MNT MOP MRU MUR MVR MWK MXN MXV MYR MZN NAD NGN NIO NOK NPR NZD OMR PAB PEN PGK PHP PKR PLN PYG QAR RON RSD RUB RWF SAR SBD SCR SDG SEK SGD SHP SLE SOS SRD SSP STN SVC SYP SZL THB TJS TMT TND TOP TRY TTD TWD TZS UAH UGX USD USN UYI UYU UYW UZS VED VES VND VUV WST XAD XAF XCD XDR XOF XPF XSU XUA YER ZAR ZMW ZWG".split()
-)
-
-
-def is_iso_4217_currency(value: str | None) -> bool:
-    return value in ISO_4217_CURRENCIES
 
 
 class Seniority(str, Enum):
