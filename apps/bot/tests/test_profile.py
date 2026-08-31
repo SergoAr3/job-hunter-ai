@@ -35,6 +35,7 @@ from app.jobs import AddJobStates, REQUEST_URL_MESSAGE
 class FakeMessage:
     def __init__(self, text: str | None = None) -> None:
         self.text = text
+        self.message_id = 1
         self.from_user = SimpleNamespace(
             id=123, first_name="Анна", last_name=None, username="anna", language_code="ru"
         )
@@ -50,6 +51,7 @@ class FakeMessage:
         self.answers.append((text, reply_markup))
         prompt = SimpleNamespace(message_id=self.next_message_id)
         self.next_message_id += 1
+        self.message_id = prompt.message_id
         return prompt
 
     async def edit_reply_markup(self, reply_markup: object | None = None) -> None:
@@ -69,12 +71,15 @@ class FakeBot:
     def __init__(self) -> None:
         self.removed_keyboards: list[tuple[int, int]] = []
         self.fail_edit = False
+        self.edit_error_message = "edit failed"
 
     async def edit_message_reply_markup(
         self, *, chat_id: int, message_id: int, reply_markup: object | None = None
     ) -> None:
         if self.fail_edit:
-            raise TelegramBadRequest(method=EditMessageReplyMarkup(), message="edit failed")
+            raise TelegramBadRequest(
+                method=EditMessageReplyMarkup(), message=self.edit_error_message
+            )
         assert reply_markup is None
         self.removed_keyboards.append((chat_id, message_id))
 
@@ -192,8 +197,8 @@ def test_temporary_api_error_keeps_summary_draft_for_retry() -> None:
             "salary_period": "unknown", "languages": [],
         }
         await state.set_state(ProfileSetupStates.summary)
-        await state.set_data(state_data)
         message = FakeMessage()
+        await state.set_data({**state_data, ACTIVE_PROFILE_PROMPT_MESSAGE_ID: message.message_id})
         await handle_profile_callback(
             FakeCallback("profile:save", message), state, FakeApiClient(httpx.ReadTimeout("timed out"))
         )
@@ -221,6 +226,7 @@ def test_invalid_iso_currency_keeps_summary_and_explains_error() -> None:
                 "salary_min": "2500",
                 "salary_currency": "ABC",
                 "salary_period": "month",
+                ACTIVE_PROFILE_PROMPT_MESSAGE_ID: 1,
             }
         )
         message = FakeMessage()
@@ -255,8 +261,10 @@ def test_retry_summary_keyboard_is_removed_by_main_menu_navigation() -> None:
     async def scenario() -> None:
         storage, state = make_state()
         await state.set_state(ProfileSetupStates.summary)
-        await state.set_data({"target_roles": ["Engineer"]})
         message = FakeMessage()
+        await state.set_data(
+            {"target_roles": ["Engineer"], ACTIVE_PROFILE_PROMPT_MESSAGE_ID: message.message_id}
+        )
 
         await handle_profile_callback(
             FakeCallback("profile:save", message), state, FakeApiClient(httpx.ReadTimeout("timed out"))
@@ -278,8 +286,10 @@ def test_retry_cleanup_errors_do_not_block_profile_error_or_menu_navigation() ->
     async def scenario() -> None:
         storage, state = make_state()
         await state.set_state(ProfileSetupStates.summary)
-        await state.set_data({"target_roles": ["Engineer"]})
         message = FakeMessage()
+        await state.set_data(
+            {"target_roles": ["Engineer"], ACTIVE_PROFILE_PROMPT_MESSAGE_ID: message.message_id}
+        )
         message.fail_edit = True
 
         await handle_profile_callback(
@@ -323,6 +333,9 @@ def test_skip_marks_prompt_as_skipped() -> None:
         storage, state = make_state()
         message = FakeMessage()
         await state.set_state(ProfileSetupStates.salary)
+        await state.update_data(
+            **{ACTIVE_PROFILE_PROMPT_MESSAGE_ID: message.message_id}
+        )
 
         await handle_profile_callback(FakeCallback("profile:skip:salary", message), state, FakeApiClient())
 
@@ -339,8 +352,13 @@ def test_save_uses_callback_user_not_bot_summary_message_author() -> None:
     async def scenario() -> None:
         storage, state = make_state()
         await state.set_state(ProfileSetupStates.summary)
-        await state.set_data({"target_roles": ["Engineer"]})
         bot_summary_message = FakeMessage()
+        await state.set_data(
+            {
+                "target_roles": ["Engineer"],
+                ACTIVE_PROFILE_PROMPT_MESSAGE_ID: bot_summary_message.message_id,
+            }
+        )
         bot_summary_message.from_user = SimpleNamespace(id=999_999, first_name="Job Hunter Bot")
         callback_user = SimpleNamespace(
             id=123, first_name="Анна", last_name=None, username="anna", language_code="ru"
@@ -378,6 +396,9 @@ def test_cancel_callback_removes_inline_keyboard() -> None:
         storage, state = make_state()
         await state.set_state(ProfileSetupStates.summary)
         message = FakeMessage()
+        await state.update_data(
+            **{ACTIVE_PROFILE_PROMPT_MESSAGE_ID: message.message_id}
+        )
 
         await handle_profile_callback(FakeCallback("profile:cancel", message), state, FakeApiClient())
 
@@ -410,11 +431,68 @@ def test_cleanup_failure_does_not_block_transition() -> None:
         message = FakeMessage()
         message.fail_edit = True
         await state.set_state(ProfileSetupStates.experience)
+        await state.update_data(
+            **{ACTIVE_PROFILE_PROMPT_MESSAGE_ID: message.message_id}
+        )
 
         await handle_profile_callback(FakeCallback("profile:experience:senior", message), state, FakeApiClient())
 
         assert await state.get_state() == ProfileSetupStates.location.state
         assert (await state.get_data())["experience"] == "senior"
+        await storage.close()
+
+    asyncio.run(scenario())
+
+
+def test_message_not_modified_cleanup_is_idempotent_without_warning(caplog) -> None:
+    async def scenario() -> None:
+        storage, state = make_state()
+        message = FakeMessage("Python, FastAPI")
+        message.bot.fail_edit = True
+        message.bot.edit_error_message = (
+            "message is not modified: specified new message content and reply markup "
+            "are exactly the same as a current content and reply markup of the message"
+        )
+        await state.set_state(ProfileSetupStates.skills)
+        await state.update_data(
+            target_roles=["Engineer"],
+            **{ACTIVE_PROFILE_PROMPT_MESSAGE_ID: message.message_id},
+        )
+
+        with caplog.at_level("WARNING", logger="app.profile"):
+            await handle_skills(message, state)
+
+        assert await state.get_state() == ProfileSetupStates.experience.state
+        assert (await state.get_data())["skills"] == ["Python", "FastAPI"]
+        assert not any(
+            "Could not remove active profile inline keyboard" in record.getMessage()
+            for record in caplog.records
+        )
+        await storage.close()
+
+    asyncio.run(scenario())
+
+
+def test_other_bad_request_cleanup_logs_warning_and_keeps_transition(caplog) -> None:
+    async def scenario() -> None:
+        storage, state = make_state()
+        message = FakeMessage("Python, FastAPI")
+        message.bot.fail_edit = True
+        await state.set_state(ProfileSetupStates.skills)
+        await state.update_data(
+            target_roles=["Engineer"],
+            **{ACTIVE_PROFILE_PROMPT_MESSAGE_ID: message.message_id},
+        )
+
+        with caplog.at_level("WARNING", logger="app.profile"):
+            await handle_skills(message, state)
+
+        assert await state.get_state() == ProfileSetupStates.experience.state
+        assert (await state.get_data())["skills"] == ["Python", "FastAPI"]
+        assert any(
+            "Could not remove active profile inline keyboard" in record.getMessage()
+            for record in caplog.records
+        )
         await storage.close()
 
     asyncio.run(scenario())

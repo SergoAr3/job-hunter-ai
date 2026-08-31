@@ -2,7 +2,7 @@ import logging
 from typing import cast
 
 from aiogram import F, Router
-from aiogram.exceptions import TelegramAPIError
+from aiogram.exceptions import TelegramAPIError, TelegramBadRequest
 from aiogram.filters import StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.types import (
@@ -15,7 +15,9 @@ from aiogram.types import (
 )
 
 from app.jobs import handle_add_job
+from app.cv_profile import handle_cv_profile_setup
 from app.profile import handle_profile_setup, remove_active_profile_inline_keyboard
+from app.telegram_cleanup import is_message_not_modified
 
 logger = logging.getLogger(__name__)
 
@@ -23,6 +25,7 @@ ADD_JOB_BUTTON = "💼 Добавить вакансию"
 PROFILE_BUTTON = "👤 Мой профиль"
 MENU_ACTIONS = {ADD_JOB_BUTTON, PROFILE_BUTTON}
 PROFILE_SETUP_CALLBACK = "profile_section:setup"
+PROFILE_CV_CALLBACK = "profile_section:cv"
 PROFILE_SECTION_MESSAGE_ID = "profile_section_message_id"
 PROFILE_SECTION_MESSAGE = (
     "👤 Мой профиль\n\n"
@@ -49,7 +52,13 @@ def profile_section_keyboard() -> InlineKeyboardMarkup:
                     text="✏️ Заполнить / изменить профиль",
                     callback_data=PROFILE_SETUP_CALLBACK,
                 )
-            ]
+            ],
+            [
+                InlineKeyboardButton(
+                    text="📄 Заполнить из CV",
+                    callback_data=PROFILE_CV_CALLBACK,
+                )
+            ],
         ]
     )
 
@@ -78,6 +87,17 @@ async def profile_section_setup(callback: CallbackQuery, state: FSMContext) -> N
     await handle_profile_setup(message, state)
 
 
+async def profile_section_cv(callback: CallbackQuery, state: FSMContext) -> None:
+    await callback.answer()
+    if callback.message is None:
+        return
+    message = cast(Message, callback.message)
+    if not await is_active_profile_section_message(message, state):
+        return
+    await remove_active_profile_section_keyboard(message, state)
+    await handle_cv_profile_setup(message, state)
+
+
 async def is_active_profile_section_message(message: Message, state: FSMContext) -> bool:
     return (await state.get_data()).get(PROFILE_SECTION_MESSAGE_ID) == message.message_id
 
@@ -90,6 +110,10 @@ async def remove_active_profile_section_keyboard(message: Message, state: FSMCon
         await message.bot.edit_message_reply_markup(
             chat_id=message.chat.id, message_id=section_message_id, reply_markup=None
         )
+    except TelegramBadRequest as error:
+        if is_message_not_modified(error):
+            return
+        logger.warning("Could not remove active profile section keyboard", exc_info=True)
     except TelegramAPIError:
         logger.warning("Could not remove active profile section keyboard", exc_info=True)
 
@@ -97,3 +121,4 @@ async def remove_active_profile_section_keyboard(message: Message, state: FSMCon
 def register_main_menu_handlers(router: Router) -> None:
     router.message.register(main_menu_action, F.text.in_(MENU_ACTIONS), StateFilter("*"))
     router.callback_query.register(profile_section_setup, F.data == PROFILE_SETUP_CALLBACK)
+    router.callback_query.register(profile_section_cv, F.data == PROFILE_CV_CALLBACK)

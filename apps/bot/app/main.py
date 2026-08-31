@@ -8,11 +8,13 @@ from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import CallbackQuery, Message
 
 from app.api_client import JobHunterApiClient
+from app.cv_profile import handle_cv_document, handle_unsupported_cv_message
 from app.jobs import AddJobStates, handle_add_job, handle_cancel, handle_job_url
 from app.menu import register_main_menu_handlers
 from app.profile import (
     ProfileSetupStates,
     handle_languages,
+    handle_cv_draft_field_input,
     handle_location,
     handle_profile_callback,
     handle_profile_cancel,
@@ -21,6 +23,7 @@ from app.profile import (
     handle_skills,
     handle_target_roles,
     is_profile_state,
+    remove_active_profile_inline_keyboard,
 )
 from app.start import handle_start
 
@@ -49,6 +52,7 @@ async def profile_setup(message: Message, state: FSMContext) -> None:
 @dp.message(Command("cancel"), StateFilter("*"))
 async def cancel(message: Message, state: FSMContext) -> None:
     if is_profile_state(await state.get_state()):
+        await remove_active_profile_inline_keyboard(message, state)
         await handle_profile_cancel(message, state)
     else:
         await handle_cancel(message, state)
@@ -85,6 +89,21 @@ async def receive_salary(message: Message, state: FSMContext) -> None:
 @dp.message(ProfileSetupStates.languages, F.text)
 async def receive_languages(message: Message, state: FSMContext) -> None:
     await handle_languages(message, state)
+
+
+@dp.message(ProfileSetupStates.cv_edit_field, F.text)
+async def receive_cv_draft_field_input(message: Message, state: FSMContext) -> None:
+    await handle_cv_draft_field_input(message, state)
+
+
+@dp.message(ProfileSetupStates.cv_waiting_document, F.document)
+async def receive_cv_document(message: Message, state: FSMContext) -> None:
+    await handle_cv_document(message, state, api_client)
+
+
+@dp.message(ProfileSetupStates.cv_waiting_document)
+async def receive_unsupported_cv_message(message: Message, state: FSMContext) -> None:
+    await handle_unsupported_cv_message(message, state)
 
 
 @dp.callback_query(F.data.startswith("profile:"))

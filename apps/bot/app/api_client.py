@@ -11,6 +11,10 @@ class BotApiClient(Protocol):
 
     async def put_user_profile(self, user_id: int, profile: dict[str, object]) -> dict[str, object]: ...
 
+    async def create_profile_draft_from_cv(
+        self, user_id: int, *, filename: str, content_type: str, content: bytes
+    ) -> dict[str, object]: ...
+
 
 class JobHunterApiClient:
     def __init__(self, base_url: str) -> None:
@@ -43,6 +47,16 @@ class JobHunterApiClient:
 
     async def put_user_profile(self, user_id: int, profile: dict[str, object]) -> dict[str, object]:
         response = await self._client.put(f"/users/{user_id}/profile", json=profile)
+        response.raise_for_status()
+        return _json_object(response)
+
+    async def create_profile_draft_from_cv(
+        self, user_id: int, *, filename: str, content_type: str, content: bytes
+    ) -> dict[str, object]:
+        response = await self._client.post(
+            f"/users/{user_id}/profile/draft-from-cv",
+            files={"file": (filename, content, content_type)},
+        )
         response.raise_for_status()
         return _json_object(response)
 

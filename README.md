@@ -22,7 +22,7 @@ Job Hunter AI — Telegram-ассистент для сохранения и с�
 - deterministic parsing поддерживаемых страниц вакансий;
 - AI enrichment вакансий через OpenAI;
 - PostgreSQL schema management через Alembic;
-- UserProfile v1 и ручная настройка через `/profile_setup`.
+- UserProfile v1 с ручной настройкой через `/profile_setup` и AI draft из PDF/DOCX CV.
 
 ## Локальный запуск
 
@@ -33,6 +33,7 @@ Job Hunter AI — Telegram-ассистент для сохранения и с�
    OPENAI_API_KEY=...
    OPENAI_MODEL=gpt-5-mini
    OPENAI_TIMEOUT_SECONDS=15
+   CV_AI_TIMEOUT_SECONDS=30
    ```
 
 2. Запустите PostgreSQL:
@@ -69,7 +70,7 @@ API по умолчанию доступен на `http://localhost:8000`; healt
 
 ## Текущий scope и roadmap
 
-Текущий scope покрывает ручное сохранение и enrichment вакансий, applications и
-UserProfile v1. CV upload, AI profile extraction, matching/ranking, relational
-skill taxonomy, Web UI и i18n (выбор/смена языка, локализованные messages и
-buttons) остаются следующими отдельными этапами.
+Текущий scope покрывает ручное сохранение и enrichment вакансий, applications,
+UserProfile v1 и подтверждаемый пользователем AI profile draft из CV.
+Matching/ranking, relational skill taxonomy, Web UI и i18n (выбор/смена языка,
+локализованные messages и buttons) остаются следующими отдельными этапами.
