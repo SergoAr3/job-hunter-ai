@@ -308,16 +308,22 @@ def format_match_details(match: dict[str, object]) -> str:
     conflicts = _reason_values(match.get("conflicts"))
     lines: list[str] = []
     if strengths:
-        lines.extend(["Сильные стороны:", *[f"• {value}" for value in strengths[:5]]])
+        lines.extend(["Сильные стороны:", *[f"• {value}" for _, value in strengths[:5]]])
     if gaps:
         if lines:
             lines.append("")
-        lines.extend(["Что проверить:", *[f"• {value}" for value in gaps[:5]]])
+        lines.extend(["Что проверить:", *[f"• {value}" for _, value in gaps[:5]]])
     if conflicts:
         if lines:
             lines.append("")
-        lines.extend(["Конфликты:", *[f"• {value}" for value in conflicts[:3]]])
-    other_components = _other_component_values(match)
+        lines.extend(["Конфликты:", *[f"• {value}" for _, value in conflicts[:3]]])
+    visible_components = {
+        component
+        for reasons in (strengths[:5], gaps[:5], conflicts[:3])
+        for component, _ in reasons
+        if component is not None
+    }
+    other_components = _other_component_values(match, visible_components)
     if other_components:
         if lines:
             lines.append("")
@@ -325,11 +331,10 @@ def format_match_details(match: dict[str, object]) -> str:
     return "\n".join(lines) or "Недостаточно данных для объяснения совпадения."
 
 
-def _other_component_values(match: dict[str, object]) -> list[str]:
+def _other_component_values(match: dict[str, object], visible_components: set[str]) -> list[str]:
     components = match.get("components")
     if not isinstance(components, dict):
         return []
-    explained = _explained_components(match)
     labels = {
         "seniority": "📈 Опыт",
         "languages": "🌍 Языки",
@@ -345,7 +350,7 @@ def _other_component_values(match: dict[str, object]) -> list[str]:
     }
     values: list[str] = []
     for name, label in labels.items():
-        if name in explained:
+        if name in visible_components:
             continue
         component = components.get(name)
         if not isinstance(component, dict):
@@ -357,34 +362,21 @@ def _other_component_values(match: dict[str, object]) -> list[str]:
     return values
 
 
-def _explained_components(match: dict[str, object]) -> set[str]:
-    explained: set[str] = set()
-    for section in ("strengths", "gaps", "conflicts"):
-        reasons = match.get(section)
-        if not isinstance(reasons, list):
-            continue
-        for reason in reasons:
-            if not isinstance(reason, dict):
-                continue
-            component = reason.get("component")
-            if isinstance(component, str):
-                explained.add(component)
-    return explained
-
-
-def _reason_values(value: object) -> list[str]:
+def _reason_values(value: object) -> list[tuple[str | None, str]]:
     if not isinstance(value, list):
         return []
-    values: list[str] = []
+    values: list[tuple[str | None, str]] = []
     for item in value:
         if not isinstance(item, dict):
             continue
         raw = item.get("value")
         code = item.get("code")
+        component = item.get("component")
+        component_name = component if isinstance(component, str) else None
         if isinstance(raw, str) and raw:
-            values.append(_format_reason_value(code, raw))
+            values.append((component_name, _format_reason_value(code, raw)))
         elif code == "salary_below_minimum":
-            values.append("Зарплата ниже указанного минимума")
+            values.append((component_name, "Зарплата ниже указанного минимума"))
     return values
 
 
@@ -401,7 +393,7 @@ def _format_reason_value(code: object, value: str) -> str:
         "seniority_missing": "Требуемый уровень: {value}",
         "languages_matched": "Язык соответствует: {value}",
         "languages_missing": "Требуемый язык: {value}",
-        "workplace_matched": "Формат работы соответствует: {value}",
+        "workplace_matched": "Формат работы подходит",
         "workplace_missing": "Формат работы для проверки: {value}",
         "location_matched": "Локация соответствует: {value}",
         "location_missing": "Локация для проверки: {value}",

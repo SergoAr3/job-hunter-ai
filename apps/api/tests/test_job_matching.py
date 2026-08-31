@@ -111,16 +111,52 @@ def test_unparseable_language_requirement_is_unknown() -> None:
     assert result.components["languages"].status == "unknown"
 
 
-def test_workplace_any_and_remote_location_are_neutral() -> None:
-    result = match(profile=profile(workplace_preference="any"))
+@pytest.mark.parametrize("workplace", ["onsite", "remote", "hybrid"])
+def test_workplace_any_matches_every_known_format(workplace: str) -> None:
+    result = match(profile=profile(workplace_preference="any"), job=job(workplace_type=workplace))
+    assert result.components["workplace"].score == 100
+    assert result.components["workplace"].status == "matched"
+    assert result.components["workplace"].matched == [workplace]
+    assert any(reason.code == "workplace_matched" for reason in result.strengths)
+    assert not any(reason.component == "workplace" for reason in result.gaps)
+
+
+def test_workplace_unknown_is_neutral_for_any_preference() -> None:
+    result = match(profile=profile(workplace_preference="any"), job=job(workplace_type="unknown"))
     assert result.components["workplace"].score is None
+    assert result.components["workplace"].status == "unknown"
     assert result.components["location"].score is None
+
+
+def test_workplace_any_counts_toward_score_and_coverage() -> None:
+    result = match(profile=profile(workplace_preference="any"), job=job(workplace_type="onsite"))
+    assert result.components["workplace"].score == 100
+    assert result.coverage == 100
+    assert result.score == 95
 
 
 def test_workplace_and_onsite_location_comparison() -> None:
     result = match(job=job(workplace_type="onsite", location="Yerevan"))
     assert result.components["workplace"].status == "mismatch"
     assert result.components["location"].status == "matched"
+
+
+@pytest.mark.parametrize(
+    ("preference", "workplace", "score", "status"),
+    [
+        ("onsite", "onsite", 100, "matched"),
+        ("remote", "remote", 100, "matched"),
+        ("hybrid", "hybrid", 100, "matched"),
+        ("onsite", "remote", 0, "mismatch"),
+        ("onsite", "hybrid", 0, "mismatch"),
+    ],
+)
+def test_workplace_explicit_equal_and_different_formats(
+    preference: str, workplace: str, score: int, status: str
+) -> None:
+    result = match(profile=profile(workplace_preference=preference), job=job(workplace_type=workplace))
+    assert result.components["workplace"].score == score
+    assert result.components["workplace"].status == status
 
 
 def test_salary_below_minimum_and_overlap() -> None:

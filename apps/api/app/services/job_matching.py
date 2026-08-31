@@ -202,9 +202,9 @@ def _level(value: str) -> int | None:
 
 
 def _workplace_component(preference: str, workplace: str) -> MatchComponentOut:
-    if preference == "any" or workplace == "unknown":
+    if workplace == "unknown":
         return _component("workplace", None, "unknown")
-    if preference == workplace:
+    if preference == "any" or preference == workplace:
         return _component("workplace", 100, "matched", [workplace])
     return _component("workplace", 0, "mismatch", missing=[workplace])
 
