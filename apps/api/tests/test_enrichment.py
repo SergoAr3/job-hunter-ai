@@ -1,5 +1,6 @@
 from decimal import Decimal
 from datetime import datetime, timezone
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -31,7 +32,72 @@ def test_extracts_json_ld_and_ignores_malformed_script() -> None:
     assert result.title == "Backend Engineer"
     assert result.company == "Acme"
     assert result.salary_period == "month"
+    assert result.workplace_type == "remote"
     assert result.parsing_status == "success"
+
+
+def test_extracts_embedded_vacancy_workplace_fixture() -> None:
+    html = (Path(__file__).parent / "fixtures" / "vacancy_enrichment" / "hh_workplace_embedded.html").read_text()
+    raw = JobPostingExtractor().extract(html)
+    assert raw.workplace_raw == "ON_SITE"
+    assert normalize_job(raw).workplace_type == "onsite"
+
+
+def test_extracts_embedded_json_vacancy_workplace() -> None:
+    html = '<script type="application/json">{"vacancy":{"name":"Engineer","description":"Build APIs","workFormats":["ON_SITE"]}}</script>'
+    raw = JobPostingExtractor().extract(html)
+    assert raw.workplace_raw == "ON_SITE"
+    assert normalize_job(raw).workplace_type == "onsite"
+
+
+def test_ignores_embedded_workplace_without_vacancy_context() -> None:
+    html = '<script type="application/json">{"translations":{"workFormats":["ON_SITE"],"name":"work format"}}</script>'
+    assert JobPostingExtractor().extract(html).workplace_raw is None
+
+
+def test_ignores_embedded_workplace_from_ui_config() -> None:
+    html = '<script type="application/json">{"ui_config":{"name":"Vacancy filters","employment":{"full_time":true},"workFormats":["ON_SITE"]}}</script>'
+    assert JobPostingExtractor().extract(html).workplace_raw is None
+
+
+def test_embedded_work_formats_skips_malformed_values_for_first_supported_one() -> None:
+    html = '<script type="application/json">{"vacancy":{"name":"Engineer","description":"Build APIs","workFormats":[{}, "FIELD_WORK", "ON_SITE"]}}</script>'
+    assert JobPostingExtractor().extract(html).workplace_raw == "ON_SITE"
+
+
+def test_empty_embedded_work_formats_is_ignored() -> None:
+    html = '<script type="application/json">{"vacancy":{"name":"Engineer","description":"Build APIs","workFormats":[]}}</script>'
+    assert JobPostingExtractor().extract(html).workplace_raw is None
+
+
+def test_json_ld_known_workplace_has_priority_over_embedded_data() -> None:
+    html = '''<script type="application/ld+json">{"@type":"JobPosting","title":"Engineer","description":"Build APIs","jobLocationType":"TELECOMMUTE"}</script><script type="application/json">{"vacancy":{"name":"Engineer","description":"Build APIs","workFormats":["ON_SITE"]}}</script>'''
+    assert normalize_job(JobPostingExtractor().extract(html)).workplace_type == "remote"
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("onsite", "onsite"), ("on-site", "onsite"), ("on site", "onsite"), ("ON_SITE", "onsite"),
+        ("in person", "onsite"), ("на месте работодателя", "onsite"), ("в офисе", "onsite"),
+        ("remote", "remote"), ("удалённо", "remote"), ("удаленно", "remote"), ("дистанционно", "remote"),
+        ("hybrid", "hybrid"), ("гибрид", "hybrid"), ("гибридный", "hybrid"),
+    ],
+)
+def test_normalizes_structured_workplace_aliases(raw: str, expected: str) -> None:
+    assert normalize_job(ExtractedJobData(workplace_raw=raw)).workplace_type == expected
+
+
+@pytest.mark.parametrize("raw", [None, "", "office", "ON_SITE_UNKNOWN"])
+def test_unknown_or_malformed_workplace_is_unknown(raw: str | None) -> None:
+    assert normalize_job(ExtractedJobData(workplace_raw=raw)).workplace_type == "unknown"
+
+
+def test_description_office_mention_is_not_workplace_evidence() -> None:
+    html = '<meta name="description" content="Наш офис находится рядом с метро.">'
+    raw = JobPostingExtractor().extract(html)
+    assert raw.workplace_raw is None
+    assert normalize_job(raw).workplace_type == "unknown"
 
 
 def test_fetcher_rejects_private_resolved_address() -> None:

@@ -338,6 +338,53 @@ def test_partial_role_is_not_rendered_as_full_match() -> None:
     assert "Подходящая роль" not in rendered
 
 
+def test_workplace_match_explanation_is_neutral_for_any_preference() -> None:
+    rendered = format_match_details(
+        {
+            "strengths": [{"component": "workplace", "code": "workplace_matched", "value": "onsite"}],
+            "gaps": [],
+            "conflicts": [],
+        }
+    )
+    assert "Формат работы подходит" in rendered
+    assert "onsite" not in rendered
+
+
+def test_workplace_match_hidden_by_strength_limit_is_shown_once_in_other_criteria() -> None:
+    strengths = [
+        {"component": "role", "code": "role_matched", "value": "Python-разработчик"},
+        *[
+            {"component": "required_skills", "code": "required_skills_matched", "value": skill}
+            for skill in ("Python", "PostgreSQL", "Docker", "Linux", "Git")
+        ],
+        {"component": "workplace", "code": "workplace_matched", "value": "onsite"},
+    ]
+    rendered = format_match_details(
+        {"strengths": strengths, "gaps": [], "conflicts": [], "components": {"workplace": {"status": "matched"}}}
+    )
+
+    assert "Формат работы подходит" not in rendered
+    assert rendered.count("🏠 Формат работы: соответствует") == 1
+
+
+def test_workplace_mismatch_and_unknown_are_rendered_once() -> None:
+    mismatch = format_match_details(
+        {
+            "strengths": [],
+            "gaps": [{"component": "workplace", "code": "workplace_missing", "value": "remote"}],
+            "conflicts": [],
+            "components": {"workplace": {"status": "mismatch"}},
+        }
+    )
+    unknown = format_match_details(
+        {"strengths": [], "gaps": [], "conflicts": [], "components": {"workplace": {"status": "unknown"}}}
+    )
+
+    assert mismatch.count("Формат работы для проверки: remote") == 1
+    assert "🏠 Формат работы:" not in mismatch
+    assert unknown.count("🏠 Формат работы: нет данных") == 1
+
+
 def test_match_details_render_other_component_statuses_without_guessing() -> None:
     rendered = format_match_details(
         {

@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import logging
+import time
 from decimal import Decimal
 from enum import Enum
 from typing import Any
 
-from openai import APIError, APITimeoutError, OpenAI
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from openai import APIError, APIResponseValidationError, APITimeoutError, OpenAI
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
 from app.config import OPENAI_API_KEY, OPENAI_MODEL, OPENAI_TIMEOUT_SECONDS
 from app.services.salary_validation import is_iso_4217_currency
@@ -146,6 +147,7 @@ class JobAIEnrichmentService:
     def enrich(self, vacancy: VacancyAIInput) -> tuple[AIEnrichmentResult | None, str | None]:
         if self._client is None:
             return None, None
+        parse_started_at = time.monotonic()
         try:
             response = self._client.responses.parse(
                 model=self._model,
@@ -157,21 +159,74 @@ class JobAIEnrichmentService:
                 reasoning={"effort": REASONING_EFFORT},
                 max_output_tokens=MAX_OUTPUT_TOKENS,
             )
-        except APITimeoutError:
+        except APITimeoutError as error:
+            _log_parse_telemetry(self._model, time.monotonic() - parse_started_at, error_code="timeout", error=error)
             return None, "timeout"
-        except APIError:
+        except APIResponseValidationError as error:
+            _log_parse_telemetry(self._model, time.monotonic() - parse_started_at, error_code="invalid_output", error=error)
+            return None, "invalid_output"
+        except ValidationError as error:
+            _log_parse_telemetry(self._model, time.monotonic() - parse_started_at, error_code="invalid_output", error=error)
+            return None, "invalid_output"
+        except APIError as error:
+            _log_parse_telemetry(self._model, time.monotonic() - parse_started_at, error_code="provider_error", error=error)
             return None, "provider_error"
-        except Exception:
-            logger.exception("Unexpected AI enrichment provider failure")
+        except Exception as error:
+            _log_parse_telemetry(self._model, time.monotonic() - parse_started_at, error_code="processing_failed", error=error)
             return None, "processing_failed"
 
+        parse_duration_seconds = time.monotonic() - parse_started_at
         parsed = getattr(response, "output_parsed", None)
         if not isinstance(parsed, AIEnrichmentResult):
+            _log_parse_telemetry(self._model, parse_duration_seconds, error_code="invalid_output", response=response)
             return None, "invalid_output"
         try:
-            return validate_enrichment_result(parsed), None
-        except ValueError:
+            output = validate_enrichment_result(parsed)
+        except (ValidationError, ValueError) as error:
+            _log_parse_telemetry(self._model, parse_duration_seconds, error_code="invalid_output", error=error, response=response)
             return None, "invalid_output"
+        _log_parse_telemetry(self._model, parse_duration_seconds, response=response)
+        return output, None
+
+
+def _log_parse_telemetry(
+    model: str,
+    duration_seconds: float,
+    *,
+    error_code: str | None = None,
+    error: Exception | None = None,
+    response: object | None = None,
+) -> None:
+    request_id, status_code = _response_metadata(error if error is not None else response)
+    fields = [
+        f"model={model}",
+        f"duration_seconds={duration_seconds:.3f}",
+        f"result={'error' if error_code else 'success'}",
+    ]
+    if error_code is not None:
+        fields.append(f"error_code={error_code}")
+    if error is not None:
+        fields.append(f"exception_class={type(error).__name__}")
+    if request_id is not None:
+        fields.append(f"request_id={request_id}")
+    if status_code is not None:
+        fields.append(f"status_code={status_code}")
+    logger.info("AI enrichment parse %s", " ".join(fields))
+
+
+def _response_metadata(value: object | None) -> tuple[str | None, int | None]:
+    if value is None:
+        return None, None
+    request_id = getattr(value, "request_id", None) or getattr(value, "_request_id", None)
+    response = getattr(value, "response", None)
+    if not isinstance(request_id, str) and response is not None:
+        headers = getattr(response, "headers", None)
+        if headers is not None:
+            request_id = headers.get("x-request-id")
+    status_code = getattr(value, "status_code", None)
+    if not isinstance(status_code, int) and response is not None:
+        status_code = getattr(response, "status_code", None)
+    return request_id if isinstance(request_id, str) else None, status_code if isinstance(status_code, int) else None
 
 
 def validate_enrichment_result(result: AIEnrichmentResult) -> AIEnrichmentResult:

@@ -41,7 +41,7 @@ class NormalizedJobData:
 
 def normalize_job(data: ExtractedJobData) -> NormalizedJobData:
     cleaned = {name: _clean(name, getattr(data, name)) for name in ("title", "company", "description", "requirements_text", "salary_text", "location")}
-    workplace = _workplace(data.workplace_raw)
+    workplace = normalize_workplace(data.workplace_raw)
     employment = _employment(data.employment_raw)
     period = _period(data.salary_period)
     salary_min, salary_max = _safe_salary_range(data.salary_min, data.salary_max)
@@ -79,13 +79,14 @@ def _currency(value: str | None) -> str | None:
     return value.upper() if value and len(value) == 3 and value.isalpha() else None
 
 
-def _workplace(value: str | None) -> str:
-    text = (value or "").lower()
-    if "remote" in text or "telecommute" in text:
+def normalize_workplace(value: str | None) -> str:
+    text = re.sub(r"[_-]+", " ", (value or "").casefold().replace("\xa0", " "))
+    text = " ".join(text.split())
+    if text in {"remote", "telecommute", "удалённо", "удаленно", "дистанционно"}:
         return "remote"
-    if "hybrid" in text:
+    if text in {"hybrid", "гибрид", "гибридный"}:
         return "hybrid"
-    if "on-site" in text or "onsite" in text or "in person" in text:
+    if text in {"onsite", "on site", "in person", "на месте работодателя", "в офисе"}:
         return "onsite"
     return "unknown"
 
