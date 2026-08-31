@@ -108,6 +108,8 @@ def save_application_for_user(
         job = session.get(Job, job_id)
         if job is None:
             raise RuntimeError("Saved job disappeared")
+    if job is None:
+        raise RuntimeError("Saved job disappeared")
     return job, application, job_created, application_created
 
 
@@ -129,26 +131,26 @@ def _run_ai_enrichment(session: Session, job: Job, service: JobAIEnrichmentServi
         logger.exception("Unexpected AI enrichment failure", extra={"job_id": job_id})
         result, error = None, "processing_failed"
     try:
-        job = session.get(Job, job_id)
-        if job is None:
+        refreshed_job = session.get(Job, job_id)
+        if refreshed_job is None:
             raise RuntimeError("Saved job disappeared before AI enrichment update")
         if result is None:
-            job.ai_enrichment_status = AIEnrichmentStatus.FAILED.value
-            job.ai_enrichment_error = error or "processing_failed"
+            refreshed_job.ai_enrichment_status = AIEnrichmentStatus.FAILED.value
+            refreshed_job.ai_enrichment_error = error or "processing_failed"
         else:
-            _apply_ai_enrichment(job, result)
-            job.ai_enrichment_status = AIEnrichmentStatus.SUCCESS.value
-            job.ai_enrichment_error = None
+            _apply_ai_enrichment(refreshed_job, result)
+            refreshed_job.ai_enrichment_status = AIEnrichmentStatus.SUCCESS.value
+            refreshed_job.ai_enrichment_error = None
         session.commit()
-        session.refresh(job)
+        session.refresh(refreshed_job)
     except Exception:
         session.rollback()
         logger.exception("Could not persist AI enrichment", extra={"job_id": job_id})
         try:
-            job = session.get(Job, job_id)
-            if job is not None and job.ai_enrichment_status == AIEnrichmentStatus.PENDING.value:
-                job.ai_enrichment_status = AIEnrichmentStatus.FAILED.value
-                job.ai_enrichment_error = "processing_failed"
+            failed_job = session.get(Job, job_id)
+            if failed_job is not None and failed_job.ai_enrichment_status == AIEnrichmentStatus.PENDING.value:
+                failed_job.ai_enrichment_status = AIEnrichmentStatus.FAILED.value
+                failed_job.ai_enrichment_error = "processing_failed"
                 session.commit()
         except Exception:
             session.rollback()
@@ -275,3 +277,10 @@ def _get_or_create_application(session: Session, user_id: int, job_id: int) -> t
             raise
         return application, False
     return application, True
+
+
+def get_application_for_user(session: Session, user_id: int, application_id: int) -> Application | None:
+    """Return an application only when it belongs to the requested user."""
+    return session.scalar(
+        select(Application).where(Application.id == application_id, Application.user_id == user_id)
+    )

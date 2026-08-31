@@ -3,15 +3,25 @@ from starlette.concurrency import run_in_threadpool
 from sqlalchemy.orm import Session
 
 from app.database import get_session
+from app.models import Job
 from app.schemas import (
     ApplicationCreateIn,
+    ApplicationOut,
+    JobOut,
+    MatchResultOut,
     SavedApplicationOut,
     TelegramUserIn,
     TelegramUserOut,
     UserProfileOut,
     UserProfilePutIn,
 )
-from app.services.applications import UnsafeUrlError, UserNotFoundError, save_application_for_user
+from app.services.applications import (
+    UnsafeUrlError,
+    UserNotFoundError,
+    get_application_for_user,
+    save_application_for_user,
+)
+from app.services.job_matching import calculate_match
 from app.services.cv_profile_draft import (
     ERROR_AI_PROVIDER,
     ERROR_AI_TIMEOUT,
@@ -133,8 +143,25 @@ def save_application(
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Unsafe URL") from error
 
     return SavedApplicationOut(
-        job=job,
-        application=application,
+        job=JobOut.model_validate(job),
+        application=ApplicationOut.model_validate(application),
         job_created=job_created,
         application_created=application_created,
     )
+
+
+@app.get("/users/{user_id}/applications/{application_id}/match", response_model=MatchResultOut)
+def read_application_match(
+    user_id: int, application_id: int, session: Session = Depends(get_session)
+) -> MatchResultOut:
+    application = get_application_for_user(session, user_id, application_id)
+    if application is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail={"code": "APPLICATION_NOT_FOUND"})
+    try:
+        profile = get_user_profile(session, user_id)
+    except (ProfileUserNotFoundError, UserProfileNotFoundError) as error:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail={"code": "PROFILE_REQUIRED"}) from error
+    job = session.get(Job, application.job_id)
+    if job is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail={"code": "APPLICATION_NOT_FOUND"})
+    return calculate_match(profile, job, application)

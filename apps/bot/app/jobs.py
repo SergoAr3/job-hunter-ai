@@ -5,10 +5,12 @@ import httpx
 from aiogram import Bot
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import Message, User
+from aiogram.exceptions import TelegramAPIError, TelegramBadRequest
+from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message, User
 from aiogram.utils.chat_action import ChatActionSender
 
 from app.api_client import BotApiClient
+from app.telegram_cleanup import is_message_not_modified
 
 logger = logging.getLogger(__name__)
 
@@ -21,6 +23,10 @@ ALREADY_SAVED_MESSAGE = "Эта вакансия уже сохранена."
 CANCELLED_MESSAGE = "Добавление вакансии отменено."
 NO_ACTIVE_FLOW_MESSAGE = "Сейчас нет активного действия."
 PROCESSING_MESSAGE = "Сохраняю и анализирую вакансию…"
+MATCH_DETAILS_PREFIX = "match:details:"
+MATCH_PROFILE_CALLBACK = "match:profile"
+ACTIVE_MATCH_MESSAGE_ID = "active_match_message_id"
+ACTIVE_MATCH_DETAILS_CLAIM_ID = "active_match_details_claim_id"
 
 
 class AddJobStates(StatesGroup):
@@ -28,6 +34,8 @@ class AddJobStates(StatesGroup):
 
 
 async def handle_add_job(message: Message, state: FSMContext) -> None:
+    await remove_active_match_inline_keyboard(message, state)
+    await state.clear()
     await state.set_state(AddJobStates.waiting_for_url)
     await message.answer(REQUEST_URL_MESSAGE)
 
@@ -53,7 +61,7 @@ async def handle_job_url(message: Message, state: FSMContext, api_client: BotApi
 
     processing_message = await message.answer(PROCESSING_MESSAGE)
     try:
-        result = await _save_application_with_typing(message, api_client, telegram_user, source_url)
+        result, user_id = await _save_application_with_typing(message, api_client, telegram_user, source_url)
     except httpx.HTTPStatusError as error:
         await _delete_processing_message(processing_message)
         if error.response.status_code == 422:
@@ -90,6 +98,11 @@ async def handle_job_url(message: Message, state: FSMContext, api_client: BotApi
             card = format_job_card(job)
             if card:
                 await message.answer(card)
+    application = result.get("application")
+    if isinstance(application, dict):
+        application_id = application.get("id")
+        if isinstance(application_id, int) and not isinstance(application_id, bool):
+            await _show_match_summary(message, state, api_client, user_id, application_id)
 
 
 async def _save_application_with_typing(
@@ -97,7 +110,7 @@ async def _save_application_with_typing(
     api_client: BotApiClient,
     telegram_user: User,
     source_url: str,
-) -> dict[str, object]:
+) -> tuple[dict[str, object], int]:
     sender: ChatActionSender | None = None
     try:
         bot: Bot | None = message.bot
@@ -111,7 +124,7 @@ async def _save_application_with_typing(
 
     try:
         user_id = await api_client.create_or_get_user(telegram_user)
-        return await api_client.save_application(user_id, source_url)
+        return await api_client.save_application(user_id, source_url), user_id
     finally:
         if sender is not None:
             try:
@@ -173,3 +186,264 @@ def _format_structured_salary(job: dict[str, object]) -> str | None:
     if isinstance(period, str) and period != "unknown":
         parts.append(f"per {period}")
     return " ".join(parts)
+
+
+async def _show_match_summary(
+    message: Message, state: FSMContext, api_client: BotApiClient, user_id: int, application_id: int
+) -> None:
+    try:
+        match = await api_client.get_application_match(user_id, application_id)
+    except httpx.HTTPStatusError as error:
+        if _error_code(error) == "PROFILE_REQUIRED":
+            await _send_match_message(message, state, "🎯 Заполни профиль, чтобы оценить совпадение.", MATCH_PROFILE_CALLBACK)
+        else:
+            logger.warning("Could not get match through API", exc_info=True)
+        return
+    except httpx.HTTPError:
+        logger.warning("Could not get match through API", exc_info=True)
+        return
+    verdict = match.get("verdict")
+    score = match.get("score")
+    if verdict == "insufficient_data" or not isinstance(score, int) or isinstance(score, bool):
+        await message.answer("🎯 Недостаточно данных для надёжной оценки.")
+        return
+    await _send_match_message(message, state, f"🎯 Совпадение: {score}%", f"{MATCH_DETAILS_PREFIX}{application_id}")
+
+
+async def _send_match_message(message: Message, state: FSMContext, text: str, callback_data: str) -> None:
+    summary = await message.answer(
+        text,
+        reply_markup=InlineKeyboardMarkup(
+            inline_keyboard=[[InlineKeyboardButton(text="🔎 Почему подходит?" if callback_data.startswith(MATCH_DETAILS_PREFIX) else "👤 Заполнить профиль", callback_data=callback_data)]]
+        ),
+    )
+    await state.update_data(
+        {ACTIVE_MATCH_MESSAGE_ID: summary.message_id, ACTIVE_MATCH_DETAILS_CLAIM_ID: None}
+    )
+
+
+async def handle_match_callback(callback: CallbackQuery, state: FSMContext, api_client: BotApiClient) -> None:
+    if callback.message is None or callback.from_user is None:
+        await callback.answer()
+        return
+    message = callback.message
+    data = callback.data or ""
+    if data.startswith(MATCH_DETAILS_PREFIX):
+        application_id_text = data.removeprefix(MATCH_DETAILS_PREFIX)
+        if not application_id_text.isdecimal() or not await _claim_active_match_details(message, state):
+            await callback.answer()
+            return
+        await callback.answer()
+        try:
+            user_id = await api_client.create_or_get_user(callback.from_user)
+            match = await api_client.get_application_match(user_id, int(application_id_text))
+        except httpx.HTTPStatusError as error:
+            if _error_code(error) == "PROFILE_REQUIRED":
+                await _replace_claimed_match_with_profile_cta(message, state)
+            else:
+                await _restore_match_details_claim(message, state)
+                logger.warning("Could not refresh match through API", exc_info=True)
+            return
+        except httpx.HTTPError:
+            await _restore_match_details_claim(message, state)
+            logger.warning("Could not refresh match through API", exc_info=True)
+            return
+        if not await _has_match_details_claim(message, state):
+            return
+        await _remove_match_keyboard(message)
+        if not await _has_match_details_claim(message, state):
+            return
+        await state.update_data({ACTIVE_MATCH_DETAILS_CLAIM_ID: None})
+        await message.answer(format_match_details(match))
+        return
+
+    await callback.answer()
+    if not await _is_active_match_callback(message, state):
+        return
+    if data == MATCH_PROFILE_CALLBACK:
+        await _remove_match_keyboard(message)
+        from app.profile import handle_profile_setup
+
+        await handle_profile_setup(message, state)
+        return
+
+
+async def _claim_active_match_details(message: Message, state: FSMContext) -> bool:
+    if not await _is_active_match_callback(message, state):
+        return False
+    await state.update_data(
+        {ACTIVE_MATCH_MESSAGE_ID: None, ACTIVE_MATCH_DETAILS_CLAIM_ID: message.message_id}
+    )
+    return True
+
+
+async def _has_match_details_claim(message: Message, state: FSMContext) -> bool:
+    data = await state.get_data()
+    return (
+        data.get(ACTIVE_MATCH_MESSAGE_ID) is None
+        and data.get(ACTIVE_MATCH_DETAILS_CLAIM_ID) == message.message_id
+    )
+
+
+async def _restore_match_details_claim(message: Message, state: FSMContext) -> None:
+    if not await _has_match_details_claim(message, state):
+        return
+    await state.update_data(
+        {ACTIVE_MATCH_MESSAGE_ID: message.message_id, ACTIVE_MATCH_DETAILS_CLAIM_ID: None}
+    )
+
+
+async def _replace_claimed_match_with_profile_cta(message: Message, state: FSMContext) -> None:
+    if not await _has_match_details_claim(message, state):
+        return
+    await _remove_match_keyboard(message)
+    if not await _has_match_details_claim(message, state):
+        return
+    await _send_match_message(message, state, "🎯 Заполни профиль, чтобы оценить совпадение.", MATCH_PROFILE_CALLBACK)
+
+
+def format_match_details(match: dict[str, object]) -> str:
+    strengths = _reason_values(match.get("strengths"))
+    gaps = _reason_values(match.get("gaps"))
+    conflicts = _reason_values(match.get("conflicts"))
+    lines: list[str] = []
+    if strengths:
+        lines.extend(["Сильные стороны:", *[f"• {value}" for value in strengths[:5]]])
+    if gaps:
+        if lines:
+            lines.append("")
+        lines.extend(["Что проверить:", *[f"• {value}" for value in gaps[:5]]])
+    if conflicts:
+        if lines:
+            lines.append("")
+        lines.extend(["Конфликты:", *[f"• {value}" for value in conflicts[:3]]])
+    other_components = _other_component_values(match)
+    if other_components:
+        if lines:
+            lines.append("")
+        lines.extend(["Другие критерии:", *other_components])
+    return "\n".join(lines) or "Недостаточно данных для объяснения совпадения."
+
+
+def _other_component_values(match: dict[str, object]) -> list[str]:
+    components = match.get("components")
+    if not isinstance(components, dict):
+        return []
+    explained = _explained_components(match)
+    labels = {
+        "seniority": "📈 Опыт",
+        "languages": "🌍 Языки",
+        "workplace": "🏠 Формат работы",
+        "location": "📍 Локация",
+        "salary": "💰 Зарплата",
+    }
+    status_text = {
+        "matched": "соответствует",
+        "partial": "частичное совпадение",
+        "mismatch": "есть расхождение",
+        "unknown": "нет данных",
+    }
+    values: list[str] = []
+    for name, label in labels.items():
+        if name in explained:
+            continue
+        component = components.get(name)
+        if not isinstance(component, dict):
+            continue
+        status = component.get("status")
+        if not isinstance(status, str) or status not in status_text:
+            continue
+        values.append(f"{label}: {status_text[status]}")
+    return values
+
+
+def _explained_components(match: dict[str, object]) -> set[str]:
+    explained: set[str] = set()
+    for section in ("strengths", "gaps", "conflicts"):
+        reasons = match.get(section)
+        if not isinstance(reasons, list):
+            continue
+        for reason in reasons:
+            if not isinstance(reason, dict):
+                continue
+            component = reason.get("component")
+            if isinstance(component, str):
+                explained.add(component)
+    return explained
+
+
+def _reason_values(value: object) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    values: list[str] = []
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        raw = item.get("value")
+        code = item.get("code")
+        if isinstance(raw, str) and raw:
+            values.append(_format_reason_value(code, raw))
+        elif code == "salary_below_minimum":
+            values.append("Зарплата ниже указанного минимума")
+    return values
+
+
+def _format_reason_value(code: object, value: str) -> str:
+    templates = {
+        "role_matched": "Подходящая роль: {value}",
+        "role_partial": "Роль совпадает частично: {value}",
+        "role_missing": "Роль для проверки: {value}",
+        "required_skills_matched": "Есть обязательный навык: {value}",
+        "required_skills_missing": "Не указан обязательный навык: {value}",
+        "nice_to_have_skills_matched": "Есть дополнительный навык: {value}",
+        "nice_to_have_skills_missing": "Не указан дополнительный навык: {value}",
+        "seniority_matched": "Уровень опыта соответствует: {value}",
+        "seniority_missing": "Требуемый уровень: {value}",
+        "languages_matched": "Язык соответствует: {value}",
+        "languages_missing": "Требуемый язык: {value}",
+        "workplace_matched": "Формат работы соответствует: {value}",
+        "workplace_missing": "Формат работы для проверки: {value}",
+        "location_matched": "Локация соответствует: {value}",
+        "location_missing": "Локация для проверки: {value}",
+    }
+    return templates.get(code, "{value}").format(value=value) if isinstance(code, str) else value
+
+
+def _error_code(error: httpx.HTTPStatusError) -> str | None:
+    try:
+        detail = error.response.json().get("detail")
+    except (ValueError, AttributeError):
+        return None
+    return detail.get("code") if isinstance(detail, dict) and isinstance(detail.get("code"), str) else None
+
+
+async def remove_active_match_inline_keyboard(message: Message, state: FSMContext) -> None:
+    data = await state.get_data()
+    message_id = data.get(ACTIVE_MATCH_MESSAGE_ID) or data.get(ACTIVE_MATCH_DETAILS_CLAIM_ID)
+    if not isinstance(message_id, int) or message.bot is None:
+        return
+    if data.get(ACTIVE_MATCH_DETAILS_CLAIM_ID) == message_id:
+        await state.update_data({ACTIVE_MATCH_DETAILS_CLAIM_ID: None})
+    try:
+        await message.bot.edit_message_reply_markup(chat_id=message.chat.id, message_id=message_id, reply_markup=None)
+    except TelegramBadRequest as error:
+        if is_message_not_modified(error):
+            return
+        logger.warning("Could not remove active match inline keyboard", exc_info=True)
+    except TelegramAPIError:
+        logger.warning("Could not remove active match inline keyboard", exc_info=True)
+
+
+async def _is_active_match_callback(message: Message, state: FSMContext) -> bool:
+    return (await state.get_data()).get(ACTIVE_MATCH_MESSAGE_ID) == message.message_id
+
+
+async def _remove_match_keyboard(message: Message) -> None:
+    try:
+        await message.edit_reply_markup(reply_markup=None)
+    except TelegramBadRequest as error:
+        if is_message_not_modified(error):
+            return
+        logger.warning("Could not remove match inline keyboard", exc_info=True)
+    except TelegramAPIError:
+        logger.warning("Could not remove match inline keyboard", exc_info=True)
