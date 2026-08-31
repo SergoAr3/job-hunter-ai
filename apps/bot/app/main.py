@@ -9,7 +9,7 @@ from aiogram.types import CallbackQuery, Message
 
 from app.api_client import JobHunterApiClient
 from app.cv_profile import handle_cv_document, handle_unsupported_cv_message
-from app.jobs import AddJobStates, handle_add_job, handle_cancel, handle_job_url
+from app.jobs import AddJobStates, handle_add_job, handle_cancel, handle_job_url, handle_match_callback
 from app.menu import register_main_menu_handlers
 from app.profile import (
     ProfileSetupStates,
@@ -109,6 +109,11 @@ async def receive_unsupported_cv_message(message: Message, state: FSMContext) ->
 @dp.callback_query(F.data.startswith("profile:"))
 async def profile_callback(callback: CallbackQuery, state: FSMContext) -> None:
     await handle_profile_callback(callback, state, api_client)
+
+
+@dp.callback_query(F.data.startswith("match:"))
+async def match_callback(callback: CallbackQuery, state: FSMContext) -> None:
+    await handle_match_callback(callback, state, api_client)
 
 
 async def main() -> None:

@@ -180,3 +180,38 @@ class SavedApplicationOut(BaseModel):
     application: ApplicationOut
     job_created: bool
     application_created: bool
+
+
+class MatchComponentOut(BaseModel):
+    weight: int
+    score: int | None
+    status: str
+    matched: list[str] = Field(default_factory=list)
+    missing: list[str] = Field(default_factory=list)
+
+
+class MatchReasonOut(BaseModel):
+    code: str
+    component: str
+    value: str | None = None
+
+
+class MatchInputStateOut(BaseModel):
+    profile_updated_at: datetime | None
+    job_updated_at: datetime | None
+    parsing_status: str
+    ai_enrichment_status: str
+
+
+class MatchResultOut(BaseModel):
+    algorithm_version: str
+    application_id: int
+    job_id: int
+    score: int | None
+    verdict: str
+    coverage: int
+    input_state: MatchInputStateOut
+    components: dict[str, MatchComponentOut]
+    strengths: list[MatchReasonOut]
+    gaps: list[MatchReasonOut]
+    conflicts: list[MatchReasonOut]

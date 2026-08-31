@@ -14,7 +14,7 @@ from aiogram.types import (
     ReplyKeyboardMarkup,
 )
 
-from app.jobs import handle_add_job
+from app.jobs import handle_add_job, remove_active_match_inline_keyboard
 from app.cv_profile import handle_cv_profile_setup
 from app.profile import handle_profile_setup, remove_active_profile_inline_keyboard
 from app.telegram_cleanup import is_message_not_modified
@@ -66,6 +66,7 @@ def profile_section_keyboard() -> InlineKeyboardMarkup:
 async def main_menu_action(message: Message, state: FSMContext) -> None:
     await remove_active_profile_section_keyboard(message, state)
     await remove_active_profile_inline_keyboard(message, state)
+    await remove_active_match_inline_keyboard(message, state)
     await state.clear()
     if message.text == ADD_JOB_BUTTON:
         await handle_add_job(message, state)
