@@ -44,3 +44,34 @@ def test_put_user_profile_calls_full_replace_endpoint() -> None:
         assert requests[0].url.path == "/users/7/profile"
         assert requests[0].content == b'{"target_roles":["Engineer"]}'
     asyncio.run(scenario())
+
+
+def test_create_profile_draft_from_cv_calls_multipart_endpoint() -> None:
+    async def scenario() -> None:
+        requests: list[httpx.Request] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            requests.append(request)
+            return httpx.Response(200, json={"target_roles": ["Engineer"]}, request=request)
+
+        client = JobHunterApiClient("http://api")
+        await client._client.aclose()
+        client._client = httpx.AsyncClient(base_url="http://api", transport=httpx.MockTransport(handler))
+        try:
+            result = await client.create_profile_draft_from_cv(
+                7,
+                filename="resume.pdf",
+                content_type="application/pdf",
+                content=b"%PDF-test",
+            )
+        finally:
+            await client.close()
+
+        assert result == {"target_roles": ["Engineer"]}
+        assert requests[0].method == "POST"
+        assert requests[0].url.path == "/users/7/profile/draft-from-cv"
+        assert "multipart/form-data" in requests[0].headers["content-type"]
+        assert b'resume.pdf' in requests[0].content
+        assert b"%PDF-test" in requests[0].content
+
+    asyncio.run(scenario())

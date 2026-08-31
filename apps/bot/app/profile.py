@@ -4,12 +4,13 @@ from decimal import Decimal, InvalidOperation
 from typing import Any, cast
 
 import httpx
-from aiogram.exceptions import TelegramAPIError
+from aiogram.exceptions import TelegramAPIError, TelegramBadRequest
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message, User
 
 from app.api_client import BotApiClient
+from app.telegram_cleanup import is_message_not_modified
 
 logger = logging.getLogger(__name__)
 
@@ -23,8 +24,11 @@ LANGUAGES_PROMPT = "Какие языки ты знаешь? Например: E
 INVALID_LIST_MESSAGE = "Укажи хотя бы одно значение через запятую или используй /cancel."
 INVALID_SALARY_MESSAGE = "Используй формат: 2500 USD / month, 60000 EUR / year или нажми «Пропустить»."
 INVALID_LANGUAGES_MESSAGE = "Используй формат: English B2, Russian native — или нажми «Пропустить»."
+CV_EDIT_INVALID_SALARY_MESSAGE = "Используй формат: 2500 USD / month, 60000 EUR / year или нажми «🗑 Очистить»."
+CV_EDIT_INVALID_LANGUAGES_MESSAGE = "Используй формат: English B2, Russian native — или нажми «🗑 Очистить»."
 PROFILE_SAVED_MESSAGE = "✅ Профиль сохранён"
 PROFILE_CANCELLED_MESSAGE = "Настройка профиля отменена."
+CV_DRAFT_CANCELLED_MESSAGE = "Черновик профиля отменён."
 PROFILE_API_ERROR_MESSAGE = "Не удалось сохранить профиль. Попробуй ещё раз или используй /cancel."
 PROFILE_INVALID_CURRENCY_MESSAGE = (
     "Не удалось сохранить профиль: валюта должна быть действующим ISO-4217 кодом, "
@@ -53,9 +57,23 @@ _OPTIONAL_PROMPTS = {
     "languages": LANGUAGES_PROMPT,
 }
 ACTIVE_PROFILE_PROMPT_MESSAGE_ID = "active_profile_prompt_message_id"
+PROFILE_DRAFT_SOURCE = "profile_draft_source"
+CV_EDITING_FIELD = "cv_editing_field"
+CV_EDITABLE_FIELDS = {
+    "target_roles",
+    "skills",
+    "experience",
+    "location",
+    "workplace_preference",
+    "salary",
+    "languages",
+}
+CV_CLEARABLE_FIELDS = {"skills", "location", "salary", "languages"}
 
 
 class ProfileSetupStates(StatesGroup):
+    cv_waiting_document = State()
+    cv_processing = State()
     target_roles = State()
     skills = State()
     experience = State()
@@ -64,6 +82,7 @@ class ProfileSetupStates(StatesGroup):
     salary = State()
     languages = State()
     summary = State()
+    cv_edit_field = State()
 
 
 def is_profile_state(state_name: str | None) -> bool:
@@ -165,7 +184,18 @@ async def handle_profile_callback(
     action = parts[1]
     current_state = await state.get_state()
 
+    if not await _is_active_profile_callback(message, state):
+        return
+
     if action == "cancel":
+        if (
+            current_state == ProfileSetupStates.summary.state
+            and (await state.get_data()).get(PROFILE_DRAFT_SOURCE) == "cv"
+        ):
+            await _delete_cv_draft_summary(message)
+            await state.clear()
+            await message.answer(CV_DRAFT_CANCELLED_MESSAGE)
+            return
         if is_profile_state(current_state):
             await _remove_inline_keyboard(message)
             await handle_profile_cancel(message, state)
@@ -173,6 +203,58 @@ async def handle_profile_callback(
     if action == "save":
         if await save_profile(message, callback.from_user, state, api_client):
             await _remove_inline_keyboard(message)
+        return
+    if action == "edit_manual":
+        if current_state != ProfileSetupStates.summary.state:
+            return
+        data = await state.get_data()
+        if data.get(PROFILE_DRAFT_SOURCE) != "cv":
+            return
+        await _remove_inline_keyboard(message)
+        await _show_cv_edit_field_picker(message, state)
+        return
+    if action == "edit" and len(parts) == 3:
+        field = parts[2]
+        if (
+            current_state != ProfileSetupStates.cv_edit_field.state
+            or field not in CV_EDITABLE_FIELDS
+            or (await state.get_data()).get(PROFILE_DRAFT_SOURCE) != "cv"
+        ):
+            return
+        await _remove_inline_keyboard(message)
+        await _prompt_cv_edit_field(message, state, field)
+        return
+    if action == "edit_clear" and len(parts) == 3:
+        field = parts[2]
+        if (
+            current_state != ProfileSetupStates.cv_edit_field.state
+            or field not in CV_CLEARABLE_FIELDS
+            or (await state.get_data()).get(CV_EDITING_FIELD) != field
+        ):
+            return
+        await _remove_inline_keyboard(message)
+        if field == "salary":
+            await state.update_data(salary_min=None, salary_currency=None, salary_period="unknown")
+        else:
+            await state.update_data({field: []})
+        await _return_cv_edit_to_summary(message, state)
+        return
+    if action == "edit_enum" and len(parts) == 4:
+        field, value = parts[2], parts[3]
+        labels = {
+            "experience": EXPERIENCE_LABELS,
+            "workplace_preference": WORKPLACE_LABELS,
+        }.get(field)
+        if (
+            current_state != ProfileSetupStates.cv_edit_field.state
+            or labels is None
+            or value not in labels
+            or (await state.get_data()).get(CV_EDITING_FIELD) != field
+        ):
+            return
+        await _mark_prompt_choice(message, _cv_edit_enum_prompt(field, await state.get_data()), labels[value])
+        await state.update_data({field: value})
+        await _return_cv_edit_to_summary(message, state)
         return
     if action == "skip" and len(parts) == 3:
         if await handle_skip(message, state, parts[2]):
@@ -230,7 +312,10 @@ async def handle_skip(message: Message, state: FSMContext, field: str) -> bool:
 async def show_summary(message: Message, state: FSMContext) -> None:
     await state.set_state(ProfileSetupStates.summary)
     data = profile_payload(await state.get_data())
-    prompt_message = await message.answer(format_profile_summary(data), reply_markup=summary_keyboard())
+    include_manual_edit = (await state.get_data()).get(PROFILE_DRAFT_SOURCE) == "cv"
+    prompt_message = await message.answer(
+        format_profile_summary(data), reply_markup=summary_keyboard(include_manual_edit=include_manual_edit)
+    )
     await state.update_data(active_profile_prompt_message_id=prompt_message.message_id)
 
 
@@ -250,7 +335,10 @@ async def save_profile(
             if isinstance(error, httpx.HTTPStatusError) and _is_invalid_salary_currency_error(error)
             else PROFILE_API_ERROR_MESSAGE
         )
-        retry_message = await message.answer(error_message, reply_markup=summary_keyboard())
+        include_manual_edit = (await state.get_data()).get(PROFILE_DRAFT_SOURCE) == "cv"
+        retry_message = await message.answer(
+            error_message, reply_markup=summary_keyboard(include_manual_edit=include_manual_edit)
+        )
         await _remove_inline_keyboard(message)
         await state.update_data(active_profile_prompt_message_id=retry_message.message_id)
         return False
@@ -264,11 +352,119 @@ async def handle_profile_cancel(message: Message, state: FSMContext) -> None:
     await message.answer(PROFILE_CANCELLED_MESSAGE)
 
 
+async def handle_cv_draft_field_input(message: Message, state: FSMContext) -> None:
+    if await state.get_state() != ProfileSetupStates.cv_edit_field.state:
+        return
+    data = await state.get_data()
+    field = data.get(CV_EDITING_FIELD)
+    if not isinstance(field, str):
+        return
+
+    if field in {"target_roles", "skills", "location"}:
+        values = parse_list(message.text or "")
+        if not values:
+            await message.answer(INVALID_LIST_MESSAGE)
+            return
+        if field == "location" and any(value.casefold() in WORKPLACE_LABELS for value in values):
+            await message.answer(
+                "Укажи географические локации, например Yerevan или Armenia. Формат работы выбирается отдельно."
+            )
+            return
+        await state.update_data({field: values})
+    elif field == "salary":
+        salary = parse_salary(message.text or "")
+        if salary is None:
+            await message.answer(CV_EDIT_INVALID_SALARY_MESSAGE)
+            return
+        await state.update_data(**salary)
+    elif field == "languages":
+        languages = parse_languages(message.text or "")
+        if languages is None:
+            await message.answer(CV_EDIT_INVALID_LANGUAGES_MESSAGE)
+            return
+        await state.update_data(languages=languages)
+    else:
+        return
+
+    await remove_active_profile_inline_keyboard(message, state)
+    await _return_cv_edit_to_summary(message, state)
+
+
+async def _show_cv_edit_field_picker(message: Message, state: FSMContext) -> None:
+    await state.set_state(ProfileSetupStates.cv_edit_field)
+    prompt_message = await message.answer(
+        "Какое поле изменить?", reply_markup=cv_edit_field_keyboard()
+    )
+    await state.update_data(active_profile_prompt_message_id=prompt_message.message_id)
+
+
+async def _prompt_cv_edit_field(message: Message, state: FSMContext, field: str) -> None:
+    data = await state.get_data()
+    prompts: dict[str, tuple[str, InlineKeyboardMarkup | None]] = {
+        "target_roles": (
+            f"Текущие роли:\n{_render_list(data.get('target_roles'))}\n\nОтправь обновлённый список.",
+            None,
+        ),
+        "skills": (
+            f"Текущие навыки:\n{_render_list(data.get('skills'))}\n\nОтправь обновлённый список.",
+            cv_edit_clear_keyboard("skills"),
+        ),
+        "location": (
+            f"Текущие локации:\n{_render_list(data.get('location'))}\n\nОтправь обновлённый список.",
+            cv_edit_clear_keyboard("location"),
+        ),
+        "salary": (
+            f"Текущая зарплата:\n{_render_salary(data)}\n\nОтправь новое значение в формате: 2500 USD / month.",
+            cv_edit_clear_keyboard("salary"),
+        ),
+        "languages": (
+            f"Текущие языки:\n{_render_languages(data.get('languages'))}\n\nОтправь обновлённый список.",
+            cv_edit_clear_keyboard("languages"),
+        ),
+    }
+    if field in {"experience", "workplace_preference"}:
+        prompt = _cv_edit_enum_prompt(field, data)
+        labels = EXPERIENCE_LABELS if field == "experience" else WORKPLACE_LABELS
+        keyboard = cv_edit_enum_keyboard(field, labels)
+    else:
+        prompt, keyboard = prompts[field]
+    await state.update_data({CV_EDITING_FIELD: field})
+    prompt_message = await message.answer(prompt, reply_markup=keyboard)
+    await state.update_data(active_profile_prompt_message_id=prompt_message.message_id)
+
+
+def _cv_edit_enum_prompt(field: str, data: dict[str, object]) -> str:
+    if field == "experience":
+        current = EXPERIENCE_LABELS.get(str(data.get("experience")), "Не указывать")
+        return f"Текущий опыт: {current}\n\nВыбери новое значение."
+    current = WORKPLACE_LABELS.get(str(data.get("workplace_preference")), "Любой")
+    return f"Текущий формат работы: {current}\n\nВыбери новое значение."
+
+
+async def _return_cv_edit_to_summary(message: Message, state: FSMContext) -> None:
+    data = await state.get_data()
+    data.pop(CV_EDITING_FIELD, None)
+    await state.set_data(data)
+    await show_summary(message, state)
+
+
 async def _remove_inline_keyboard(message: Message) -> None:
     try:
         await message.edit_reply_markup(reply_markup=None)
+    except TelegramBadRequest as error:
+        if is_message_not_modified(error):
+            return
+        logger.warning("Could not remove profile inline keyboard", exc_info=True)
     except TelegramAPIError:
         logger.warning("Could not remove profile inline keyboard", exc_info=True)
+
+
+async def _delete_cv_draft_summary(message: Message) -> None:
+    try:
+        await message.delete()
+    except TelegramAPIError:
+        logger.warning("Could not delete CV draft summary", exc_info=True)
+        await _remove_inline_keyboard(message)
 
 
 async def _mark_prompt_choice(message: Message, prompt: str, label: str) -> None:
@@ -302,8 +498,20 @@ async def remove_active_profile_inline_keyboard(message: Message, state: FSMCont
         await message.bot.edit_message_reply_markup(
             chat_id=message.chat.id, message_id=prompt_message_id, reply_markup=None
         )
+    except TelegramBadRequest as error:
+        if is_message_not_modified(error):
+            return
+        logger.warning("Could not remove active profile inline keyboard", exc_info=True)
     except TelegramAPIError:
         logger.warning("Could not remove active profile inline keyboard", exc_info=True)
+
+
+async def _is_active_profile_callback(message: Message, state: FSMContext) -> bool:
+    active_message_id = (await state.get_data()).get(ACTIVE_PROFILE_PROMPT_MESSAGE_ID)
+    if not isinstance(active_message_id, int):
+        return False
+    message_id = getattr(message, "message_id", None)
+    return isinstance(message_id, int) and message_id == active_message_id
 
 
 def _is_invalid_salary_currency_error(error: httpx.HTTPStatusError) -> bool:
@@ -380,19 +588,8 @@ def parse_languages(value: str) -> list[dict[str, str]] | None:
 
 
 def format_profile_summary(data: dict[str, object]) -> str:
-    language_data = data.get("languages", [])
-    languages = language_data if isinstance(language_data, list) else []
-    rendered_languages = ", ".join(
-        f"{item['language']} {item['level']}"
-        for item in languages
-        if isinstance(item, dict)
-        and isinstance(item.get("language"), str)
-        and isinstance(item.get("level"), str)
-    )
-    salary = "Не указана"
-    if data.get("salary_min") is not None:
-        period = PERIOD_LABELS.get(str(data.get("salary_period")), str(data.get("salary_period")))
-        salary = f"{data['salary_min']} {data['salary_currency']} / {period}"
+    rendered_languages = _render_languages(data.get("languages"))
+    salary = _render_salary(data)
     return "\n".join(
         (
             f"🎯 Роли: {_render_list(data.get('target_roles'))}",
@@ -413,6 +610,25 @@ def _render_list(value: object) -> str:
     return rendered or "Не указаны"
 
 
+def _render_languages(value: object) -> str:
+    languages = value if isinstance(value, list) else []
+    rendered = ", ".join(
+        f"{item['language']} {item['level']}"
+        for item in languages
+        if isinstance(item, dict)
+        and isinstance(item.get("language"), str)
+        and isinstance(item.get("level"), str)
+    )
+    return rendered or "Не указаны"
+
+
+def _render_salary(data: dict[str, object]) -> str:
+    if data.get("salary_min") is None:
+        return "Не указана"
+    period = PERIOD_LABELS.get(str(data.get("salary_period")), str(data.get("salary_period")))
+    return f"{data['salary_min']} {data['salary_currency']} / {period}"
+
+
 def enum_keyboard(field: str, labels: dict[str, str]) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
@@ -428,10 +644,50 @@ def skip_keyboard(field: str) -> InlineKeyboardMarkup:
     )
 
 
-def summary_keyboard() -> InlineKeyboardMarkup:
+def cv_edit_field_keyboard() -> InlineKeyboardMarkup:
+    labels = (
+        ("target_roles", "🎯 Роли"),
+        ("skills", "🧩 Навыки"),
+        ("experience", "📈 Опыт"),
+        ("location", "📍 Локации"),
+        ("workplace_preference", "🏠 Формат работы"),
+        ("salary", "💰 Зарплата"),
+        ("languages", "🌍 Языки"),
+    )
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text="Сохранить", callback_data="profile:save")],
-            [InlineKeyboardButton(text="Отменить", callback_data="profile:cancel")],
+            [InlineKeyboardButton(text=label, callback_data=f"profile:edit:{field}")]
+            for field, label in labels
         ]
     )
+
+
+def cv_edit_clear_keyboard(field: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="🗑 Очистить", callback_data=f"profile:edit_clear:{field}")]
+        ]
+    )
+
+
+def cv_edit_enum_keyboard(field: str, labels: dict[str, str]) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text=label, callback_data=f"profile:edit_enum:{field}:{value}"
+                )
+            ]
+            for value, label in labels.items()
+        ]
+    )
+
+
+def summary_keyboard(*, include_manual_edit: bool = False) -> InlineKeyboardMarkup:
+    rows = [[InlineKeyboardButton(text="✅ Сохранить", callback_data="profile:save")]]
+    if include_manual_edit:
+        rows.append(
+            [InlineKeyboardButton(text="✏️ Изменить вручную", callback_data="profile:edit_manual")]
+        )
+    rows.append([InlineKeyboardButton(text="❌ Отменить", callback_data="profile:cancel")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
