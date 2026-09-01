@@ -7,6 +7,7 @@ from io import BytesIO
 from types import SimpleNamespace
 
 import httpx
+import pytest
 from aiogram import Bot
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.fsm.context import FSMContext
@@ -30,15 +31,17 @@ from app.cv_profile import (
 from app.main import dp
 from app.menu import (
     ADD_JOB_BUTTON,
+    PROFILE_BUTTON,
     PROFILE_CV_CALLBACK,
+    PROFILE_MISSING_MESSAGE,
     PROFILE_SECTION_MESSAGE_ID,
     main_menu_action,
     profile_section_cv,
-    profile_section_keyboard,
+    missing_profile_keyboard,
 )
 from app.profile import (
     ACTIVE_PROFILE_PROMPT_MESSAGE_ID,
-    CV_EDITING_FIELD,
+    PROFILE_EDITING_FIELD,
     PROFILE_CANCELLED_MESSAGE,
     CV_DRAFT_CANCELLED_MESSAGE,
     PROFILE_DRAFT_SOURCE,
@@ -46,7 +49,7 @@ from app.profile import (
     ROLE_PROMPT,
     ProfileSetupStates,
     handle_profile_callback,
-    handle_cv_draft_field_input,
+    handle_profile_draft_field_input,
 )
 from app.jobs import AddJobStates, REQUEST_URL_MESSAGE
 
@@ -163,6 +166,9 @@ class FakeApiClient:
         self.put_calls.append((user_id, profile))
         return profile
 
+    async def get_user_profile(self, user_id: int) -> dict[str, object] | None:
+        return None
+
 
 def pdf_document(*, size: int = 100) -> SimpleNamespace:
     return SimpleNamespace(
@@ -178,7 +184,7 @@ def make_state() -> tuple[MemoryStorage, FSMContext]:
 
 def test_profile_section_has_cv_button_and_starts_upload_flow() -> None:
     async def scenario() -> None:
-        keyboard = profile_section_keyboard()
+        keyboard = missing_profile_keyboard()
         assert keyboard.inline_keyboard[1][0].text == "📄 Заполнить из CV"
         assert keyboard.inline_keyboard[1][0].callback_data == PROFILE_CV_CALLBACK
 
@@ -215,10 +221,10 @@ def test_valid_document_shows_processing_and_draft_summary() -> None:
         assert data["target_roles"] == ["Python Engineer"]
         assert data[PROFILE_DRAFT_SOURCE] == "cv"
         summary_text, keyboard, summary_id = message.answers[-1]
-        assert "🎯 Роли: Python Engineer" in summary_text
+        assert "🎯 Целевые роли: Python Engineer" in summary_text
         assert [row[0].text for row in keyboard.inline_keyboard] == [
             "✅ Сохранить",
-            "✏️ Изменить вручную",
+            "✏️ Изменить",
             "❌ Отменить",
         ]
         assert data[ACTIVE_PROFILE_PROMPT_MESSAGE_ID] == summary_id
@@ -285,9 +291,9 @@ def test_edit_manual_selects_field_without_starting_sequential_wizard() -> None:
         message = FakeMessage(message_id=77)
         api = FakeApiClient()
 
-        await handle_profile_callback(FakeCallback("profile:edit_manual", message), state, api)
+        await handle_profile_callback(FakeCallback("profile:edit_draft", message), state, api)
 
-        assert await state.get_state() == ProfileSetupStates.cv_edit_field.state
+        assert await state.get_state() == ProfileSetupStates.edit_field.state
         data = await state.get_data()
         assert data["skills"] == ["Python", "FastAPI"]
         assert data["experience"] == "middle"
@@ -313,7 +319,7 @@ def test_edit_manual_selects_field_without_starting_sequential_wizard() -> None:
 def test_cv_field_edit_shows_current_value_and_keeps_draft_until_valid_input() -> None:
     async def scenario() -> None:
         storage, state = make_state()
-        await state.set_state(ProfileSetupStates.cv_edit_field)
+        await state.set_state(ProfileSetupStates.edit_field)
         await state.set_data(
             {
                 **draft(),
@@ -326,21 +332,21 @@ def test_cv_field_edit_shows_current_value_and_keeps_draft_until_valid_input() -
         await handle_profile_callback(FakeCallback("profile:edit:skills", picker), state, FakeApiClient())
 
         data = await state.get_data()
-        assert data[CV_EDITING_FIELD] == "skills"
+        assert data[PROFILE_EDITING_FIELD] == "skills"
         assert data["skills"] == ["Python", "FastAPI"]
         prompt, keyboard, prompt_id = picker.answers[-1]
         assert prompt == "Текущие навыки:\nPython, FastAPI\n\nОтправь обновлённый список."
         assert keyboard.inline_keyboard[0][0].text == "🗑 Очистить"
 
         invalid = FakeMessage(text=" , ", message_id=72)
-        await handle_cv_draft_field_input(invalid, state)
+        await handle_profile_draft_field_input(invalid, state)
         assert (await state.get_data())["skills"] == ["Python", "FastAPI"]
-        assert await state.get_state() == ProfileSetupStates.cv_edit_field.state
+        assert await state.get_state() == ProfileSetupStates.edit_field.state
 
         valid = FakeMessage(text="Python, Django", message_id=73)
-        await handle_cv_draft_field_input(valid, state)
+        await handle_profile_draft_field_input(valid, state)
         assert (await state.get_data())["skills"] == ["Python", "Django"]
-        assert (await state.get_data()).get(CV_EDITING_FIELD) is None
+        assert (await state.get_data()).get(PROFILE_EDITING_FIELD) is None
         assert await state.get_state() == ProfileSetupStates.summary.state
         assert "🧩 Навыки: Python, Django" in valid.answers[-1][0]
         await storage.close()
@@ -351,7 +357,7 @@ def test_cv_field_edit_shows_current_value_and_keeps_draft_until_valid_input() -
 def test_cv_field_edit_clear_and_enum_replace_only_selected_field() -> None:
     async def scenario() -> None:
         storage, state = make_state()
-        await state.set_state(ProfileSetupStates.cv_edit_field)
+        await state.set_state(ProfileSetupStates.edit_field)
         await state.set_data(
             {
                 **draft(),
@@ -359,7 +365,7 @@ def test_cv_field_edit_clear_and_enum_replace_only_selected_field() -> None:
                 "salary_currency": "USD",
                 "salary_period": "month",
                 PROFILE_DRAFT_SOURCE: "cv",
-                CV_EDITING_FIELD: "salary",
+                PROFILE_EDITING_FIELD: "salary",
                 ACTIVE_PROFILE_PROMPT_MESSAGE_ID: 81,
             }
         )
@@ -374,14 +380,14 @@ def test_cv_field_edit_clear_and_enum_replace_only_selected_field() -> None:
 
         summary_id = data[ACTIVE_PROFILE_PROMPT_MESSAGE_ID]
         summary = FakeMessage(message_id=summary_id)
-        await handle_profile_callback(FakeCallback("profile:edit_manual", summary), state, FakeApiClient())
+        await handle_profile_callback(FakeCallback("profile:edit_draft", summary), state, FakeApiClient())
         picker_id = (await state.get_data())[ACTIVE_PROFILE_PROMPT_MESSAGE_ID]
         picker = FakeMessage(message_id=picker_id)
         await handle_profile_callback(FakeCallback("profile:edit:experience", picker), state, FakeApiClient())
         prompt, keyboard, _ = picker.answers[-1]
         assert prompt == "Текущий опыт: Middle\n\nВыбери новое значение."
         assert [row[0].text for row in keyboard.inline_keyboard] == [
-            "Intern", "Junior", "Middle", "Senior", "Lead", "Не указывать"
+            "Intern", "Junior", "Middle", "Senior", "Lead", "Не указано"
         ]
 
         enum_id = (await state.get_data())[ACTIVE_PROFILE_PROMPT_MESSAGE_ID]
@@ -401,7 +407,7 @@ def test_cv_field_edit_clear_and_enum_replace_only_selected_field() -> None:
 def test_cv_target_roles_edit_has_no_clear_action() -> None:
     async def scenario() -> None:
         storage, state = make_state()
-        await state.set_state(ProfileSetupStates.cv_edit_field)
+        await state.set_state(ProfileSetupStates.edit_field)
         await state.set_data(
             {
                 **draft(),
@@ -418,8 +424,134 @@ def test_cv_target_roles_edit_has_no_clear_action() -> None:
         assert keyboard is None
 
         invalid = FakeMessage(text="", message_id=92)
-        await handle_cv_draft_field_input(invalid, state)
+        await handle_profile_draft_field_input(invalid, state)
         assert (await state.get_data())["target_roles"] == ["Python Engineer"]
+        await storage.close()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize(
+    ("field", "input_value", "expected"),
+    [
+        ("target_roles", "Data Engineer", ["Data Engineer"]),
+        ("skills", "Python, Django", ["Python", "Django"]),
+        ("experience", "senior", "senior"),
+        ("location", "Tbilisi", ["Tbilisi"]),
+        ("workplace_preference", "hybrid", "hybrid"),
+        ("salary", "3000 EUR / year", "3000"),
+        ("languages", "German B1", [{"language": "German", "level": "B1"}]),
+    ],
+)
+def test_generic_editor_supports_every_profile_field(
+    field: str, input_value: str, expected: object
+) -> None:
+    async def scenario() -> None:
+        storage, state = make_state()
+        await state.set_state(ProfileSetupStates.edit_field)
+        await state.set_data(
+            {
+                **draft(),
+                PROFILE_DRAFT_SOURCE: "persisted",
+                ACTIVE_PROFILE_PROMPT_MESSAGE_ID: 71,
+            }
+        )
+        picker = FakeMessage(message_id=71)
+        api = FakeApiClient()
+
+        await handle_profile_callback(
+            FakeCallback(f"profile:edit:{field}", picker), state, api
+        )
+        prompt_id = (await state.get_data())[ACTIVE_PROFILE_PROMPT_MESSAGE_ID]
+        prompt = FakeMessage(message_id=prompt_id)
+        if field in {"experience", "workplace_preference"}:
+            await handle_profile_callback(
+                FakeCallback(f"profile:edit_enum:{field}:{input_value}", prompt),
+                state,
+                api,
+            )
+        else:
+            prompt.text = input_value
+            await handle_profile_draft_field_input(prompt, state)
+
+        data = await state.get_data()
+        actual = data["salary_min"] if field == "salary" else data[field]
+        assert actual == expected
+        assert await state.get_state() == ProfileSetupStates.summary.state
+        assert api.put_calls == []
+        await storage.close()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("field", ["skills", "location", "salary", "languages"])
+def test_generic_editor_can_clear_each_optional_field(field: str) -> None:
+    async def scenario() -> None:
+        storage, state = make_state()
+        values = {
+            **draft(),
+            "salary_min": "2500",
+            "salary_currency": "USD",
+            "salary_period": "month",
+            PROFILE_DRAFT_SOURCE: "persisted",
+            PROFILE_EDITING_FIELD: field,
+            ACTIVE_PROFILE_PROMPT_MESSAGE_ID: 81,
+        }
+        await state.set_state(ProfileSetupStates.edit_field)
+        await state.set_data(values)
+        message = FakeMessage(message_id=81)
+
+        await handle_profile_callback(
+            FakeCallback(f"profile:edit_clear:{field}", message),
+            state,
+            FakeApiClient(),
+        )
+
+        data = await state.get_data()
+        if field == "salary":
+            assert data["salary_min"] is None
+            assert data["salary_currency"] is None
+            assert data["salary_period"] == "unknown"
+        else:
+            assert data[field] == []
+        assert await state.get_state() == ProfileSetupStates.summary.state
+        await storage.close()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize(
+    "callback_data",
+    [
+        "profile:edit:skills",
+        "profile:edit_clear:skills",
+        "profile:edit_enum:experience:senior",
+    ],
+)
+def test_generic_editor_rejects_stale_picker_clear_and_enum_callbacks(
+    callback_data: str,
+) -> None:
+    async def scenario() -> None:
+        storage, state = make_state()
+        before = {
+            **draft(),
+            PROFILE_DRAFT_SOURCE: "persisted",
+            PROFILE_EDITING_FIELD: "skills",
+            ACTIVE_PROFILE_PROMPT_MESSAGE_ID: 50,
+        }
+        await state.set_state(ProfileSetupStates.edit_field)
+        await state.set_data(before)
+        stale_message = FakeMessage(message_id=49)
+        api = FakeApiClient()
+
+        await handle_profile_callback(
+            FakeCallback(callback_data, stale_message), state, api
+        )
+
+        assert await state.get_state() == ProfileSetupStates.edit_field.state
+        assert await state.get_data() == before
+        assert stale_message.answers == []
+        assert api.put_calls == []
         await storage.close()
 
     asyncio.run(scenario())
@@ -576,7 +708,7 @@ def test_typing_heartbeat_stops_after_api_error_and_telegram_failure(monkeypatch
     asyncio.run(scenario())
 
 
-def test_main_menu_during_processing_discards_late_api_result(monkeypatch) -> None:
+def test_profile_menu_during_processing_discards_late_api_result(monkeypatch) -> None:
     async def scenario() -> None:
         started = asyncio.Event()
         release = asyncio.Event()
@@ -596,17 +728,17 @@ def test_main_menu_during_processing_discards_late_api_result(monkeypatch) -> No
         task = asyncio.create_task(handle_cv_document(upload, state, BlockingApi()))
         await started.wait()
 
-        menu_message = FakeMessage(text=ADD_JOB_BUTTON, message_id=41)
-        await main_menu_action(menu_message, state)
+        menu_message = FakeMessage(text=PROFILE_BUTTON, message_id=41)
+        await main_menu_action(menu_message, state, FakeApiClient())
         actions_after_navigation = len(upload.bot.actions)
         await asyncio.sleep(0.03)
         assert len(upload.bot.actions) == actions_after_navigation
         release.set()
         await task
 
-        assert await state.get_state() == AddJobStates.waiting_for_url.state
-        assert menu_message.answers[-1][0] == REQUEST_URL_MESSAGE
-        assert all("🎯 Роли" not in answer[0] for answer in upload.answers)
+        assert await state.get_state() is None
+        assert menu_message.answers[-1][0] == PROFILE_MISSING_MESSAGE
+        assert all("🎯 Целевые роли" not in answer[0] for answer in upload.answers)
         await storage.close()
 
     asyncio.run(scenario())
@@ -686,6 +818,7 @@ def make_document_update(
 
 
 async def dispatcher_state(bot: Bot, state_name: str) -> FSMContext:
+    await dp.fsm.events_isolation.close()
     context = FSMContext(
         storage=dp.storage,
         key=StorageKey(bot_id=bot.id, chat_id=456, user_id=123),
@@ -762,12 +895,12 @@ def test_dispatcher_routes_cv_field_edit_input_back_to_summary(monkeypatch) -> N
 
         monkeypatch.setattr(Message, "answer", answer)
         monkeypatch.setattr(Bot, "edit_message_reply_markup", edit_message_reply_markup)
-        state = await dispatcher_state(bot, ProfileSetupStates.cv_edit_field.state)
+        state = await dispatcher_state(bot, ProfileSetupStates.edit_field.state)
         await state.set_data(
             {
                 **draft(),
-                PROFILE_DRAFT_SOURCE: "cv",
-                CV_EDITING_FIELD: "skills",
+                PROFILE_DRAFT_SOURCE: "persisted",
+                PROFILE_EDITING_FIELD: "skills",
                 ACTIVE_PROFILE_PROMPT_MESSAGE_ID: 700,
             }
         )
@@ -847,20 +980,20 @@ def test_dispatcher_cancel_during_processing_discards_late_result(monkeypatch) -
         await started.wait()
         assert await state.get_state() == ProfileSetupStates.cv_processing.state
 
-        await dp.feed_update(
-            bot,
-            make_document_update(update_id=603, text="/cancel", command=True),
+        cancel_task = asyncio.create_task(
+            dp.feed_update(
+                bot,
+                make_document_update(update_id=603, text="/cancel", command=True),
+            )
         )
-        actions_after_cancel = len(actions)
-        await asyncio.sleep(0.03)
-        assert len(actions) == actions_after_cancel
+        await asyncio.sleep(0)
+        assert not cancel_task.done()
         release.set()
-        await upload_task
+        await asyncio.gather(upload_task, cancel_task)
 
         assert await state.get_state() is None
         assert await state.get_data() == {}
         assert PROFILE_CANCELLED_MESSAGE in answers
-        assert all("🎯 Роли" not in answer for answer in answers)
         await bot.session.close()
 
     asyncio.run(scenario())

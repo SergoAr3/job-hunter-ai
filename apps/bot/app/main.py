@@ -4,7 +4,7 @@ import os
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import Command, CommandStart, StateFilter
 from aiogram.fsm.context import FSMContext
-from aiogram.fsm.storage.memory import MemoryStorage
+from aiogram.fsm.storage.memory import MemoryStorage, SimpleEventIsolation
 from aiogram.types import CallbackQuery, Message
 
 from app.api_client import JobHunterApiClient
@@ -14,7 +14,7 @@ from app.menu import register_main_menu_handlers
 from app.profile import (
     ProfileSetupStates,
     handle_languages,
-    handle_cv_draft_field_input,
+    handle_profile_draft_field_input,
     handle_location,
     handle_profile_callback,
     handle_profile_cancel,
@@ -30,7 +30,7 @@ from app.start import handle_start
 TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
 API_BASE_URL = os.getenv("API_BASE_URL", "http://localhost:8000")
 
-dp = Dispatcher(storage=MemoryStorage())
+dp = Dispatcher(storage=MemoryStorage(), events_isolation=SimpleEventIsolation())
 api_client = JobHunterApiClient(API_BASE_URL)
 
 
@@ -58,7 +58,7 @@ async def cancel(message: Message, state: FSMContext) -> None:
         await handle_cancel(message, state)
 
 
-register_main_menu_handlers(dp)
+register_main_menu_handlers(dp, lambda: api_client)
 
 
 @dp.message(AddJobStates.waiting_for_url, F.text)
@@ -91,9 +91,9 @@ async def receive_languages(message: Message, state: FSMContext) -> None:
     await handle_languages(message, state)
 
 
-@dp.message(ProfileSetupStates.cv_edit_field, F.text)
-async def receive_cv_draft_field_input(message: Message, state: FSMContext) -> None:
-    await handle_cv_draft_field_input(message, state)
+@dp.message(ProfileSetupStates.edit_field, F.text)
+async def receive_profile_draft_field_input(message: Message, state: FSMContext) -> None:
+    await handle_profile_draft_field_input(message, state)
 
 
 @dp.message(ProfileSetupStates.cv_waiting_document, F.document)
