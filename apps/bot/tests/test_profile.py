@@ -12,15 +12,20 @@ from app.profile import (
     ACTIVE_PROFILE_PROMPT_MESSAGE_ID,
     INVALID_LANGUAGES_MESSAGE,
     INVALID_SALARY_MESSAGE,
+    PERSISTED_PROFILE_SNAPSHOT,
     PROFILE_API_ERROR_MESSAGE,
     PROFILE_CANCELLED_MESSAGE,
+    PROFILE_DRAFT_SOURCE,
+    PROFILE_EDITING_FIELD,
     PROFILE_INVALID_CURRENCY_MESSAGE,
+    PROFILE_SECTION_MESSAGE_ID,
     PROFILE_SAVED_MESSAGE,
     ProfileSetupStates,
     handle_languages,
     handle_location,
     handle_profile_callback,
     handle_profile_cancel,
+    handle_profile_draft_field_input,
     handle_profile_setup,
     handle_salary,
     handle_skills,
@@ -28,7 +33,7 @@ from app.profile import (
     parse_languages,
     parse_salary,
 )
-from app.menu import ADD_JOB_BUTTON, main_menu_action
+from app.menu import ADD_JOB_BUTTON, main_menu_action, profile_section_edit
 from app.jobs import AddJobStates, REQUEST_URL_MESSAGE
 
 
@@ -41,9 +46,12 @@ class FakeMessage:
         )
         self.answers: list[tuple[str, object | None]] = []
         self.inline_keyboards_removed = 0
+        self.inline_keyboard_removed_message_ids: list[int] = []
+        self.deleted_message_ids: list[int] = []
         self.edited_texts: list[str] = []
         self.next_message_id = 1
         self.fail_edit = False
+        self.fail_delete = False
         self.chat = SimpleNamespace(id=456)
         self.bot = FakeBot()
 
@@ -59,6 +67,12 @@ class FakeMessage:
             raise TelegramBadRequest(method=EditMessageReplyMarkup(), message="edit failed")
         assert reply_markup is None
         self.inline_keyboards_removed += 1
+        self.inline_keyboard_removed_message_ids.append(self.message_id)
+
+    async def delete(self) -> None:
+        if self.fail_delete:
+            raise TelegramBadRequest(method=EditMessageReplyMarkup(), message="delete failed")
+        self.deleted_message_ids.append(self.message_id)
 
     async def edit_text(self, text: str, reply_markup: object | None = None) -> None:
         if self.fail_edit:
@@ -69,8 +83,12 @@ class FakeMessage:
 
 class FakeBot:
     def __init__(self) -> None:
+        self.deleted_messages: list[tuple[int, int]] = []
         self.removed_keyboards: list[tuple[int, int]] = []
+        self.edited_messages: list[tuple[int, int, str, object | None]] = []
         self.fail_edit = False
+        self.fail_delete = False
+        self.fail_text_edit = False
         self.edit_error_message = "edit failed"
 
     async def edit_message_reply_markup(
@@ -82,6 +100,27 @@ class FakeBot:
             )
         assert reply_markup is None
         self.removed_keyboards.append((chat_id, message_id))
+
+    async def delete_message(self, *, chat_id: int, message_id: int) -> None:
+        self.deleted_messages.append((chat_id, message_id))
+        if self.fail_delete:
+            raise TelegramBadRequest(
+                method=EditMessageReplyMarkup(), message=self.edit_error_message
+            )
+
+    async def edit_message_text(
+        self,
+        *,
+        chat_id: int,
+        message_id: int,
+        text: str,
+        reply_markup: object | None = None,
+    ) -> None:
+        if self.fail_text_edit:
+            raise TelegramBadRequest(
+                method=EditMessageReplyMarkup(), message=self.edit_error_message
+            )
+        self.edited_messages.append((chat_id, message_id, text, reply_markup))
 
 
 class FakeCallback:
@@ -98,12 +137,16 @@ class FakeCallback:
 
 class FakeApiClient:
     def __init__(
-        self, error: httpx.HTTPError | None = None, profile_error: httpx.HTTPError | None = None
+        self,
+        error: httpx.HTTPError | None = None,
+        profile_error: httpx.HTTPError | None = None,
+        returned_profile: dict[str, object] | None = None,
     ) -> None:
         self.error = error
         self.profile_error = profile_error
         self.profile_calls: list[tuple[int, dict[str, object]]] = []
         self.telegram_users: list[object] = []
+        self.returned_profile = returned_profile
 
     async def create_or_get_user(self, telegram_user: object) -> int:
         self.telegram_users.append(telegram_user)
@@ -115,7 +158,7 @@ class FakeApiClient:
         self.profile_calls.append((user_id, profile))
         if self.profile_error is not None:
             raise self.profile_error
-        return profile
+        return self.returned_profile or profile
 
 
 def make_state() -> tuple[MemoryStorage, FSMContext]:
@@ -145,9 +188,9 @@ def test_complete_profile_flow_saves_only_after_confirmation_and_clears_state() 
         assert await state.get_state() == ProfileSetupStates.summary.state
         assert api_client.profile_calls == []
         summary = message.answers[-1][0]
-        assert "🎯 Роли: Python Backend Developer, ML Engineer" in summary
-        assert "📍 Локации: Yerevan, Tbilisi" in summary
-        assert "💰 Минимум: 2500 USD / месяц" in summary
+        assert "🎯 Целевые роли: Python Backend Developer, ML Engineer" in summary
+        assert "📍 Локация: Yerevan, Tbilisi" in summary
+        assert "💰 Зарплата: 2500 USD / месяц" in summary
 
         await handle_profile_callback(FakeCallback("profile:save", message), state, api_client)
         assert await state.get_state() is None
@@ -156,7 +199,7 @@ def test_complete_profile_flow_saves_only_after_confirmation_and_clears_state() 
         assert message.edited_texts == [
             "Какие у тебя основные навыки? Например: Python, FastAPI, PostgreSQL\n⏭ Пропущено",
             "Какой у тебя уровень опыта?\n✅ Middle",
-            "Какой формат работы предпочитаешь?\n✅ Remote",
+            "Какой формат работы предпочитаешь?\n✅ Удалённо",
         ]
         assert api_client.profile_calls[0][0] == 7
         assert api_client.profile_calls[0][1]["target_roles"] == ["Python Backend Developer", "ML Engineer"]
@@ -409,6 +452,208 @@ def test_cancel_callback_removes_inline_keyboard() -> None:
     asyncio.run(scenario())
 
 
+def test_persisted_save_sends_new_authoritative_card_and_deactivates_old_context() -> None:
+    async def scenario() -> None:
+        storage, state = make_state()
+        original = {
+            "target_roles": ["Engineer"],
+            "skills": ["Python"],
+            "experience": "middle",
+            "location": ["Yerevan"],
+            "workplace_preference": "remote",
+            "salary_min": "2500",
+            "salary_currency": "USD",
+            "salary_period": "month",
+            "languages": [{"language": "English", "level": "B2"}],
+        }
+        draft = {**original, "skills": ["Python", "FastAPI"]}
+        authoritative = {**draft, "skills": ["Python", "FastAPI", "SQL"]}
+        await state.set_state(ProfileSetupStates.summary)
+        await state.set_data(
+            {
+                **draft,
+                PROFILE_DRAFT_SOURCE: "persisted",
+                PERSISTED_PROFILE_SNAPSHOT: original,
+                PROFILE_SECTION_MESSAGE_ID: 10,
+                ACTIVE_PROFILE_PROMPT_MESSAGE_ID: 11,
+                "unrelated_fsm_metadata": "must not leak",
+            }
+        )
+        message = FakeMessage()
+        message.message_id = 11
+        message.next_message_id = 12
+        api = FakeApiClient(returned_profile=authoritative)
+        callback = FakeCallback("profile:save", message)
+
+        await handle_profile_callback(callback, state, api)
+
+        assert api.profile_calls == [(7, draft)]
+        assert await state.get_state() is None
+        state_data = await state.get_data()
+        assert state_data[PERSISTED_PROFILE_SNAPSHOT] == authoritative
+        assert state_data[PROFILE_SECTION_MESSAGE_ID] == 12
+        assert message.deleted_message_ids == [11]
+        assert message.inline_keyboard_removed_message_ids == []
+        assert message.bot.deleted_messages == [(456, 10)]
+        assert message.bot.removed_keyboards == []
+        assert len(message.answers) == 1
+        text, keyboard = message.answers[0]
+        assert "🧩 Навыки: Python, FastAPI, SQL" in text
+        assert keyboard.inline_keyboard[0][0].callback_data == "profile_section:edit"
+
+        old_card = FakeMessage()
+        old_card.message_id = 10
+        old_card.bot = message.bot
+        await profile_section_edit(FakeCallback("profile_section:edit", old_card), state)
+
+        assert await state.get_state() is None
+        assert old_card.answers == []
+
+        section_message = FakeMessage()
+        section_message.message_id = 12
+        section_message.bot = message.bot
+        await profile_section_edit(FakeCallback("profile_section:edit", section_message), state)
+
+        assert await state.get_state() == ProfileSetupStates.edit_field.state
+        assert section_message.answers[-1][0] == "Какое поле изменить?"
+        assert message.bot.removed_keyboards == [(456, 12)]
+        await storage.close()
+
+    asyncio.run(scenario())
+
+
+def test_persisted_save_continues_when_old_card_cleanup_fails() -> None:
+    async def scenario() -> None:
+        storage, state = make_state()
+        profile = {
+            "target_roles": ["Engineer"],
+            "skills": ["Python"],
+            "experience": "middle",
+            "location": ["Yerevan"],
+            "workplace_preference": "remote",
+            "salary_min": "2500",
+            "salary_currency": "USD",
+            "salary_period": "month",
+            "languages": [],
+        }
+        await state.set_state(ProfileSetupStates.summary)
+        await state.set_data(
+            {
+                **profile,
+                PROFILE_DRAFT_SOURCE: "persisted",
+                PERSISTED_PROFILE_SNAPSHOT: profile,
+                PROFILE_SECTION_MESSAGE_ID: 10,
+                ACTIVE_PROFILE_PROMPT_MESSAGE_ID: 11,
+            }
+        )
+        message = FakeMessage()
+        message.message_id = 11
+        message.next_message_id = 12
+        message.bot.fail_delete = True
+
+        await handle_profile_callback(
+            FakeCallback("profile:save", message), state, FakeApiClient(returned_profile=profile)
+        )
+
+        assert message.deleted_message_ids == [11]
+        assert message.inline_keyboard_removed_message_ids == []
+        assert message.bot.deleted_messages == [(456, 10)]
+        assert message.bot.removed_keyboards == [(456, 10)]
+        assert len(message.answers) == 1
+        assert message.answers[0][1].inline_keyboard[0][0].callback_data == "profile_section:edit"
+        assert (await state.get_data())[PROFILE_SECTION_MESSAGE_ID] == 12
+        await storage.close()
+
+    asyncio.run(scenario())
+
+
+def test_persisted_cancel_discards_draft_and_restores_original_card_without_put() -> None:
+    async def scenario() -> None:
+        storage, state = make_state()
+        original = {
+            "target_roles": ["Engineer"],
+            "skills": ["Python"],
+            "experience": "middle",
+            "location": [],
+            "workplace_preference": "any",
+            "salary_min": None,
+            "salary_currency": None,
+            "salary_period": "unknown",
+            "languages": [],
+        }
+        await state.set_state(ProfileSetupStates.summary)
+        await state.set_data(
+            {
+                **original,
+                "skills": ["Changed draft"],
+                PROFILE_DRAFT_SOURCE: "persisted",
+                PERSISTED_PROFILE_SNAPSHOT: original,
+                PROFILE_SECTION_MESSAGE_ID: 10,
+                ACTIVE_PROFILE_PROMPT_MESSAGE_ID: 11,
+            }
+        )
+        message = FakeMessage()
+        message.message_id = 11
+        message.next_message_id = 12
+        api = FakeApiClient()
+
+        await handle_profile_callback(FakeCallback("profile:cancel", message), state, api)
+
+        assert api.profile_calls == []
+        assert await state.get_state() is None
+        assert "🧩 Навыки: Python" in message.answers[-1][0]
+        assert "Changed draft" not in message.answers[-1][0]
+        assert (await state.get_data())[PERSISTED_PROFILE_SNAPSHOT] == original
+        assert (await state.get_data())[PROFILE_SECTION_MESSAGE_ID] == 12
+        assert message.deleted_message_ids == [11]
+        assert message.inline_keyboard_removed_message_ids == []
+        assert message.bot.deleted_messages == [(456, 10)]
+        await storage.close()
+
+    asyncio.run(scenario())
+
+
+def test_persisted_put_failure_keeps_draft_and_retry_actions() -> None:
+    async def scenario() -> None:
+        storage, state = make_state()
+        draft = {
+            "target_roles": ["Engineer"],
+            "skills": ["Draft skill"],
+            "experience": "unknown",
+            "location": [],
+            "workplace_preference": "any",
+            "salary_min": None,
+            "salary_currency": None,
+            "salary_period": "unknown",
+            "languages": [],
+        }
+        await state.set_state(ProfileSetupStates.summary)
+        await state.set_data(
+            {
+                **draft,
+                PROFILE_DRAFT_SOURCE: "persisted",
+                PERSISTED_PROFILE_SNAPSHOT: {**draft, "skills": ["Original skill"]},
+                ACTIVE_PROFILE_PROMPT_MESSAGE_ID: 1,
+            }
+        )
+        message = FakeMessage()
+        api = FakeApiClient(profile_error=httpx.ReadTimeout("timed out"))
+
+        await handle_profile_callback(FakeCallback("profile:save", message), state, api)
+
+        assert await state.get_state() == ProfileSetupStates.summary.state
+        assert (await state.get_data())["skills"] == ["Draft skill"]
+        assert api.profile_calls == [(7, draft)]
+        assert [row[0].text for row in message.answers[-1][1].inline_keyboard] == [
+            "✅ Сохранить",
+            "✏️ Изменить",
+            "❌ Отменить",
+        ]
+        await storage.close()
+
+    asyncio.run(scenario())
+
+
 def test_invalid_optional_input_keeps_skip_keyboard() -> None:
     async def scenario() -> None:
         storage, state = make_state()
@@ -541,6 +786,88 @@ def test_remote_is_not_accepted_as_location() -> None:
         assert await state.get_state() == ProfileSetupStates.location.state
         assert "географические" in message.answers[-1][0]
         await storage.close()
+    asyncio.run(scenario())
+
+
+def test_localized_workplace_labels_are_not_accepted_as_locations() -> None:
+    async def scenario() -> None:
+        invalid_values = (
+            "any",
+            "remote",
+            "hybrid",
+            "onsite",
+            "Удалённо",
+            "удаленно",
+            "  УДАЛЕННО  ",
+            "Гибрид",
+            "На месте работодателя",
+            "На   месте работодателя",
+            "Любой",
+        )
+        for value in invalid_values:
+            storage, state = make_state()
+            message = FakeMessage(value)
+            await state.set_state(ProfileSetupStates.location)
+            await state.set_data({"location": ["Yerevan"]})
+
+            await handle_location(message, state)
+
+            assert await state.get_state() == ProfileSetupStates.location.state
+            assert (await state.get_data())["location"] == ["Yerevan"]
+            assert "географические" in message.answers[-1][0]
+            await storage.close()
+
+            for source in ("persisted", "cv"):
+                storage, state = make_state()
+                message = FakeMessage(value)
+                await state.set_state(ProfileSetupStates.edit_field)
+                await state.set_data(
+                    {
+                        "target_roles": ["Engineer"],
+                        "location": ["Yerevan"],
+                        PROFILE_DRAFT_SOURCE: source,
+                        PROFILE_EDITING_FIELD: "location",
+                    }
+                )
+
+                await handle_profile_draft_field_input(message, state)
+
+                assert await state.get_state() == ProfileSetupStates.edit_field.state
+                assert (await state.get_data())["location"] == ["Yerevan"]
+                assert "географические" in message.answers[-1][0]
+                await storage.close()
+
+        for value in ("Россия", "Москва", "Удаленный район"):
+            storage, state = make_state()
+            message = FakeMessage(value)
+            await state.set_state(ProfileSetupStates.location)
+            await state.set_data({"location": ["Yerevan"]})
+
+            await handle_location(message, state)
+
+            assert await state.get_state() == ProfileSetupStates.workplace_preference.state
+            assert (await state.get_data())["location"] == [value]
+            await storage.close()
+
+            for source in ("persisted", "cv"):
+                storage, state = make_state()
+                message = FakeMessage(value)
+                await state.set_state(ProfileSetupStates.edit_field)
+                await state.set_data(
+                    {
+                        "target_roles": ["Engineer"],
+                        "location": ["Yerevan"],
+                        PROFILE_DRAFT_SOURCE: source,
+                        PROFILE_EDITING_FIELD: "location",
+                    }
+                )
+
+                await handle_profile_draft_field_input(message, state)
+
+                assert await state.get_state() == ProfileSetupStates.summary.state
+                assert (await state.get_data())["location"] == [value]
+                await storage.close()
+
     asyncio.run(scenario())
 
 

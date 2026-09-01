@@ -428,6 +428,7 @@ def test_match_details_render_component_statuses(status: str, expected: str) -> 
 
 def test_dispatcher_routes_match_callback(monkeypatch: pytest.MonkeyPatch) -> None:
     async def scenario() -> None:
+        await main_module.dp.fsm.events_isolation.close()
         bot = Bot("123456:match-test-token")
         called: list[str] = []
 
@@ -459,6 +460,7 @@ def test_dispatcher_routes_match_callback(monkeypatch: pytest.MonkeyPatch) -> No
 
 def test_dispatcher_routes_add_job_command(monkeypatch: pytest.MonkeyPatch) -> None:
     async def scenario() -> None:
+        await main_module.dp.fsm.events_isolation.close()
         bot = Bot("123456:match-test-token")
         called: list[str] = []
 
