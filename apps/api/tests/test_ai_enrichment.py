@@ -2,14 +2,18 @@ from dataclasses import asdict
 from decimal import Decimal
 import json
 import logging
+import os
 from pathlib import Path
 import re
+import subprocess
+import sys
 from types import SimpleNamespace
 from typing import cast
 
 import httpx
 import pytest
 from openai import APIError, APIResponseValidationError, APITimeoutError
+from openai.lib._parsing._responses import type_to_text_format_param
 from pydantic import ValidationError
 
 from app.models import Job
@@ -19,8 +23,10 @@ from app.services.job_ai_enrichment import (
     MAX_OUTPUT_TOKENS,
     REASONING_EFFORT,
     AIEnrichmentResult,
+    AIEnrichmentTransportResult,
     JobAIEnrichmentService,
     VacancyAIInput,
+    convert_transport_enrichment_result,
 )
 from app.services.job_normalizer import ExtractedJobData, normalize_job
 from app.services.job_posting_extractor import JobPostingExtractor
@@ -49,13 +55,34 @@ def result(**changes) -> AIEnrichmentResult:
     return AIEnrichmentResult.model_validate(values)
 
 
+def transport_result(**changes) -> AIEnrichmentTransportResult:
+    values = {
+        "required_skills": ["Python"],
+        "nice_to_have_skills": ["Docker"],
+        "experience_requirements": ["3+ years of experience"],
+        "language_requirements": ["English B2"],
+        "responsibilities": ["Build APIs"],
+        "seniority": "senior",
+        "salary_min": None,
+        "salary_max": None,
+        "salary_currency": None,
+        "salary_period": "unknown",
+        "salary_period_evidence": "unknown",
+        "location": "Yerevan",
+        "workplace_type": "remote",
+        "employment_type": "full_time",
+    }
+    values.update(changes)
+    return AIEnrichmentTransportResult.model_validate(values)
+
+
 def test_service_uses_structured_response_and_normalizes_duplicates() -> None:
-    parsed = result(required_skills=[" Python ", "python", "SQL"], responsibilities=[" Build APIs\n", "Build APIs"])
+    parsed = transport_result(required_skills=[" Python ", "python", "SQL"], responsibilities=[" Build APIs\n", "Build APIs"])
 
     class Responses:
         def parse(self, **kwargs):
             assert kwargs["model"] == "test-model"
-            assert kwargs["text_format"] is AIEnrichmentResult
+            assert kwargs["text_format"] is AIEnrichmentTransportResult
             assert "<vacancy_data>" in kwargs["input"][1]["content"]
             assert kwargs["reasoning"] == {"effort": REASONING_EFFORT}
             assert kwargs["max_output_tokens"] == MAX_OUTPUT_TOKENS
@@ -70,6 +97,120 @@ def test_service_uses_structured_response_and_normalizes_duplicates() -> None:
     assert output is not None
     assert output.required_skills == ["Python", "SQL"]
     assert output.responsibilities == ["Build APIs"]
+
+
+def test_transport_salary_schema_contains_only_string_or_null() -> None:
+    schema = type_to_text_format_param(AIEnrichmentTransportResult)["schema"]
+
+    for field in ("salary_min", "salary_max"):
+        branches = schema["properties"][field]["anyOf"]
+        assert {branch.get("type") for branch in branches} == {"string", "null"}
+        assert all("pattern" not in branch for branch in branches)
+        assert all(branch.get("type") != "number" for branch in branches)
+
+
+@pytest.mark.parametrize(
+    ("salary_min", "salary_max", "expected_min", "expected_max"),
+    [
+        ("150000", "150000.00", Decimal("150000"), Decimal("150000.00")),
+        (None, None, None, None),
+    ],
+)
+def test_transport_salary_strings_convert_to_exact_domain_decimals(
+    salary_min: str | None,
+    salary_max: str | None,
+    expected_min: Decimal | None,
+    expected_max: Decimal | None,
+) -> None:
+    converted = convert_transport_enrichment_result(
+        transport_result(salary_min=salary_min, salary_max=salary_max)
+    )
+
+    assert converted.salary_min == expected_min
+    assert converted.salary_max == expected_max
+
+
+@pytest.mark.parametrize("salary_min", ["-1", "one hundred", "150000.001", "123456789012345"])
+def test_invalid_transport_salary_is_graceful_invalid_output(salary_min: str) -> None:
+    class Responses:
+        def parse(self, **kwargs):
+            return SimpleNamespace(output_parsed=transport_result(salary_min=salary_min))
+
+    service = JobAIEnrichmentService(model="test-model", client=SimpleNamespace(responses=Responses()))
+    output, error = service.enrich(
+        VacancyAIInput.model_validate({"description": "Need Python", "workplace_type": "unknown", "employment_type": "unknown"})
+    )
+
+    assert output is None
+    assert error == "invalid_output"
+
+
+def test_service_converts_transport_salary_before_returning_domain_result() -> None:
+    class Responses:
+        def parse(self, **kwargs):
+            return SimpleNamespace(
+                output_parsed=transport_result(
+                    salary_min="150000.00",
+                    salary_max="200000",
+                    salary_currency="usd",
+                    salary_period="month",
+                    salary_period_evidence="explicit",
+                )
+            )
+
+    service = JobAIEnrichmentService(model="test-model", client=SimpleNamespace(responses=Responses()))
+    output, error = service.enrich(
+        VacancyAIInput.model_validate({"description": "Need Python", "workplace_type": "unknown", "employment_type": "unknown"})
+    )
+
+    assert error is None
+    assert output is not None
+    assert output.salary_min == Decimal("150000.00")
+    assert output.salary_max == Decimal("200000")
+    assert output.salary_currency == "USD"
+    assert output.salary_period.value == "month"
+
+
+def test_vacancy_ai_output_budget_defaults_to_1536_tokens() -> None:
+    result = _load_vacancy_output_budget()
+
+    assert result.returncode == 0
+    assert result.stdout.strip() == "1536"
+
+
+def test_vacancy_ai_output_budget_reads_explicit_environment_override() -> None:
+    result = _load_vacancy_output_budget({"VACANCY_AI_MAX_OUTPUT_TOKENS": "4096"})
+
+    assert result.returncode == 0
+    assert result.stdout.strip() == "4096"
+
+
+def test_vacancy_ai_output_budget_rejects_non_positive_configuration() -> None:
+    result = _load_vacancy_output_budget({"VACANCY_AI_MAX_OUTPUT_TOKENS": "0"})
+
+    assert result.returncode != 0
+    assert "VACANCY_AI_MAX_OUTPUT_TOKENS must be positive" in result.stderr
+
+
+def _load_vacancy_output_budget(
+    overrides: dict[str, str] | None = None,
+) -> subprocess.CompletedProcess[str]:
+    environment = os.environ.copy()
+    environment.pop("VACANCY_AI_MAX_OUTPUT_TOKENS", None)
+    environment["PYTHONPATH"] = "."
+    environment.update(overrides or {})
+    return subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "from app.config import VACANCY_AI_MAX_OUTPUT_TOKENS; print(VACANCY_AI_MAX_OUTPUT_TOKENS)",
+        ],
+        cwd=Path(__file__).parents[1],
+        env=environment,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
 
 
 def test_service_disables_sdk_automatic_retries(monkeypatch) -> None:
@@ -137,13 +278,46 @@ def test_ai_parse_error_taxonomy_and_safe_telemetry(caplog: pytest.LogCaptureFix
             assert "status_code=" not in message
 
 
-@pytest.mark.parametrize("parsed", [None, SimpleNamespace(required_skills=["Python"])])
+@pytest.mark.parametrize(
+    ("response", "expected_reason"),
+    [
+        (SimpleNamespace(output_parsed=None, status="completed", output=[], _request_id="req_success"), "parsed_missing"),
+        (SimpleNamespace(output_parsed=SimpleNamespace(required_skills=["Python"]), status="completed", output=[], _request_id="req_success"), "parsed_wrong_type"),
+        (
+            SimpleNamespace(
+                output_parsed=None,
+                status="incomplete",
+                incomplete_details=SimpleNamespace(reason="max_output_tokens"),
+                output=[],
+                usage=SimpleNamespace(
+                    input_tokens=123,
+                    output_tokens=1536,
+                    output_tokens_details=SimpleNamespace(
+                        reasoning_tokens=1400, model_fields_set={"reasoning_tokens"}
+                    ),
+                    input_tokens_details=SimpleNamespace(
+                        cached_tokens=50, model_fields_set={"cached_tokens"}
+                    ),
+                    model_fields_set={
+                        "input_tokens",
+                        "output_tokens",
+                        "input_tokens_details",
+                        "output_tokens_details",
+                    },
+                ),
+                _request_id="req_success",
+            ),
+            "incomplete",
+        ),
+        (SimpleNamespace(output_parsed=None, status="completed", output=[SimpleNamespace(type="message", content=[SimpleNamespace(type="refusal", refusal="private refusal text")])], _request_id="req_success"), "refusal"),
+    ],
+)
 def test_ai_invalid_parsed_output_is_classified_and_logged_safely(
-    parsed: object, caplog: pytest.LogCaptureFixture
+    response: object, expected_reason: str, caplog: pytest.LogCaptureFixture
 ) -> None:
     class Responses:
         def parse(self, **kwargs):
-            return SimpleNamespace(output_parsed=parsed, _request_id="req_success")
+            return response
 
     service = JobAIEnrichmentService(model="safe-test-model", client=SimpleNamespace(responses=Responses()))
     caplog.set_level(logging.INFO, logger=job_ai_enrichment.__name__)
@@ -157,13 +331,31 @@ def test_ai_invalid_parsed_output_is_classified_and_logged_safely(
     assert "result=error" in message
     assert "error_code=invalid_output" in message
     assert "request_id=req_success" in message
+    assert f"response_reason={expected_reason}" in message
+    assert "response_status=" in message
+    assert "has_output_parsed=" in message
+    assert "has_refusal=" in message
+    assert "output_item_types=" in message
     assert "private vacancy text" not in message
+    assert "private refusal text" not in message
+    if expected_reason == "incomplete":
+        assert f"max_output_tokens={MAX_OUTPUT_TOKENS}" in message
+        assert "input_tokens=123" in message
+        assert "output_tokens=1536" in message
+        assert "reasoning_tokens=1400" in message
+        assert "cached_input_tokens=50" in message
+        assert "input_tokens_field_present=True" in message
+        assert "output_tokens_field_present=True" in message
+        assert "input_details_present=True" in message
+        assert "output_details_present=True" in message
+        assert "reasoning_tokens_field_present=True" in message
+        assert "cached_tokens_field_present=True" in message
 
 
 def test_ai_success_telemetry_has_duration_and_available_request_id(caplog: pytest.LogCaptureFixture) -> None:
     class Responses:
         def parse(self, **kwargs):
-            return SimpleNamespace(output_parsed=result(), _request_id="req_success")
+            return SimpleNamespace(output_parsed=transport_result(), _request_id="req_success")
 
     service = JobAIEnrichmentService(model="safe-test-model", client=SimpleNamespace(responses=Responses()))
     caplog.set_level(logging.INFO, logger=job_ai_enrichment.__name__)
@@ -188,7 +380,7 @@ def test_ai_parse_duration_excludes_post_processing(monkeypatch: pytest.MonkeyPa
     class Responses:
         def parse(self, **kwargs):
             clock[0] = 1.0
-            return SimpleNamespace(output_parsed=result())
+            return SimpleNamespace(output_parsed=transport_result())
 
     def delayed_validation(parsed: AIEnrichmentResult) -> AIEnrichmentResult:
         clock[0] = 6.0
@@ -211,7 +403,7 @@ def test_ai_parse_duration_excludes_post_processing(monkeypatch: pytest.MonkeyPa
 def test_ai_post_processing_validation_failure_is_invalid_output(caplog: pytest.LogCaptureFixture) -> None:
     class Responses:
         def parse(self, **kwargs):
-            return SimpleNamespace(output_parsed=result(salary_min=Decimal("2000"), salary_max=Decimal("1000")))
+            return SimpleNamespace(output_parsed=transport_result(salary_min="2000", salary_max="1000"))
 
     service = JobAIEnrichmentService(model="safe-test-model", client=SimpleNamespace(responses=Responses()))
     caplog.set_level(logging.INFO, logger=job_ai_enrichment.__name__)
