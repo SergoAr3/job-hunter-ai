@@ -17,6 +17,10 @@ _PROFILE_RESPONSE_FIELDS = {
 _EXPERIENCE_VALUES = {"intern", "junior", "middle", "senior", "lead", "unknown"}
 _WORKPLACE_VALUES = {"remote", "hybrid", "onsite", "any"}
 _SALARY_PERIOD_VALUES = {"month", "year", "unknown"}
+_APPLICATION_LIST_ITEM_FIELDS = {
+    "app_id", "job_id", "created_at", "title", "company", "location",
+    "workplace_type", "parsing_status", "ai_enrichment_status",
+}
 
 
 class BotApiClient(Protocol):
@@ -25,6 +29,10 @@ class BotApiClient(Protocol):
     async def save_application(self, user_id: int, source_url: str) -> dict[str, object]: ...
 
     async def get_application_match(self, user_id: int, application_id: int) -> dict[str, object]: ...
+
+    async def list_applications(self, user_id: int, *, limit: int, offset: int) -> dict[str, object]: ...
+
+    async def get_application(self, user_id: int, application_id: int) -> dict[str, object]: ...
 
     async def get_user_profile(self, user_id: int) -> dict[str, object] | None: ...
 
@@ -68,6 +76,38 @@ class JobHunterApiClient:
         response = await self._client.get(f"/users/{user_id}/applications/{application_id}/match")
         response.raise_for_status()
         return _json_object(response)
+
+    async def list_applications(self, user_id: int, *, limit: int, offset: int) -> dict[str, object]:
+        response = await self._client.get(
+            f"/users/{user_id}/applications", params={"limit": limit, "offset": offset}
+        )
+        response.raise_for_status()
+        payload = _json_object(response)
+        if not isinstance(payload.get("items"), list) or not isinstance(payload.get("has_next"), bool):
+            raise httpx.DecodingError("API response has invalid applications page shape", request=response.request)
+        if not all(
+            isinstance(item, dict)
+            and _APPLICATION_LIST_ITEM_FIELDS.issubset(item)
+            and isinstance(item.get("app_id"), int)
+            and isinstance(item.get("job_id"), int)
+            for item in payload["items"]
+        ):
+            raise httpx.DecodingError("API response has invalid application list item", request=response.request)
+        return payload
+
+    async def get_application(self, user_id: int, application_id: int) -> dict[str, object]:
+        response = await self._client.get(f"/users/{user_id}/applications/{application_id}")
+        response.raise_for_status()
+        payload = _json_object(response)
+        application, job = payload.get("application"), payload.get("job")
+        if (
+            not isinstance(application, dict)
+            or not isinstance(job, dict)
+            or not isinstance(application.get("id"), int)
+            or not isinstance(job.get("id"), int)
+        ):
+            raise httpx.DecodingError("API response has invalid application detail shape", request=response.request)
+        return payload
 
     async def get_user_profile(self, user_id: int) -> dict[str, object] | None:
         response = await self._client.get(f"/users/{user_id}/profile")

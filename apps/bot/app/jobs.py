@@ -151,7 +151,8 @@ def _is_basic_http_url(value: str) -> bool:
 
 def format_job_card(job: dict[str, object]) -> str:
     salary = job.get("salary_text") or _format_structured_salary(job)
-    fields = [("Вакансия", job.get("title")), ("Компания", job.get("company")), ("Локация", job.get("location")), ("Формат", job.get("workplace_type")), ("Тип занятости", job.get("employment_type")), ("Зарплата", salary)]
+    workplace = {"any": "Любой", "remote": "Удалённо", "hybrid": "Гибрид", "onsite": "На месте работодателя"}.get(job.get("workplace_type"), job.get("workplace_type"))
+    fields = [("Вакансия", job.get("title")), ("Компания", job.get("company")), ("Локация", job.get("location")), ("Формат", workplace), ("Тип занятости", job.get("employment_type")), ("Зарплата", salary)]
     lines = [f"{label}: {value}" for label, value in fields if value and value != "unknown"]
     if job.get("ai_enrichment_status") == "success":
         for label, key, limit in (("Навыки", "required_skills", 8), ("Будет плюсом", "nice_to_have_skills", 6), ("Опыт", "experience_requirements", 4), ("Языки", "language_requirements", 4), ("Задачи", "responsibilities", 4)):
@@ -412,10 +413,11 @@ def _error_code(error: httpx.HTTPStatusError) -> str | None:
 async def remove_active_match_inline_keyboard(message: Message, state: FSMContext) -> None:
     data = await state.get_data()
     message_id = data.get(ACTIVE_MATCH_MESSAGE_ID) or data.get(ACTIVE_MATCH_DETAILS_CLAIM_ID)
+    await state.update_data(
+        {ACTIVE_MATCH_MESSAGE_ID: None, ACTIVE_MATCH_DETAILS_CLAIM_ID: None}
+    )
     if not isinstance(message_id, int) or message.bot is None:
         return
-    if data.get(ACTIVE_MATCH_DETAILS_CLAIM_ID) == message_id:
-        await state.update_data({ACTIVE_MATCH_DETAILS_CLAIM_ID: None})
     try:
         await message.bot.edit_message_reply_markup(chat_id=message.chat.id, message_id=message_id, reply_markup=None)
     except TelegramBadRequest as error:

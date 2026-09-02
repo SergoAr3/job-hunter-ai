@@ -169,6 +169,23 @@ def test_get_user_profile_does_not_mask_invalid_json_as_missing() -> None:
     asyncio.run(scenario())
 
 
+def test_applications_client_uses_read_only_endpoints_and_validates_shape() -> None:
+    async def scenario() -> None:
+        def handler(request: httpx.Request) -> httpx.Response:
+            if request.url.path.endswith("/applications"):
+                return httpx.Response(200, json={"items": [{"app_id": 1, "job_id": 2, "created_at": "2026-01-01T00:00:00Z", "title": "Engineer", "company": None, "location": None, "workplace_type": "remote", "parsing_status": "success", "ai_enrichment_status": "success"}], "has_next": False}, request=request)
+            return httpx.Response(200, json={"application": {"id": 1}, "job": {"id": 2}}, request=request)
+        client = JobHunterApiClient("http://api")
+        await client._client.aclose()
+        client._client = httpx.AsyncClient(base_url="http://api", transport=httpx.MockTransport(handler))
+        try:
+            assert (await client.list_applications(7, limit=5, offset=0))["items"]
+            assert (await client.get_application(7, 1))["job"] == {"id": 2}
+        finally:
+            await client.close()
+    asyncio.run(scenario())
+
+
 def test_create_profile_draft_from_cv_calls_multipart_endpoint() -> None:
     async def scenario() -> None:
         requests: list[httpx.Request] = []

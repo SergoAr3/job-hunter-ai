@@ -1,4 +1,4 @@
-from fastapi import Depends, FastAPI, File, HTTPException, UploadFile, status
+from fastapi import Depends, FastAPI, File, HTTPException, Query, UploadFile, status
 from starlette.concurrency import run_in_threadpool
 from sqlalchemy.orm import Session
 
@@ -6,7 +6,10 @@ from app.database import get_session
 from app.models import Job
 from app.schemas import (
     ApplicationCreateIn,
+    ApplicationDetailOut,
+    ApplicationListItemOut,
     ApplicationOut,
+    ApplicationsPageOut,
     JobOut,
     MatchResultOut,
     SavedApplicationOut,
@@ -19,6 +22,7 @@ from app.services.applications import (
     UnsafeUrlError,
     UserNotFoundError,
     get_application_for_user,
+    list_applications_for_user,
     save_application_for_user,
 )
 from app.services.job_matching import calculate_match
@@ -147,6 +151,48 @@ def save_application(
         application=ApplicationOut.model_validate(application),
         job_created=job_created,
         application_created=application_created,
+    )
+
+
+@app.get("/users/{user_id}/applications", response_model=ApplicationsPageOut)
+def read_applications(
+    user_id: int,
+    limit: int = Query(default=5, ge=1, le=5),
+    offset: int = Query(default=0, ge=0),
+    session: Session = Depends(get_session),
+) -> ApplicationsPageOut:
+    rows = list_applications_for_user(session, user_id, limit=limit, offset=offset)
+    return ApplicationsPageOut(
+        items=[
+            ApplicationListItemOut(
+                app_id=application.id,
+                job_id=job.id,
+                created_at=application.created_at,
+                title=job.title,
+                company=job.company,
+                location=job.location,
+                workplace_type=job.workplace_type,
+                parsing_status=job.parsing_status,
+                ai_enrichment_status=job.ai_enrichment_status,
+            )
+            for application, job in rows[:limit]
+        ],
+        has_next=len(rows) > limit,
+    )
+
+
+@app.get("/users/{user_id}/applications/{application_id}", response_model=ApplicationDetailOut)
+def read_application(
+    user_id: int, application_id: int, session: Session = Depends(get_session)
+) -> ApplicationDetailOut:
+    application = get_application_for_user(session, user_id, application_id)
+    if application is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail={"code": "APPLICATION_NOT_FOUND"})
+    job = session.get(Job, application.job_id)
+    if job is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail={"code": "APPLICATION_NOT_FOUND"})
+    return ApplicationDetailOut(
+        application=ApplicationOut.model_validate(application), job=JobOut.model_validate(job)
     )
 
 
