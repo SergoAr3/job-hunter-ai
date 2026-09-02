@@ -284,3 +284,19 @@ def get_application_for_user(session: Session, user_id: int, application_id: int
     return session.scalar(
         select(Application).where(Application.id == application_id, Application.user_id == user_id)
     )
+
+
+def list_applications_for_user(
+    session: Session, user_id: int, *, limit: int, offset: int
+) -> list[tuple[Application, Job]]:
+    """Fetch one extra row so callers can expose pagination without a count query."""
+    return list(
+        session.execute(
+            select(Application, Job)
+            .join(Job, Job.id == Application.job_id)
+            .where(Application.user_id == user_id)
+            .order_by(Application.created_at.desc(), Application.id.desc())
+            .offset(offset)
+            .limit(limit + 1)
+        ).tuples().all()
+    )

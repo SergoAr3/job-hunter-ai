@@ -19,6 +19,7 @@ from aiogram.types import (
 from app.api_client import BotApiClient
 from app.cv_profile import handle_cv_profile_setup
 from app.jobs import handle_add_job, remove_active_match_inline_keyboard
+from app.applications import APPLICATIONS_BUTTON, handle_applications_menu, remove_active_applications_inline_keyboard
 from app.profile import (
     PERSISTED_PROFILE_SNAPSHOT,
     PROFILE_SECTION_EDIT_CALLBACK,
@@ -34,7 +35,7 @@ logger = logging.getLogger(__name__)
 
 ADD_JOB_BUTTON = "💼 Добавить вакансию"
 PROFILE_BUTTON = "👤 Мой профиль"
-MENU_ACTIONS = {ADD_JOB_BUTTON, PROFILE_BUTTON}
+MENU_ACTIONS = {ADD_JOB_BUTTON, APPLICATIONS_BUTTON, PROFILE_BUTTON}
 PROFILE_SETUP_CALLBACK = "profile_section:setup"
 PROFILE_CV_CALLBACK = "profile_section:cv"
 PROFILE_MISSING_MESSAGE = "Профиль пока не заполнен"
@@ -45,6 +46,7 @@ def main_menu_keyboard() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
         keyboard=[
             [KeyboardButton(text=ADD_JOB_BUTTON)],
+            [KeyboardButton(text=APPLICATIONS_BUTTON)],
             [KeyboardButton(text=PROFILE_BUTTON)],
         ],
         resize_keyboard=True,
@@ -77,9 +79,15 @@ async def main_menu_action(
     await remove_active_profile_section_keyboard(message, state)
     await remove_active_profile_inline_keyboard(message, state)
     await remove_active_match_inline_keyboard(message, state)
+    await remove_active_applications_inline_keyboard(message, state)
     await state.clear()
     if message.text == ADD_JOB_BUTTON:
         await handle_add_job(message, state)
+    elif message.text == APPLICATIONS_BUTTON:
+        if api_client is None:
+            await message.answer("Не удалось загрузить вакансии. Попробуй ещё раз.")
+            return
+        await handle_applications_menu(message, state, api_client)
     elif message.text == PROFILE_BUTTON:
         if api_client is None or message.from_user is None:
             await message.answer(PROFILE_LOAD_ERROR_MESSAGE)

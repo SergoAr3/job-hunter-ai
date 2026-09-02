@@ -182,6 +182,30 @@ class SavedApplicationOut(BaseModel):
     application_created: bool
 
 
+class ApplicationListItemOut(BaseModel):
+    """Small application representation intended for the Telegram list."""
+
+    app_id: int
+    job_id: int
+    created_at: datetime
+    title: str | None
+    company: str | None
+    location: str | None
+    workplace_type: str
+    parsing_status: str
+    ai_enrichment_status: str
+
+
+class ApplicationsPageOut(BaseModel):
+    items: list[ApplicationListItemOut]
+    has_next: bool
+
+
+class ApplicationDetailOut(BaseModel):
+    application: ApplicationOut
+    job: JobOut
+
+
 class MatchComponentOut(BaseModel):
     weight: int
     score: int | None

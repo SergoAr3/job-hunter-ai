@@ -6,6 +6,7 @@ import httpx
 from aiogram.types import ReplyKeyboardMarkup
 
 from app.menu import ADD_JOB_BUTTON, PROFILE_BUTTON
+from app.applications import APPLICATIONS_BUTTON
 from app.start import API_UNAVAILABLE_MESSAGE, handle_start
 
 
@@ -67,5 +68,6 @@ def test_start_shows_persistent_main_menu_after_registration() -> None:
     assert reply_markup.is_persistent is True
     assert [[button.text for button in row] for row in reply_markup.keyboard] == [
         [ADD_JOB_BUTTON],
+        [APPLICATIONS_BUTTON],
         [PROFILE_BUTTON],
     ]
