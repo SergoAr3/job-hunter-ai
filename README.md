@@ -26,6 +26,32 @@ Job Hunter AI — Telegram-ассистент для сохранения и с�
 
 ## Локальный запуск
 
+### Одной командой
+
+После создания `.env` и обоих project virtual environments запустите:
+
+```sh
+make dev
+```
+
+Для BOT auto-reload установите его development dependencies один раз:
+
+```sh
+cd apps/bot
+.venv/bin/python -m pip install -r requirements-dev.txt
+```
+
+Команда поднимает PostgreSQL (`docker compose up -d db`), применяет Alembic
+migrations и запускает API с `--reload`, затем Telegram BOT с
+`API_BASE_URL=http://127.0.0.1:8000`. API и BOT работают параллельно, а их
+объединённые stdout/stderr logs получают префиксы `[API]` и `[BOT]`. `Ctrl+C`
+останавливает оба процесса, но оставляет PostgreSQL запущенным.
+
+API reloads after Python-code changes through Uvicorn. BOT reloads after Python
+changes under `apps/bot/app` through the development dependency `watchfiles`;
+the dev runner stops the old polling process before starting its replacement.
+Migrations run once before either runtime process starts.
+
 1. Скопируйте `.env.example` в `.env` и задайте конфигурацию:
 
    ```sh

@@ -3,7 +3,7 @@ from decimal import Decimal
 import pytest
 
 from app.models import Application, Job, UserProfile
-from app.services.job_matching import ALGORITHM_VERSION, calculate_match
+from app.services.job_matching import ALGORITHM_VERSION, WEIGHTS, calculate_match
 
 
 def profile(**changes: object) -> UserProfile:
@@ -71,10 +71,85 @@ def test_missing_required_skill_is_a_gap() -> None:
     assert any(reason.code == "required_skills_missing" for reason in result.gaps)
 
 
-@pytest.mark.parametrize(("user_skill", "job_skill"), [("Postgres", "PostgreSQL"), ("JS", "JavaScript")])
+@pytest.mark.parametrize(
+    ("user_skill", "job_skill"),
+    [
+        ("Postgres", "PostgreSQL"),
+        ("PostgreSQL", "postgres"),
+        ("JS", "JavaScript"),
+        ("REST", "REST API"),
+        ("REST API", "REST"),
+        ("git", "Git"),
+        ("html", "HTML"),
+    ],
+)
 def test_exact_skill_aliases_match(user_skill: str, job_skill: str) -> None:
     result = match(profile=profile(skills=[user_skill]), job=job(required_skills=[job_skill]))
     assert result.components["required_skills"].status == "matched"
+
+
+@pytest.mark.parametrize(
+    ("user_role", "job_title"),
+    [
+        ("Backend Developer", "Backend-разработчик"),
+        ("Python Developer", "Python-разработчик"),
+        ("Python Developer", "Python-разработчик (Backend, Middle+)"),
+        ("Python-разработчик (Backend, Middle+)", "Python Developer"),
+        ("Python Developer", "Python-разработчик (Backend)"),
+        ("Software Engineer", "разработчик ПО"),
+        ("Backend Engineer", "Backend Developer"),
+    ],
+)
+def test_exact_role_phrase_aliases_match(user_role: str, job_title: str) -> None:
+    result = match(profile=profile(target_roles=[user_role]), job=job(title=job_title))
+
+    assert result.components["role"].score == 100
+    assert result.components["role"].status == "matched"
+
+
+@pytest.mark.parametrize(
+    ("user_role", "job_title"),
+    [
+        ("Backend-разработчик", "Frontend Developer"),
+        ("Python-разработчик", "Java Developer"),
+        ("Python Developer", "Python-разработчик (Java)"),
+        ("Python Developer", "Python-разработчик (Frontend)"),
+        ("Python Developer", "Python-разработчик (Backend, Java)"),
+        ("Python Developer", "Python-разработчик Java"),
+        ("Java Developer", "Python-разработчик (Backend, Middle+)"),
+        ("разработчик ПО", "Product Manager"),
+    ],
+)
+def test_role_phrase_aliases_do_not_match_unrelated_titles(user_role: str, job_title: str) -> None:
+    result = match(profile=profile(target_roles=[user_role]), job=job(title=job_title))
+
+    assert result.components["role"].score == 0
+    assert result.components["role"].status == "mismatch"
+
+
+def test_rest_alias_does_not_match_restful() -> None:
+    result = match(profile=profile(skills=["REST"]), job=job(required_skills=["RESTful"]))
+
+    assert result.components["required_skills"].score == 0
+    assert result.components["required_skills"].status == "mismatch"
+
+
+def test_aliases_change_only_equivalent_component_scores() -> None:
+    canonical = match(
+        profile=profile(target_roles=["Backend Developer"], skills=["REST API"]),
+        job=job(title="Backend Developer", required_skills=["REST API"]),
+    )
+    aliased = match(
+        profile=profile(target_roles=["Backend-разработчик"], skills=["REST"]),
+        job=job(title="Backend Developer", required_skills=["REST API"]),
+    )
+
+    assert aliased.components["role"].score == canonical.components["role"].score == 100
+    assert aliased.components["required_skills"].score == canonical.components["required_skills"].score == 100
+    assert aliased.components["role"].weight == WEIGHTS["role"] == 20
+    assert aliased.components["required_skills"].weight == WEIGHTS["required_skills"] == 30
+    assert aliased.coverage == canonical.coverage
+    assert aliased.verdict == canonical.verdict
 
 
 def test_short_skills_do_not_match_by_substring() -> None:
