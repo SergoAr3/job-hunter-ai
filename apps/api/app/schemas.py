@@ -2,9 +2,16 @@ from datetime import datetime
 from decimal import Decimal
 from urllib.parse import urlsplit
 
-from pydantic import AnyHttpUrl, BaseModel, ConfigDict, Field, TypeAdapter, ValidationError, field_validator, model_validator
+from pydantic import AnyHttpUrl, BaseModel, ConfigDict, Field, TypeAdapter, ValidationError, ValidationInfo, field_validator, model_validator
 
 from app.models import ApplicationStatus, ExperienceLevel, ProfileSalaryPeriod, WorkplacePreference
+from app.services.profile_normalization import (
+    is_workplace_like_location,
+    normalize_profile_language_level,
+    normalize_profile_language_name,
+    normalize_profile_skills,
+    profile_language_name_key,
+)
 from app.services.salary_validation import is_iso_4217_currency
 
 http_url_adapter = TypeAdapter(AnyHttpUrl)
@@ -36,11 +43,53 @@ class LanguageIn(BaseModel):
 
     @field_validator("language", "level")
     @classmethod
-    def strip_value(cls, value: str) -> str:
-        value = value.strip()
-        if not value:
-            raise ValueError("value must not be blank")
-        return value
+    def normalize_value(cls, value: str, info: ValidationInfo) -> str:
+        if info.field_name == "language":
+            return normalize_profile_language_name(value)
+        return normalize_profile_language_level(value)
+
+
+class LanguageOut(BaseModel):
+    """Preserve the established response shape for profiles saved before strict validation."""
+
+    language: str
+    level: str
+
+
+def validate_unique_profile_languages(values: list[LanguageIn]) -> list[LanguageIn]:
+    seen: set[str] = set()
+    for item in values:
+        key = profile_language_name_key(item.language)
+        if key in seen:
+            raise ValueError("languages must not contain duplicate language names")
+        seen.add(key)
+    return values
+
+
+class ProfileLanguagesNormalizeIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    languages: list[LanguageIn] = Field(default_factory=list, max_length=MAX_PROFILE_ITEMS)
+
+    @field_validator("languages")
+    @classmethod
+    def validate_unique_languages(cls, values: list[LanguageIn]) -> list[LanguageIn]:
+        return validate_unique_profile_languages(values)
+
+
+class ProfileSkillsNormalizeIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    skills: list[str] = Field(default_factory=list, max_length=MAX_PROFILE_ITEMS)
+
+    @field_validator("skills")
+    @classmethod
+    def normalize_skills(cls, values: list[str]) -> list[str]:
+        normalized = normalize_profile_skills(values)
+        for item in normalized:
+            if len(item) > MAX_PROFILE_ITEM_LENGTH:
+                raise ValueError(f"list items must not exceed {MAX_PROFILE_ITEM_LENGTH} characters")
+        return normalized
 
 
 class UserProfilePutIn(BaseModel):
@@ -56,7 +105,7 @@ class UserProfilePutIn(BaseModel):
     salary_period: ProfileSalaryPeriod = ProfileSalaryPeriod.UNKNOWN
     languages: list[LanguageIn] = Field(default_factory=list, max_length=MAX_PROFILE_ITEMS)
 
-    @field_validator("target_roles", "skills", "location")
+    @field_validator("target_roles", "location")
     @classmethod
     def normalize_string_list(cls, values: list[str]) -> list[str]:
         normalized: list[str] = []
@@ -69,13 +118,26 @@ class UserProfilePutIn(BaseModel):
             normalized.append(item)
         return normalized
 
+    @field_validator("skills")
+    @classmethod
+    def normalize_skills(cls, values: list[str]) -> list[str]:
+        normalized = normalize_profile_skills(values)
+        for item in normalized:
+            if len(item) > MAX_PROFILE_ITEM_LENGTH:
+                raise ValueError(f"list items must not exceed {MAX_PROFILE_ITEM_LENGTH} characters")
+        return normalized
+
     @field_validator("location")
     @classmethod
     def reject_workplace_values_as_locations(cls, values: list[str]) -> list[str]:
-        workplace_values = {item.value for item in WorkplacePreference}
-        if any(value.casefold() in workplace_values for value in values):
+        if any(is_workplace_like_location(value) for value in values):
             raise ValueError("location must contain geographic locations, not workplace preferences")
         return values
+
+    @field_validator("languages")
+    @classmethod
+    def validate_unique_languages(cls, values: list[LanguageIn]) -> list[LanguageIn]:
+        return validate_unique_profile_languages(values)
 
     @field_validator("salary_currency")
     @classmethod
@@ -109,7 +171,7 @@ class UserProfileOut(BaseModel):
     salary_min: Decimal | None
     salary_currency: str | None
     salary_period: ProfileSalaryPeriod
-    languages: list[LanguageIn]
+    languages: list[LanguageOut]
     created_at: datetime
     updated_at: datetime
 

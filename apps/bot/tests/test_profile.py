@@ -10,6 +10,7 @@ from aiogram.methods import EditMessageReplyMarkup
 
 from app.profile import (
     ACTIVE_PROFILE_PROMPT_MESSAGE_ID,
+    CV_REPLACEMENT_DRAFT_SOURCE,
     INVALID_LANGUAGES_MESSAGE,
     INVALID_SALARY_MESSAGE,
     PERSISTED_PROFILE_SNAPSHOT,
@@ -18,6 +19,8 @@ from app.profile import (
     PROFILE_DRAFT_SOURCE,
     PROFILE_EDITING_FIELD,
     PROFILE_INVALID_CURRENCY_MESSAGE,
+    PROFILE_LANGUAGES_VALIDATION_ERROR_MESSAGE,
+    PROFILE_SECTION_EDIT_CALLBACK,
     PROFILE_SECTION_MESSAGE_ID,
     PROFILE_SAVED_MESSAGE,
     ProfileSetupStates,
@@ -30,10 +33,22 @@ from app.profile import (
     handle_salary,
     handle_skills,
     handle_target_roles,
+    format_profile_summary,
     parse_languages,
     parse_salary,
+    parse_skills_input,
 )
-from app.menu import ADD_JOB_BUTTON, main_menu_action, profile_section_edit
+from app.menu import (
+    ADD_JOB_BUTTON,
+    PROFILE_REPLACE_CV_CANCEL_CALLBACK,
+    PROFILE_REPLACE_CV_CONTINUE_CALLBACK,
+    PROFILE_SECTION_REPLACE_CV_CALLBACK,
+    main_menu_action,
+    profile_replacement_cancel,
+    profile_replacement_continue,
+    profile_section_edit,
+    profile_section_replace_cv,
+)
 from app.jobs import AddJobStates, REQUEST_URL_MESSAGE
 
 
@@ -160,6 +175,14 @@ class FakeApiClient:
             raise self.profile_error
         return self.returned_profile or profile
 
+    async def normalize_profile_skills(self, skills: list[str]) -> list[str]:
+        return skills
+
+    async def normalize_profile_languages(
+        self, languages: list[dict[str, str]]
+    ) -> list[dict[str, str]]:
+        return languages
+
 
 def make_state() -> tuple[MemoryStorage, FSMContext]:
     storage = MemoryStorage()
@@ -183,7 +206,7 @@ def test_complete_profile_flow_saves_only_after_confirmation_and_clears_state() 
         message.text = "2500 usd / month"
         await handle_salary(message, state)
         message.text = "English B2, Russian native"
-        await handle_languages(message, state)
+        await handle_languages(message, state, api_client)
 
         assert await state.get_state() == ProfileSetupStates.summary.state
         assert api_client.profile_calls == []
@@ -205,6 +228,291 @@ def test_complete_profile_flow_saves_only_after_confirmation_and_clears_state() 
         assert api_client.profile_calls[0][1]["target_roles"] == ["Python Backend Developer", "ML Engineer"]
         assert api_client.profile_calls[0][1]["salary_currency"] == "USD"
         await storage.close()
+    asyncio.run(scenario())
+
+
+def test_profile_skills_use_one_compact_shared_representation() -> None:
+    profile = {
+        "target_roles": ["Engineer"],
+        "skills": ["Python", "Git\n", "  SQL  ", "PostgreSQL", "HTML", "API", "Redis"],
+        "experience": "unknown",
+        "location": [],
+        "workplace_preference": "any",
+        "salary_min": None,
+        "salary_currency": None,
+        "salary_period": "unknown",
+        "languages": [],
+    }
+
+    rendered = format_profile_summary(profile)
+
+    assert "🧩 Навыки: Python, Git, SQL, PostgreSQL, HTML, API, Redis" in rendered
+    assert "Git\n, SQL" not in rendered
+    assert "🧩 Навыки: Не указаны" in format_profile_summary({**profile, "skills": []})
+
+
+def test_skill_input_updates_manual_and_persisted_drafts_with_api_canonical_values() -> None:
+    class CanonicalizingApi(FakeApiClient):
+        def __init__(self) -> None:
+            super().__init__()
+            self.normalization_calls: list[list[str]] = []
+
+        async def normalize_profile_skills(self, skills: list[str]) -> list[str]:
+            self.normalization_calls.append(skills)
+            return ["Python", "PostgreSQL", "my internal tool"]
+
+    async def scenario() -> None:
+        api = CanonicalizingApi()
+        storage, state = make_state()
+        manual = FakeMessage("python, PYTHON, postgres, my   internal tool")
+        await state.set_state(ProfileSetupStates.skills)
+        await state.set_data({"target_roles": ["Engineer"]})
+
+        await handle_skills(manual, state, api)
+
+        assert (await state.get_data())["skills"] == ["Python", "PostgreSQL", "my internal tool"]
+        assert api.profile_calls == []
+
+        await state.set_state(ProfileSetupStates.edit_field)
+        await state.update_data(
+            {
+                PROFILE_DRAFT_SOURCE: "persisted",
+                PROFILE_EDITING_FIELD: "skills",
+                ACTIVE_PROFILE_PROMPT_MESSAGE_ID: 99,
+            }
+        )
+        persisted = FakeMessage("python, PYTHON, postgres, my   internal tool")
+        await handle_profile_draft_field_input(persisted, state, api)
+
+        assert (await state.get_data())["skills"] == ["Python", "PostgreSQL", "my internal tool"]
+        assert "🧩 Навыки: Python, PostgreSQL, my internal tool" in persisted.answers[-1][0]
+        assert api.profile_calls == []
+        assert api.normalization_calls == [
+            ["python", "PYTHON", "postgres", "my   internal tool"],
+            ["python", "PYTHON", "postgres", "my   internal tool"],
+        ]
+        await handle_profile_callback(FakeCallback("profile:save", persisted), state, api)
+        assert api.profile_calls[-1][1]["skills"] == [
+            "Python",
+            "PostgreSQL",
+            "my internal tool",
+        ]
+        assert "🧩 Навыки: Python, PostgreSQL, my internal tool" in persisted.answers[-1][0]
+        await storage.close()
+
+    asyncio.run(scenario())
+
+
+def test_skill_parser_splits_comma_and_newline_input_without_creating_giant_values() -> None:
+    assert parse_skills_input("Python\nGit\nSQL\nPostgreSQL\nREST API\nFastAPI") == [
+        "Python",
+        "Git",
+        "SQL",
+        "PostgreSQL",
+        "REST API",
+        "FastAPI",
+    ]
+    assert parse_skills_input("Python\r\n\r\nGit,\r\nSQL\n") == ["Python", "Git", "SQL"]
+    long_multiline = "\n".join(["Python", "FastAPI", "PostgreSQL", "Docker"] * 8)
+    parsed = parse_skills_input(long_multiline)
+    assert len(parsed) == 32
+    assert all(len(skill) <= 100 for skill in parsed)
+
+
+def test_mixed_skill_input_is_normalized_before_manual_preview_and_persisted_put() -> None:
+    class CanonicalizingApi(FakeApiClient):
+        def __init__(self) -> None:
+            super().__init__()
+            self.normalization_calls: list[list[str]] = []
+
+        async def normalize_profile_skills(self, skills: list[str]) -> list[str]:
+            self.normalization_calls.append(skills)
+            return ["Python", "PostgreSQL", "SQL", "Redis"]
+
+    async def scenario() -> None:
+        api = CanonicalizingApi()
+        raw_input = "python, PYTHON\npostgres\r\nSQL, redis"
+        storage, state = make_state()
+        manual = FakeMessage(raw_input)
+        await state.set_state(ProfileSetupStates.skills)
+        await state.set_data({"target_roles": ["Engineer"]})
+
+        await handle_skills(manual, state, api)
+
+        assert (await state.get_data())["skills"] == ["Python", "PostgreSQL", "SQL", "Redis"]
+        assert api.normalization_calls == [["python", "PYTHON", "postgres", "SQL", "redis"]]
+        assert api.profile_calls == []
+
+        await state.set_state(ProfileSetupStates.edit_field)
+        await state.update_data(
+            {
+                PROFILE_DRAFT_SOURCE: "persisted",
+                PROFILE_EDITING_FIELD: "skills",
+                ACTIVE_PROFILE_PROMPT_MESSAGE_ID: 99,
+            }
+        )
+        persisted = FakeMessage(raw_input)
+        await handle_profile_draft_field_input(persisted, state, api)
+
+        assert (await state.get_data())["skills"] == ["Python", "PostgreSQL", "SQL", "Redis"]
+        assert "🧩 Навыки: Python, PostgreSQL, SQL, Redis" in persisted.answers[-1][0]
+        assert api.normalization_calls == [
+            ["python", "PYTHON", "postgres", "SQL", "redis"],
+            ["python", "PYTHON", "postgres", "SQL", "redis"],
+        ]
+        await handle_profile_callback(FakeCallback("profile:save", persisted), state, api)
+        assert api.profile_calls[-1][1]["skills"] == ["Python", "PostgreSQL", "SQL", "Redis"]
+        await storage.close()
+
+    asyncio.run(scenario())
+
+
+def test_language_preflight_keeps_draft_on_invalid_input_and_normalizes_valid_preview() -> None:
+    class LanguageValidatingApi(FakeApiClient):
+        def __init__(self) -> None:
+            super().__init__()
+            self.language_calls: list[list[dict[str, str]]] = []
+
+        async def normalize_profile_languages(
+            self, languages: list[dict[str, str]]
+        ) -> list[dict[str, str]]:
+            self.language_calls.append(languages)
+            request = httpx.Request("POST", "http://api/profile/languages/normalize")
+            if len(languages) > 1 or languages[0]["level"].casefold() not in {"a1", "a2", "b1", "b2", "c1", "c2", "fluent", "native"}:
+                raise httpx.HTTPStatusError(
+                    "invalid languages", request=request, response=httpx.Response(422, request=request)
+                )
+            return [{"language": languages[0]["language"].strip(), "level": languages[0]["level"].upper()}]
+
+    async def scenario() -> None:
+        api = LanguageValidatingApi()
+        storage, state = make_state()
+        await state.set_state(ProfileSetupStates.languages)
+        await state.set_data({"languages": [{"language": "Russian", "level": "native"}]})
+        invalid = FakeMessage("English conversational")
+
+        await handle_languages(invalid, state, api)
+
+        assert await state.get_state() == ProfileSetupStates.languages.state
+        assert (await state.get_data())["languages"] == [{"language": "Russian", "level": "native"}]
+        assert invalid.answers[-1][0] == PROFILE_LANGUAGES_VALIDATION_ERROR_MESSAGE
+
+        valid = FakeMessage("English b1")
+        await handle_languages(valid, state, api)
+
+        assert await state.get_state() == ProfileSetupStates.summary.state
+        assert (await state.get_data())["languages"] == [{"language": "English", "level": "B1"}]
+        assert "🌍 Языки: English B1" in valid.answers[-1][0]
+        await storage.close()
+
+    asyncio.run(scenario())
+
+
+def test_generic_language_preflight_rejects_duplicates_and_back_remains_available() -> None:
+    class DuplicateRejectingApi(FakeApiClient):
+        async def normalize_profile_languages(
+            self, languages: list[dict[str, str]]
+        ) -> list[dict[str, str]]:
+            request = httpx.Request("POST", "http://api/profile/languages/normalize")
+            raise httpx.HTTPStatusError(
+                "duplicate languages", request=request, response=httpx.Response(422, request=request)
+            )
+
+    async def scenario() -> None:
+        storage, state = make_state()
+        original = [{"language": "Russian", "level": "native"}]
+        await state.set_state(ProfileSetupStates.edit_field)
+        await state.set_data(
+            {
+                "languages": original,
+                PROFILE_DRAFT_SOURCE: "persisted",
+                PROFILE_EDITING_FIELD: "languages",
+                ACTIVE_PROFILE_PROMPT_MESSAGE_ID: 17,
+            }
+        )
+        invalid = FakeMessage("English B1, english C1")
+
+        await handle_profile_draft_field_input(invalid, state, DuplicateRejectingApi())
+
+        assert await state.get_state() == ProfileSetupStates.edit_field.state
+        assert (await state.get_data())["languages"] == original
+        assert invalid.answers[-1][0] == PROFILE_LANGUAGES_VALIDATION_ERROR_MESSAGE
+
+        back = FakeMessage()
+        back.message_id = 17
+        back.next_message_id = 18
+        await handle_profile_callback(FakeCallback("profile:edit_back", back), state, FakeApiClient())
+        assert await state.get_state() == ProfileSetupStates.edit_field.state
+        assert PROFILE_EDITING_FIELD not in (await state.get_data())
+        await storage.close()
+
+    asyncio.run(scenario())
+
+
+def test_field_edit_back_keeps_draft_and_returns_to_picker() -> None:
+    async def scenario() -> None:
+        storage, state = make_state()
+        original = {
+            "target_roles": ["Engineer"],
+            "skills": ["Python", "PostgreSQL"],
+            "experience": "middle",
+            PROFILE_DRAFT_SOURCE: "persisted",
+            PROFILE_EDITING_FIELD: "skills",
+            ACTIVE_PROFILE_PROMPT_MESSAGE_ID: 17,
+        }
+        await state.set_state(ProfileSetupStates.edit_field)
+        await state.set_data(original)
+        message = FakeMessage()
+        message.message_id = 17
+        message.next_message_id = 18
+        api = FakeApiClient()
+
+        await handle_profile_callback(FakeCallback("profile:edit_back", message), state, api)
+
+        data = await state.get_data()
+        assert data["skills"] == ["Python", "PostgreSQL"]
+        assert data["experience"] == "middle"
+        assert PROFILE_EDITING_FIELD not in data
+        assert data[ACTIVE_PROFILE_PROMPT_MESSAGE_ID] == 18
+        assert await state.get_state() == ProfileSetupStates.edit_field.state
+        assert message.inline_keyboards_removed == 1
+        assert message.answers[-1][0] == "Какое поле изменить?"
+        assert api.profile_calls == []
+        await storage.close()
+
+    asyncio.run(scenario())
+
+
+def test_field_edit_back_rejects_stale_callback_and_survives_cleanup_failure() -> None:
+    async def scenario() -> None:
+        storage, state = make_state()
+        data = {
+            "skills": ["Python"],
+            PROFILE_DRAFT_SOURCE: "persisted",
+            PROFILE_EDITING_FIELD: "skills",
+            ACTIVE_PROFILE_PROMPT_MESSAGE_ID: 17,
+        }
+        await state.set_state(ProfileSetupStates.edit_field)
+        await state.set_data(data)
+        stale = FakeMessage()
+        stale.message_id = 16
+
+        await handle_profile_callback(FakeCallback("profile:edit_back", stale), state, FakeApiClient())
+        assert await state.get_data() == data
+        assert stale.answers == []
+
+        current = FakeMessage()
+        current.message_id = 17
+        current.next_message_id = 18
+        current.fail_edit = True
+        await handle_profile_callback(FakeCallback("profile:edit_back", current), state, FakeApiClient())
+
+        assert await state.get_state() == ProfileSetupStates.edit_field.state
+        assert PROFILE_EDITING_FIELD not in (await state.get_data())
+        assert (await state.get_data())[ACTIVE_PROFILE_PROMPT_MESSAGE_ID] == 18
+        assert current.answers[-1][0] == "Какое поле изменить?"
+        await storage.close()
+
     asyncio.run(scenario())
 
 
@@ -362,7 +670,7 @@ def test_valid_free_text_removes_skip_keyboard() -> None:
         skills_prompt_id = (await state.get_data())["skip_prompt_message_id"]
 
         message.text = "Python, FastAPI"
-        await handle_skills(message, state)
+        await handle_skills(message, state, FakeApiClient())
 
         assert message.bot.removed_keyboards == [(456, skills_prompt_id)]
         assert await state.get_state() == ProfileSetupStates.experience.state
@@ -452,6 +760,85 @@ def test_cancel_callback_removes_inline_keyboard() -> None:
     asyncio.run(scenario())
 
 
+def test_persisted_field_picker_cancel_discards_draft_and_invalidates_picker_callbacks() -> None:
+    async def scenario() -> None:
+        storage, state = make_state()
+        snapshot = {
+            "target_roles": ["Engineer"], "skills": ["Python"], "experience": "middle",
+            "location": ["Yerevan"], "workplace_preference": "remote", "salary_min": None,
+            "salary_currency": None, "salary_period": "unknown", "languages": [],
+        }
+        await state.set_state(ProfileSetupStates.edit_field)
+        await state.set_data(
+            {
+                **snapshot,
+                "skills": ["Python", "Unsaved draft skill"],
+                PROFILE_DRAFT_SOURCE: "persisted",
+                PERSISTED_PROFILE_SNAPSHOT: snapshot,
+                PROFILE_SECTION_MESSAGE_ID: 10,
+                ACTIVE_PROFILE_PROMPT_MESSAGE_ID: 11,
+            }
+        )
+        picker = FakeMessage()
+        picker.message_id = 11
+        picker.next_message_id = 12
+        api = FakeApiClient()
+
+        await handle_profile_callback(FakeCallback("profile:cancel", picker), state, api)
+
+        assert api.profile_calls == []
+        assert await state.get_state() is None
+        data = await state.get_data()
+        assert data[PERSISTED_PROFILE_SNAPSHOT] == snapshot
+        assert data[PROFILE_SECTION_MESSAGE_ID] == 12
+        assert picker.deleted_message_ids == [11]
+        assert picker.bot.deleted_messages == [(456, 10)]
+        card_text, card_keyboard = picker.answers[-1]
+        assert "Unsaved draft skill" not in card_text
+        assert "🧩 Навыки: Python" in card_text
+        assert card_keyboard.inline_keyboard[0][0].callback_data == PROFILE_SECTION_EDIT_CALLBACK
+
+        await handle_profile_callback(FakeCallback("profile:edit:skills", picker), state, api)
+        assert len(picker.answers) == 1
+        assert api.profile_calls == []
+        await storage.close()
+
+    asyncio.run(scenario())
+
+
+def test_persisted_field_picker_cancel_continues_when_cleanup_fails() -> None:
+    async def scenario() -> None:
+        storage, state = make_state()
+        snapshot = {
+            "target_roles": ["Engineer"], "skills": ["Python"], "experience": "unknown",
+            "location": [], "workplace_preference": "any", "salary_min": None,
+            "salary_currency": None, "salary_period": "unknown", "languages": [],
+        }
+        await state.set_state(ProfileSetupStates.edit_field)
+        await state.set_data(
+            {
+                **snapshot,
+                PROFILE_DRAFT_SOURCE: "persisted",
+                PERSISTED_PROFILE_SNAPSHOT: snapshot,
+                PROFILE_SECTION_MESSAGE_ID: 10,
+                ACTIVE_PROFILE_PROMPT_MESSAGE_ID: 11,
+            }
+        )
+        picker = FakeMessage()
+        picker.message_id = 11
+        picker.next_message_id = 12
+        picker.fail_delete = True
+
+        await handle_profile_callback(FakeCallback("profile:cancel", picker), state, FakeApiClient())
+
+        assert await state.get_state() is None
+        assert (await state.get_data())[PROFILE_SECTION_MESSAGE_ID] == 12
+        assert "🧩 Навыки: Python" in picker.answers[-1][0]
+        await storage.close()
+
+    asyncio.run(scenario())
+
+
 def test_persisted_save_sends_new_authoritative_card_and_deactivates_old_context() -> None:
     async def scenario() -> None:
         storage, state = make_state()
@@ -500,6 +887,7 @@ def test_persisted_save_sends_new_authoritative_card_and_deactivates_old_context
         text, keyboard = message.answers[0]
         assert "🧩 Навыки: Python, FastAPI, SQL" in text
         assert keyboard.inline_keyboard[0][0].callback_data == "profile_section:edit"
+        assert keyboard.inline_keyboard[1][0].callback_data == PROFILE_SECTION_REPLACE_CV_CALLBACK
 
         old_card = FakeMessage()
         old_card.message_id = 10
@@ -613,6 +1001,131 @@ def test_persisted_cancel_discards_draft_and_restores_original_card_without_put(
     asyncio.run(scenario())
 
 
+def test_profile_replacement_warning_cancel_restores_snapshot_without_put() -> None:
+    async def scenario() -> None:
+        storage, state = make_state()
+        original = {
+            "target_roles": ["Engineer"],
+            "skills": ["Python"],
+            "experience": "middle",
+            "location": ["Yerevan"],
+            "workplace_preference": "remote",
+            "salary_min": None,
+            "salary_currency": None,
+            "salary_period": "unknown",
+            "languages": [],
+        }
+        section = FakeMessage()
+        section.message_id = 10
+        section.next_message_id = 11
+        await state.set_data(
+            {
+                PROFILE_SECTION_MESSAGE_ID: 10,
+                PERSISTED_PROFILE_SNAPSHOT: original,
+            }
+        )
+
+        await profile_section_replace_cv(
+            FakeCallback(PROFILE_SECTION_REPLACE_CV_CALLBACK, section), state
+        )
+
+        warning_id = (await state.get_data())[ACTIVE_PROFILE_PROMPT_MESSAGE_ID]
+        assert await state.get_state() == ProfileSetupStates.cv_replace_warning.state
+        assert section.bot.removed_keyboards == [(456, 10)]
+        warning = FakeMessage()
+        warning.message_id = warning_id
+        warning.next_message_id = 12
+        warning.bot = section.bot
+        api = FakeApiClient()
+        await profile_replacement_cancel(
+            FakeCallback(PROFILE_REPLACE_CV_CANCEL_CALLBACK, warning), state
+        )
+
+        assert api.profile_calls == []
+        assert await state.get_state() is None
+        assert "🧩 Навыки: Python" in warning.answers[-1][0]
+        assert section.bot.deleted_messages == [(456, 10)]
+        assert warning.deleted_message_ids == [warning_id]
+        assert (await state.get_data())[PROFILE_SECTION_MESSAGE_ID] == 12
+        await profile_replacement_cancel(
+            FakeCallback(PROFILE_REPLACE_CV_CANCEL_CALLBACK, warning), state
+        )
+        assert len(warning.answers) == 1
+        await storage.close()
+
+    asyncio.run(scenario())
+
+
+def test_replacement_field_editor_cancel_restores_snapshot_without_put() -> None:
+    async def scenario() -> None:
+        storage, state = make_state()
+        original = {
+            "target_roles": ["Engineer"], "skills": ["Python"], "experience": "unknown",
+            "location": [], "workplace_preference": "any", "salary_min": None,
+            "salary_currency": None, "salary_period": "unknown", "languages": [],
+        }
+        await state.set_state(ProfileSetupStates.edit_field)
+        await state.set_data(
+            {
+                **{**original, "skills": ["CV only skill"]},
+                PROFILE_DRAFT_SOURCE: CV_REPLACEMENT_DRAFT_SOURCE,
+                PERSISTED_PROFILE_SNAPSHOT: original,
+                PROFILE_SECTION_MESSAGE_ID: 10,
+                ACTIVE_PROFILE_PROMPT_MESSAGE_ID: 11,
+            }
+        )
+        message = FakeMessage()
+        message.message_id = 11
+        message.next_message_id = 12
+        api = FakeApiClient()
+
+        await handle_profile_callback(FakeCallback("profile:cancel", message), state, api)
+
+        assert api.profile_calls == []
+        assert await state.get_state() is None
+        assert "CV only skill" not in message.answers[-1][0]
+        assert "🧩 Навыки: Python" in message.answers[-1][0]
+        await handle_profile_callback(FakeCallback("profile:save", message), state, api)
+        assert api.profile_calls == []
+        await storage.close()
+
+    asyncio.run(scenario())
+
+
+def test_replacement_summary_cancel_restores_snapshot_without_put() -> None:
+    async def scenario() -> None:
+        storage, state = make_state()
+        original = {
+            "target_roles": ["Engineer"], "skills": ["Python"], "experience": "unknown",
+            "location": [], "workplace_preference": "any", "salary_min": None,
+            "salary_currency": None, "salary_period": "unknown", "languages": [],
+        }
+        await state.set_state(ProfileSetupStates.summary)
+        await state.set_data(
+            {
+                **{**original, "skills": ["CV draft skill"]},
+                PROFILE_DRAFT_SOURCE: CV_REPLACEMENT_DRAFT_SOURCE,
+                PERSISTED_PROFILE_SNAPSHOT: original,
+                PROFILE_SECTION_MESSAGE_ID: 10,
+                ACTIVE_PROFILE_PROMPT_MESSAGE_ID: 11,
+            }
+        )
+        summary = FakeMessage()
+        summary.message_id = 11
+        summary.next_message_id = 12
+        api = FakeApiClient()
+
+        await handle_profile_callback(FakeCallback("profile:cancel", summary), state, api)
+
+        assert api.profile_calls == []
+        assert await state.get_state() is None
+        assert "CV draft skill" not in summary.answers[-1][0]
+        assert "🧩 Навыки: Python" in summary.answers[-1][0]
+        await storage.close()
+
+    asyncio.run(scenario())
+
+
 def test_persisted_put_failure_keeps_draft_and_retry_actions() -> None:
     async def scenario() -> None:
         storage, state = make_state()
@@ -705,7 +1218,7 @@ def test_message_not_modified_cleanup_is_idempotent_without_warning(caplog) -> N
         )
 
         with caplog.at_level("WARNING", logger="app.profile"):
-            await handle_skills(message, state)
+            await handle_skills(message, state, FakeApiClient())
 
         assert await state.get_state() == ProfileSetupStates.experience.state
         assert (await state.get_data())["skills"] == ["Python", "FastAPI"]
@@ -730,7 +1243,7 @@ def test_other_bad_request_cleanup_logs_warning_and_keeps_transition(caplog) -> 
         )
 
         with caplog.at_level("WARNING", logger="app.profile"):
-            await handle_skills(message, state)
+            await handle_skills(message, state, FakeApiClient())
 
         assert await state.get_state() == ProfileSetupStates.experience.state
         assert (await state.get_data())["skills"] == ["Python", "FastAPI"]
@@ -751,7 +1264,7 @@ def test_skip_keyboard_removal_failure_does_not_block_text_transition() -> None:
         await state.set_state(ProfileSetupStates.skills)
         await state.update_data(skip_prompt_message_id=12)
 
-        await handle_skills(message, state)
+        await handle_skills(message, state, FakeApiClient())
 
         assert await state.get_state() == ProfileSetupStates.experience.state
         assert (await state.get_data())["skills"] == ["Python"]
@@ -770,7 +1283,7 @@ def test_invalid_inputs_keep_current_step() -> None:
         assert message.answers[-1][0] == INVALID_SALARY_MESSAGE
         message.text = "English"
         await state.set_state(ProfileSetupStates.languages)
-        await handle_languages(message, state)
+        await handle_languages(message, state, FakeApiClient())
         assert await state.get_state() == ProfileSetupStates.languages.state
         assert message.answers[-1][0] == INVALID_LANGUAGES_MESSAGE
         await storage.close()
@@ -830,7 +1343,7 @@ def test_localized_workplace_labels_are_not_accepted_as_locations() -> None:
                     }
                 )
 
-                await handle_profile_draft_field_input(message, state)
+                await handle_profile_draft_field_input(message, state, FakeApiClient())
 
                 assert await state.get_state() == ProfileSetupStates.edit_field.state
                 assert (await state.get_data())["location"] == ["Yerevan"]
@@ -862,7 +1375,7 @@ def test_localized_workplace_labels_are_not_accepted_as_locations() -> None:
                     }
                 )
 
-                await handle_profile_draft_field_input(message, state)
+                await handle_profile_draft_field_input(message, state, FakeApiClient())
 
                 assert await state.get_state() == ProfileSetupStates.summary.state
                 assert (await state.get_data())["location"] == [value]

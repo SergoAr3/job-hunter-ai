@@ -10,8 +10,8 @@ from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMar
 
 from app.api_client import BotApiClient
 from app.jobs import (
-    _show_match_summary,
     format_job_card,
+    format_match_details,
     handle_add_job,
     remove_active_match_inline_keyboard,
 )
@@ -22,6 +22,11 @@ logger = logging.getLogger(__name__)
 APPLICATIONS_BUTTON = "📋 Мои вакансии"
 APPLICATIONS_MESSAGE_ID = "applications_message_id"
 APPLICATIONS_OFFSET = "applications_offset"
+APPLICATIONS_VIEW = "applications_view"
+APPLICATIONS_APPLICATION_ID = "applications_application_id"
+APPLICATIONS_LIST_VIEW = "list"
+APPLICATIONS_DETAIL_VIEW = "detail"
+APPLICATIONS_MATCH_VIEW = "match"
 PAGE_SIZE = 5
 APPLICATIONS_EMPTY_MESSAGE = "Сохранённых вакансий пока нет."
 APPLICATIONS_LOAD_ERROR_MESSAGE = "Не удалось загрузить вакансии. Попробуй ещё раз."
@@ -58,8 +63,15 @@ def applications_list_keyboard(items: list[dict[str, object]], *, offset: int, h
 
 def application_detail_keyboard(application_id: int, offset: int) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🔎 Почему подходит?", callback_data=f"applications:match:{application_id}")],
+        [InlineKeyboardButton(text="🔎 Почему подходит?", callback_data=f"applications:match:{application_id}:{offset}")],
         [InlineKeyboardButton(text="⬅️ К списку", callback_data=f"applications:page:{offset}")],
+    ])
+
+
+def application_match_keyboard(application_id: int, offset: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="⬅️ К вакансии", callback_data=f"applications:detail:{application_id}:{offset}")],
+        [InlineKeyboardButton(text="📋 К списку", callback_data=f"applications:page:{offset}")],
     ])
 
 
@@ -95,7 +107,13 @@ async def show_applications_list(
         return
     if not items:
         await _replace_or_send(message, state, APPLICATIONS_EMPTY_MESSAGE, empty_applications_keyboard())
-        await state.update_data(**{APPLICATIONS_OFFSET: 0})
+        await state.update_data(
+            **{
+                APPLICATIONS_OFFSET: 0,
+                APPLICATIONS_VIEW: APPLICATIONS_LIST_VIEW,
+                APPLICATIONS_APPLICATION_ID: None,
+            }
+        )
         return
     text = "📋 Мои вакансии\n\n" + "\n\n".join(
         _list_item_text(item, offset + index + 1) for index, item in enumerate(items)
@@ -103,7 +121,13 @@ async def show_applications_list(
     await _replace_or_send(
         message, state, text, applications_list_keyboard(items, offset=offset, has_next=bool(page["has_next"]))
     )
-    await state.update_data(**{APPLICATIONS_OFFSET: offset})
+    await state.update_data(
+        **{
+            APPLICATIONS_OFFSET: offset,
+            APPLICATIONS_VIEW: APPLICATIONS_LIST_VIEW,
+            APPLICATIONS_APPLICATION_ID: None,
+        }
+    )
 
 
 async def _replace_or_send(message: Message, state: FSMContext, text: str, markup: InlineKeyboardMarkup | None) -> None:
@@ -128,12 +152,20 @@ async def handle_applications_callback(callback: CallbackQuery, state: FSMContex
     if callback.message is None or callback.from_user is None:
         return
     message = cast(Message, callback.message)
-    if (await state.get_data()).get(APPLICATIONS_MESSAGE_ID) != message.message_id:
+    state_data = await state.get_data()
+    if state_data.get(APPLICATIONS_MESSAGE_ID) != message.message_id:
         return
+    view = state_data.get(APPLICATIONS_VIEW)
     data = callback.data or ""
     if data == "applications:add":
         await remove_active_applications_inline_keyboard(message, state)
         await handle_add_job(message, state)
+        return
+    if data.startswith("applications:open:") and view not in (None, APPLICATIONS_LIST_VIEW):
+        return
+    if data.startswith("applications:match:") and view not in (None, APPLICATIONS_DETAIL_VIEW):
+        return
+    if data.startswith("applications:detail:") and view != APPLICATIONS_MATCH_VIEW:
         return
     try:
         user_id = await api_client.create_or_get_user(callback.from_user)
@@ -155,11 +187,30 @@ async def handle_applications_callback(callback: CallbackQuery, state: FSMContex
         )
         return
     if data.startswith("applications:match:"):
-        app_id = data.removeprefix("applications:match:")
-        if not app_id.isdecimal():
+        parts = data.split(":")
+        if len(parts) == 3:
+            app_id, offset = parts[2], (await state.get_data()).get(APPLICATIONS_OFFSET, 0)
+        elif len(parts) == 4:
+            app_id, offset = parts[2], parts[3]
+        else:
             return
-        await remove_active_match_inline_keyboard(message, state)
-        await _show_match_summary(message, state, api_client, user_id, int(app_id))
+        if not app_id.isdecimal() or not str(offset).isdecimal():
+            return
+        if state_data.get(APPLICATIONS_APPLICATION_ID) not in (None, int(app_id)):
+            return
+        await _show_application_match(
+            message, state, api_client, user_id, int(app_id), int(offset)
+        )
+        return
+    if data.startswith("applications:detail:"):
+        parts = data.split(":")
+        if len(parts) != 4 or not parts[2].isdecimal() or not parts[3].isdecimal():
+            return
+        if state_data.get(APPLICATIONS_APPLICATION_ID) != int(parts[2]):
+            return
+        await _show_application_detail(
+            message, state, api_client, user_id, int(parts[2]), int(parts[3])
+        )
 
 
 async def _show_application_detail(
@@ -183,7 +234,58 @@ async def _show_application_detail(
         return
     job = detail["job"]
     assert isinstance(job, dict)
-    await _replace_or_send(message, state, format_job_card(job) or "Вакансия без данных.", application_detail_keyboard(application_id, offset))
+    await _replace_or_send(
+        message,
+        state,
+        format_job_card(job) or "Вакансия без данных.",
+        application_detail_keyboard(application_id, offset),
+    )
+    await state.update_data(
+        **{
+            APPLICATIONS_OFFSET: offset,
+            APPLICATIONS_VIEW: APPLICATIONS_DETAIL_VIEW,
+            APPLICATIONS_APPLICATION_ID: application_id,
+        }
+    )
+
+
+async def _show_application_match(
+    message: Message,
+    state: FSMContext,
+    api_client: BotApiClient,
+    user_id: int,
+    application_id: int,
+    offset: int,
+) -> None:
+    try:
+        match = await api_client.get_application_match(user_id, application_id)
+    except httpx.HTTPError:
+        logger.warning("Could not get application match", exc_info=True)
+        return
+
+    if (await state.get_data()).get(APPLICATIONS_MESSAGE_ID) != message.message_id:
+        return
+    await remove_active_match_inline_keyboard(message, state)
+
+    score = match.get("score")
+    verdict = match.get("verdict")
+    if verdict == "insufficient_data" or not isinstance(score, int) or isinstance(score, bool):
+        text = "🎯 Недостаточно данных для надёжной оценки."
+    else:
+        text = f"🎯 Совпадение: {score}%\n\n{format_match_details(match)}"
+    await _replace_or_send(
+        message,
+        state,
+        text,
+        application_match_keyboard(application_id, offset),
+    )
+    await state.update_data(
+        **{
+            APPLICATIONS_OFFSET: offset,
+            APPLICATIONS_VIEW: APPLICATIONS_MATCH_VIEW,
+            APPLICATIONS_APPLICATION_ID: application_id,
+        }
+    )
 
 
 async def remove_active_applications_inline_keyboard(message: Message, state: FSMContext) -> None:

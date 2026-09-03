@@ -11,7 +11,9 @@ from app.schemas import (
     ApplicationOut,
     ApplicationsPageOut,
     JobOut,
+    ProfileLanguagesNormalizeIn,
     MatchResultOut,
+    ProfileSkillsNormalizeIn,
     SavedApplicationOut,
     TelegramUserIn,
     TelegramUserOut,
@@ -93,6 +95,20 @@ def read_user_profile(user_id: int, session: Session = Depends(get_session)) -> 
     except (ProfileUserNotFoundError, UserProfileNotFoundError) as error:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Profile not found") from error
     return UserProfileOut.model_validate(profile)
+
+
+@app.post("/profile/skills/normalize", response_model=ProfileSkillsNormalizeIn)
+def normalize_profile_skills_for_draft(payload: ProfileSkillsNormalizeIn) -> ProfileSkillsNormalizeIn:
+    """Return the canonical API-domain representation without persisting a profile."""
+    return payload
+
+
+@app.post("/profile/languages/normalize", response_model=ProfileLanguagesNormalizeIn)
+def normalize_profile_languages_for_draft(
+    payload: ProfileLanguagesNormalizeIn,
+) -> ProfileLanguagesNormalizeIn:
+    """Return validated canonical language values without persisting a profile."""
+    return payload
 
 
 @app.put("/users/{user_id}/profile", response_model=UserProfileOut)

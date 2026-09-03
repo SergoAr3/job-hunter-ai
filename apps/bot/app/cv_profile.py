@@ -12,7 +12,16 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import Message
 
 from app.api_client import BotApiClient
-from app.profile import PROFILE_DRAFT_SOURCE, ProfileSetupStates, profile_payload, show_summary
+from app.profile import (
+    ACTIVE_PROFILE_PROMPT_MESSAGE_ID,
+    CV_REPLACEMENT_DRAFT_SOURCE,
+    PERSISTED_PROFILE_SNAPSHOT,
+    PROFILE_DRAFT_SOURCE,
+    PROFILE_SECTION_MESSAGE_ID,
+    ProfileSetupStates,
+    profile_payload,
+    show_summary,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -45,10 +54,14 @@ CV_ERROR_MESSAGES = {
 }
 
 
-async def handle_cv_profile_setup(message: Message, state: FSMContext) -> None:
-    await state.clear()
+async def handle_cv_profile_setup(
+    message: Message, state: FSMContext, *, preserve_replacement_context: bool = False
+) -> None:
+    if not preserve_replacement_context:
+        await state.clear()
     await state.set_state(ProfileSetupStates.cv_waiting_document)
-    await message.answer(CV_UPLOAD_PROMPT)
+    prompt_message = await message.answer(CV_UPLOAD_PROMPT)
+    await state.update_data({ACTIVE_PROFILE_PROMPT_MESSAGE_ID: prompt_message.message_id})
 
 
 async def handle_cv_document(
@@ -104,7 +117,14 @@ async def handle_cv_document(
 
     if not await _is_active_processing(message, state):
         return
-    await state.set_data({**profile_payload(draft), PROFILE_DRAFT_SOURCE: "cv"})
+    state_data = await state.get_data()
+    replacement_context: dict[str, object] = {}
+    if state_data.get(PROFILE_DRAFT_SOURCE) == CV_REPLACEMENT_DRAFT_SOURCE:
+        replacement_context[PROFILE_DRAFT_SOURCE] = CV_REPLACEMENT_DRAFT_SOURCE
+        for key in (PERSISTED_PROFILE_SNAPSHOT, PROFILE_SECTION_MESSAGE_ID):
+            if key in state_data:
+                replacement_context[key] = state_data[key]
+    await state.set_data({**profile_payload(draft), **replacement_context, PROFILE_DRAFT_SOURCE: replacement_context.get(PROFILE_DRAFT_SOURCE, "cv")})
     await show_summary(message, state)
 
 
@@ -142,8 +162,16 @@ async def _is_active_processing(message: Message, state: FSMContext) -> bool:
 
 
 async def _return_to_waiting(state: FSMContext) -> None:
+    state_data = await state.get_data()
+    replacement_context = {
+        key: state_data[key]
+        for key in (PROFILE_DRAFT_SOURCE, PERSISTED_PROFILE_SNAPSHOT, PROFILE_SECTION_MESSAGE_ID)
+        if key in state_data
+    }
     await state.clear()
     await state.set_state(ProfileSetupStates.cv_waiting_document)
+    if replacement_context.get(PROFILE_DRAFT_SOURCE) == CV_REPLACEMENT_DRAFT_SOURCE:
+        await state.update_data(replacement_context)
 
 
 class _CVTypingHeartbeat:

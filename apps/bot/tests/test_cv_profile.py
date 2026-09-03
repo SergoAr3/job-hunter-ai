@@ -35,12 +35,18 @@ from app.menu import (
     PROFILE_CV_CALLBACK,
     PROFILE_MISSING_MESSAGE,
     PROFILE_SECTION_MESSAGE_ID,
+    PROFILE_SECTION_REPLACE_CV_CALLBACK,
+    PROFILE_REPLACE_CV_CONTINUE_CALLBACK,
     main_menu_action,
+    profile_replacement_continue,
     profile_section_cv,
+    profile_section_replace_cv,
     missing_profile_keyboard,
 )
 from app.profile import (
     ACTIVE_PROFILE_PROMPT_MESSAGE_ID,
+    CV_REPLACEMENT_DRAFT_SOURCE,
+    PERSISTED_PROFILE_SNAPSHOT,
     PROFILE_EDITING_FIELD,
     PROFILE_CANCELLED_MESSAGE,
     CV_DRAFT_CANCELLED_MESSAGE,
@@ -49,6 +55,7 @@ from app.profile import (
     ROLE_PROMPT,
     ProfileSetupStates,
     handle_profile_callback,
+    handle_profile_cancel,
     handle_profile_draft_field_input,
 )
 from app.jobs import AddJobStates, REQUEST_URL_MESSAGE
@@ -73,6 +80,7 @@ class FakeBot:
         self.content = content
         self.actions: list[tuple[int, object]] = []
         self.removed_keyboards: list[tuple[int, int]] = []
+        self.deleted_messages: list[tuple[int, int]] = []
 
     async def send_chat_action(self, *, chat_id: int, action: object) -> None:
         self.actions.append((chat_id, action))
@@ -87,6 +95,9 @@ class FakeBot:
     ) -> None:
         assert reply_markup is None
         self.removed_keyboards.append((chat_id, message_id))
+
+    async def delete_message(self, *, chat_id: int, message_id: int) -> None:
+        self.deleted_messages.append((chat_id, message_id))
 
 
 class FakeMessage:
@@ -166,6 +177,14 @@ class FakeApiClient:
         self.put_calls.append((user_id, profile))
         return profile
 
+    async def normalize_profile_skills(self, skills: list[str]) -> list[str]:
+        return skills
+
+    async def normalize_profile_languages(
+        self, languages: list[dict[str, str]]
+    ) -> list[dict[str, str]]:
+        return languages
+
     async def get_user_profile(self, user_id: int) -> dict[str, object] | None:
         return None
 
@@ -228,6 +247,70 @@ def test_valid_document_shows_processing_and_draft_summary() -> None:
             "❌ Отменить",
         ]
         assert data[ACTIVE_PROFILE_PROMPT_MESSAGE_ID] == summary_id
+        await storage.close()
+
+    asyncio.run(scenario())
+
+
+def test_replacement_cv_draft_fully_replaces_persisted_snapshot_only_on_save() -> None:
+    async def scenario() -> None:
+        class ReplacementApi(FakeApiClient):
+            async def create_profile_draft_from_cv(
+                self, user_id: int, *, filename: str, content_type: str, content: bytes
+            ) -> dict[str, object]:
+                self.draft_calls.append((user_id, filename, content_type, content))
+                return {**draft(), "location": []}
+
+        storage, state = make_state()
+        original = {
+            "target_roles": ["Old role"],
+            "skills": ["Old skill"],
+            "experience": "senior",
+            "location": ["Old-only location"],
+            "workplace_preference": "onsite",
+            "salary_min": "2500",
+            "salary_currency": "USD",
+            "salary_period": "month",
+            "languages": [{"language": "Russian", "level": "native"}],
+        }
+        section = FakeMessage(message_id=10)
+        await state.set_data(
+            {
+                PROFILE_SECTION_MESSAGE_ID: 10,
+                PERSISTED_PROFILE_SNAPSHOT: original,
+            }
+        )
+        await profile_section_replace_cv(
+            FakeCallback(PROFILE_SECTION_REPLACE_CV_CALLBACK, section), state
+        )
+        warning_id = (await state.get_data())[ACTIVE_PROFILE_PROMPT_MESSAGE_ID]
+        warning = FakeMessage(message_id=warning_id, bot=section.bot)
+        await profile_replacement_continue(
+            FakeCallback(PROFILE_REPLACE_CV_CONTINUE_CALLBACK, warning), state
+        )
+        assert await state.get_state() == ProfileSetupStates.cv_waiting_document.state
+
+        upload = FakeMessage(document=pdf_document(), bot=section.bot, message_id=33)
+        api = ReplacementApi()
+        await handle_cv_document(upload, state, api)
+
+        state_data = await state.get_data()
+        assert state_data[PROFILE_DRAFT_SOURCE] == CV_REPLACEMENT_DRAFT_SOURCE
+        assert state_data[PERSISTED_PROFILE_SNAPSHOT] == original
+        assert state_data["location"] == []
+        assert api.put_calls == []
+        summary_id = state_data[ACTIVE_PROFILE_PROMPT_MESSAGE_ID]
+        summary = FakeMessage(message_id=summary_id, bot=section.bot)
+        await handle_profile_callback(FakeCallback("profile:save", summary), state, api)
+
+        assert len(api.put_calls) == 1
+        payload = api.put_calls[0][1]
+        assert payload["target_roles"] == ["Python Engineer"]
+        assert payload["location"] == []
+        assert payload["skills"] == ["Python", "FastAPI"]
+        assert section.bot.deleted_messages == [(456, 10)]
+        assert await state.get_state() is None
+        assert (await state.get_data())[PERSISTED_PROFILE_SNAPSHOT]["location"] == []
         await storage.close()
 
     asyncio.run(scenario())
@@ -336,15 +419,15 @@ def test_cv_field_edit_shows_current_value_and_keeps_draft_until_valid_input() -
         assert data["skills"] == ["Python", "FastAPI"]
         prompt, keyboard, prompt_id = picker.answers[-1]
         assert prompt == "Текущие навыки:\nPython, FastAPI\n\nОтправь обновлённый список."
-        assert keyboard.inline_keyboard[0][0].text == "🗑 Очистить"
+        assert [row[0].text for row in keyboard.inline_keyboard] == ["🗑 Очистить", "↩️ Назад"]
 
         invalid = FakeMessage(text=" , ", message_id=72)
-        await handle_profile_draft_field_input(invalid, state)
+        await handle_profile_draft_field_input(invalid, state, FakeApiClient())
         assert (await state.get_data())["skills"] == ["Python", "FastAPI"]
         assert await state.get_state() == ProfileSetupStates.edit_field.state
 
         valid = FakeMessage(text="Python, Django", message_id=73)
-        await handle_profile_draft_field_input(valid, state)
+        await handle_profile_draft_field_input(valid, state, FakeApiClient())
         assert (await state.get_data())["skills"] == ["Python", "Django"]
         assert (await state.get_data()).get(PROFILE_EDITING_FIELD) is None
         assert await state.get_state() == ProfileSetupStates.summary.state
@@ -387,7 +470,7 @@ def test_cv_field_edit_clear_and_enum_replace_only_selected_field() -> None:
         prompt, keyboard, _ = picker.answers[-1]
         assert prompt == "Текущий опыт: Middle\n\nВыбери новое значение."
         assert [row[0].text for row in keyboard.inline_keyboard] == [
-            "Intern", "Junior", "Middle", "Senior", "Lead", "Не указано"
+            "Intern", "Junior", "Middle", "Senior", "Lead", "Не указано", "↩️ Назад"
         ]
 
         enum_id = (await state.get_data())[ACTIVE_PROFILE_PROMPT_MESSAGE_ID]
@@ -421,10 +504,10 @@ def test_cv_target_roles_edit_has_no_clear_action() -> None:
         )
         prompt, keyboard, _ = picker.answers[-1]
         assert prompt == "Текущие роли:\nPython Engineer\n\nОтправь обновлённый список."
-        assert keyboard is None
+        assert [row[0].text for row in keyboard.inline_keyboard] == ["↩️ Назад"]
 
         invalid = FakeMessage(text="", message_id=92)
-        await handle_profile_draft_field_input(invalid, state)
+        await handle_profile_draft_field_input(invalid, state, FakeApiClient())
         assert (await state.get_data())["target_roles"] == ["Python Engineer"]
         await storage.close()
 
@@ -472,7 +555,7 @@ def test_generic_editor_supports_every_profile_field(
             )
         else:
             prompt.text = input_value
-            await handle_profile_draft_field_input(prompt, state)
+            await handle_profile_draft_field_input(prompt, state, api)
 
         data = await state.get_data()
         actual = data["salary_min"] if field == "salary" else data[field]
@@ -637,6 +720,87 @@ def test_api_failure_returns_to_waiting_state() -> None:
 
         assert await state.get_state() == ProfileSetupStates.cv_waiting_document.state
         assert "слишком много времени" in message.answers[-1][0]
+        await storage.close()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize(
+    ("status_code", "error_code"),
+    [(504, "ai_timeout"), (502, "invalid_ai_output")],
+)
+def test_replacement_cv_api_failure_keeps_snapshot_and_never_puts(
+    status_code: int, error_code: str
+) -> None:
+    async def scenario() -> None:
+        request = httpx.Request("POST", "http://api/users/7/profile/draft-from-cv")
+        response = httpx.Response(status_code, json={"detail": error_code}, request=request)
+        error = httpx.HTTPStatusError(error_code, request=request, response=response)
+        storage, state = make_state()
+        original = {**draft(), "skills": ["Persisted skill"]}
+        await state.set_state(ProfileSetupStates.cv_waiting_document)
+        await state.set_data(
+            {
+                PROFILE_DRAFT_SOURCE: CV_REPLACEMENT_DRAFT_SOURCE,
+                PERSISTED_PROFILE_SNAPSHOT: original,
+                PROFILE_SECTION_MESSAGE_ID: 10,
+                ACTIVE_PROFILE_PROMPT_MESSAGE_ID: 12,
+            }
+        )
+        upload = FakeMessage(document=pdf_document(), message_id=33)
+        api = FakeApiClient(error=error)
+
+        await handle_cv_document(upload, state, api)
+
+        assert await state.get_state() == ProfileSetupStates.cv_waiting_document.state
+        assert (await state.get_data())[PERSISTED_PROFILE_SNAPSHOT] == original
+        assert api.put_calls == []
+        cancel = FakeMessage(text="/cancel", bot=upload.bot, message_id=50)
+        await handle_profile_cancel(cancel, state)
+        assert "Persisted skill" in cancel.answers[-1][0]
+        assert api.put_calls == []
+        await storage.close()
+
+    asyncio.run(scenario())
+
+
+def test_replacement_cancel_during_processing_discards_late_cv_result(monkeypatch) -> None:
+    async def scenario() -> None:
+        started = asyncio.Event()
+        release = asyncio.Event()
+
+        class BlockingApi(FakeApiClient):
+            async def create_profile_draft_from_cv(
+                self, user_id: int, *, filename: str, content_type: str, content: bytes
+            ) -> dict[str, object]:
+                started.set()
+                await release.wait()
+                return draft()
+
+        monkeypatch.setattr(cv_profile_module, "CV_TYPING_INTERVAL_SECONDS", 0.01)
+        storage, state = make_state()
+        original = {**draft(), "skills": ["Persisted skill"]}
+        await state.set_state(ProfileSetupStates.cv_waiting_document)
+        await state.set_data(
+            {
+                PROFILE_DRAFT_SOURCE: CV_REPLACEMENT_DRAFT_SOURCE,
+                PERSISTED_PROFILE_SNAPSHOT: original,
+                PROFILE_SECTION_MESSAGE_ID: 10,
+                ACTIVE_PROFILE_PROMPT_MESSAGE_ID: 12,
+            }
+        )
+        upload = FakeMessage(document=pdf_document(), message_id=33)
+        task = asyncio.create_task(handle_cv_document(upload, state, BlockingApi()))
+        await started.wait()
+
+        cancel = FakeMessage(text="/cancel", bot=upload.bot, message_id=50)
+        await handle_profile_cancel(cancel, state)
+        release.set()
+        await task
+
+        assert await state.get_state() is None
+        assert "Persisted skill" in cancel.answers[-1][0]
+        assert all("🎯 Целевые роли" not in answer[0] for answer in upload.answers)
         await storage.close()
 
     asyncio.run(scenario())
@@ -895,6 +1059,7 @@ def test_dispatcher_routes_cv_field_edit_input_back_to_summary(monkeypatch) -> N
 
         monkeypatch.setattr(Message, "answer", answer)
         monkeypatch.setattr(Bot, "edit_message_reply_markup", edit_message_reply_markup)
+        monkeypatch.setattr(main_module, "api_client", FakeApiClient())
         state = await dispatcher_state(bot, ProfileSetupStates.edit_field.state)
         await state.set_data(
             {
@@ -936,6 +1101,47 @@ def test_dispatcher_cancel_in_cv_waiting_document(monkeypatch) -> None:
         assert await state.get_state() is None
         assert await state.get_data() == {}
         assert answers == [PROFILE_CANCELLED_MESSAGE]
+        await bot.session.close()
+
+    asyncio.run(scenario())
+
+
+def test_dispatcher_cancel_in_replacement_waiting_restores_saved_profile(monkeypatch) -> None:
+    async def scenario() -> None:
+        bot = Bot("123456:cv-test-token")
+        answers: list[str] = []
+        deleted: list[int] = []
+
+        async def answer(message: Message, text: str, **kwargs: object) -> SimpleNamespace:
+            answers.append(text)
+            return SimpleNamespace(message_id=len(answers) + 100)
+
+        async def edit_message_reply_markup(bot: Bot, **kwargs: object) -> None:
+            return None
+
+        async def delete_message(bot: Bot, *, chat_id: int, message_id: int) -> None:
+            deleted.append(message_id)
+
+        monkeypatch.setattr(Message, "answer", answer)
+        monkeypatch.setattr(Bot, "edit_message_reply_markup", edit_message_reply_markup)
+        monkeypatch.setattr(Bot, "delete_message", delete_message)
+        state = await dispatcher_state(bot, ProfileSetupStates.cv_waiting_document.state)
+        original = {**draft(), "skills": ["Persisted skill"]}
+        await state.set_data(
+            {
+                PROFILE_DRAFT_SOURCE: CV_REPLACEMENT_DRAFT_SOURCE,
+                PERSISTED_PROFILE_SNAPSHOT: original,
+                PROFILE_SECTION_MESSAGE_ID: 10,
+                ACTIVE_PROFILE_PROMPT_MESSAGE_ID: 12,
+            }
+        )
+
+        await dp.feed_update(bot, make_document_update(update_id=601, text="/cancel", command=True))
+
+        assert await state.get_state() is None
+        assert deleted == [10, 12]
+        assert "Persisted skill" in answers[-1]
+        assert 601 not in deleted
         await bot.session.close()
 
     asyncio.run(scenario())
