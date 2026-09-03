@@ -6,7 +6,14 @@ from decimal import Decimal
 
 from app.models import Application, Job, UserProfile
 from app.schemas import MatchComponentOut, MatchInputStateOut, MatchReasonOut, MatchResultOut
-from app.services.match_aliases import LANGUAGE_ALIASES, ROLE_TOKEN_ALIASES, SENIORITY_TOKENS, SKILL_ALIASES
+from app.services.match_aliases import (
+    LANGUAGE_ALIASES,
+    ROLE_PHRASE_ALIASES,
+    ROLE_TOKEN_ALIASES,
+    SAFE_ROLE_TRAILING_QUALIFIERS,
+    SENIORITY_TOKENS,
+    SKILL_ALIASES,
+)
 
 ALGORITHM_VERSION = "job-match-v1"
 WEIGHTS = {
@@ -112,10 +119,34 @@ def _role_component(roles: list[str], title: str | None) -> MatchComponentOut:
 
 
 def _role_key(value: str) -> tuple[str, set[str]]:
-    raw_tokens = re.findall(r"[\w+#.]+", normalize_text(value))
-    tokens = [_canonical_role_token(token) for token in raw_tokens]
-    tokens = [token for token in tokens if token not in SENIORITY_TOKENS]
+    normalized = normalize_text(value)
+    raw_tokens = re.findall(r"[\w+#.]+", normalized)
+    raw_tokens = [token for token in raw_tokens if token not in SENIORITY_TOKENS]
+    raw_phrase = " ".join(raw_tokens)
+    alias = ROLE_PHRASE_ALIASES.get(raw_phrase)
+    phrase = alias or raw_phrase
+    if alias is None:
+        base_phrase = _safe_trailing_qualifier_base_phrase(normalized)
+        if base_phrase is not None:
+            phrase = ROLE_PHRASE_ALIASES.get(base_phrase, phrase)
+    tokens = [_canonical_role_token(token) for token in phrase.split()]
     return " ".join(tokens), set(tokens)
+
+
+def _safe_trailing_qualifier_base_phrase(value: str) -> str | None:
+    match = re.fullmatch(r"(.+?)\s*\(([^()]*)\)", value)
+    if match is None:
+        return None
+    qualifiers = [normalize_text(item) for item in match.group(2).split(",")]
+    if not qualifiers or any(not _is_safe_trailing_qualifier(item) for item in qualifiers):
+        return None
+    base_tokens = re.findall(r"[\w+#.]+", match.group(1))
+    base_tokens = [token for token in base_tokens if token not in SENIORITY_TOKENS]
+    return " ".join(base_tokens)
+
+
+def _is_safe_trailing_qualifier(value: str) -> bool:
+    return value in SAFE_ROLE_TRAILING_QUALIFIERS or value.removesuffix("+") in SAFE_ROLE_TRAILING_QUALIFIERS
 
 
 def _canonical_role_token(token: str) -> str:

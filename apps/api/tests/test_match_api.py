@@ -84,3 +84,38 @@ def test_profile_and_job_updates_are_immediately_reflected() -> None:
     assert first["components"]["required_skills"]["score"] == 100
     assert second["components"]["required_skills"]["score"] is None
     assert third["components"]["required_skills"]["score"] == 50
+
+
+def test_api_match_applies_role_and_skill_aliases_without_changing_match_rules() -> None:
+    user_id = create_user(6)
+    put_profile(
+        user_id,
+        target_roles=["Backend-разработчик"],
+        skills=["REST"],
+    )
+    application_id, _ = create_application(
+        user_id,
+        title="Backend Developer",
+        required_skills=["REST API"],
+    )
+
+    response = client.get(f"/users/{user_id}/applications/{application_id}/match")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["components"]["role"] == {
+        "weight": 20,
+        "score": 100,
+        "status": "matched",
+        "matched": ["Backend-разработчик"],
+        "missing": [],
+    }
+    assert payload["components"]["required_skills"] == {
+        "weight": 30,
+        "score": 100,
+        "status": "matched",
+        "matched": ["REST API"],
+        "missing": [],
+    }
+    assert payload["coverage"] == 65
+    assert payload["verdict"] == "high"
