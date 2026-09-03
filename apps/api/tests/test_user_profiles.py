@@ -1,4 +1,8 @@
+import pytest
+
 from app.models import UserProfile
+from app.schemas import UserProfileOut, UserProfilePutIn
+from app.services.profile_normalization import normalize_profile_skills
 from conftest import TestSessionLocal, client
 
 
@@ -78,6 +82,107 @@ def test_put_is_idempotent_and_fully_replaces_profile() -> None:
         assert session.query(UserProfile).count() == 1
 
 
+def test_profile_skills_are_canonicalized_at_the_domain_boundary() -> None:
+    assert normalize_profile_skills([" python ", "PYTHON"]) == ["Python"]
+    assert normalize_profile_skills(["postgres", "PostgreSQL", "postgresql"]) == [
+        "PostgreSQL"
+    ]
+
+
+def test_profile_skill_normalization_endpoint_is_stateless() -> None:
+    response = client.post(
+        "/profile/skills/normalize",
+        json={"skills": [" python ", "PYTHON", "postgres", "my   internal tool"]},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"skills": ["Python", "PostgreSQL", "my internal tool"]}
+    assert normalize_profile_skills(["sql", "HTML", "api", "GIT", "redis"]) == [
+        "SQL",
+        "HTML",
+        "API",
+        "Git",
+        "Redis",
+    ]
+    assert normalize_profile_skills(["my   internal tool", " ", "MY   INTERNAL TOOL"]) == [
+        "my internal tool"
+    ]
+
+
+def test_manual_profile_payload_uses_normalized_skills() -> None:
+    profile = UserProfilePutIn.model_validate(
+        {"target_roles": ["Engineer"], "skills": [" redis ", "PYTHON", "python"]}
+    )
+
+    assert profile.skills == ["Redis", "Python"]
+
+
+def test_profile_language_normalization_endpoint_is_stateless() -> None:
+    response = client.post(
+        "/profile/languages/normalize",
+        json={
+            "languages": [
+                {"language": " English ", "level": "b1"},
+                {"language": "Russian", "level": "NATIVE"},
+                {"language": "Eastern   Armenian", "level": "c1"},
+            ]
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "languages": [
+            {"language": "English", "level": "B1"},
+            {"language": "Russian", "level": "native"},
+            {"language": "Eastern Armenian", "level": "C1"},
+        ]
+    }
+
+
+@pytest.mark.parametrize("level", ["conversational", "advanced", "unknown", "Английский", "qwerty", " "])
+def test_profile_languages_reject_unsupported_levels(level: str) -> None:
+    with pytest.raises(ValueError, match="language level must be one of"):
+        UserProfilePutIn.model_validate(
+            {"target_roles": ["Engineer"], "languages": [{"language": "English", "level": level}]}
+        )
+
+
+@pytest.mark.parametrize(
+    "languages",
+    [
+        [{"language": "English", "level": "B1"}, {"language": "English", "level": "C1"}],
+        [{"language": "English", "level": "B1"}, {"language": " english ", "level": "B1"}],
+    ],
+)
+def test_profile_languages_reject_duplicate_normalized_names(languages: list[dict[str, str]]) -> None:
+    with pytest.raises(ValueError, match="languages must not contain duplicate language names"):
+        UserProfilePutIn.model_validate({"target_roles": ["Engineer"], "languages": languages})
+
+
+def test_profile_languages_reject_malformed_repeated_words() -> None:
+    with pytest.raises(ValueError, match="language level must be one of"):
+        UserProfilePutIn.model_validate(
+            {
+                "target_roles": ["Engineer"],
+                "languages": [{"language": "Английский Английский", "level": "Английский"}],
+            }
+        )
+
+
+def test_profile_output_keeps_legacy_language_shape_readable() -> None:
+    output = UserProfileOut.model_validate(
+        {
+            "user_id": 1,
+            **complete_profile(),
+            "languages": [{"language": "English English", "level": "English"}],
+            "created_at": "2026-09-02T00:00:00Z",
+            "updated_at": "2026-09-02T00:00:00Z",
+        }
+    )
+
+    assert output.languages[0].model_dump() == {"language": "English English", "level": "English"}
+
+
 def test_profile_endpoints_return_not_found_for_missing_resources() -> None:
     user_id = create_user()
 
@@ -94,13 +199,27 @@ def test_target_roles_are_required_and_cannot_be_empty() -> None:
     assert client.put(f"/users/{user_id}/profile", json={"target_roles": [" "]}).status_code == 422
 
 
-def test_location_rejects_workplace_preferences() -> None:
+@pytest.mark.parametrize(
+    "location",
+    [
+        "remote", " REMOTE ", "hybrid", "onsite", "any", "Удалённо", "удаленно",
+        "  Гибрид", "Любой", "На   месте работодателя",
+    ],
+)
+def test_location_rejects_workplace_preferences(location: str) -> None:
     user_id = create_user()
     response = client.put(
         f"/users/{user_id}/profile",
-        json={"target_roles": ["Engineer"], "location": ["Remote"]},
+        json={"target_roles": ["Engineer"], "location": [location]},
     )
     assert response.status_code == 422
+
+
+@pytest.mark.parametrize("location", ["Москва", "Berlin", "Yerevan"])
+def test_location_keeps_free_text_geographic_values(location: str) -> None:
+    profile = UserProfilePutIn.model_validate({"target_roles": ["Engineer"], "location": [location]})
+
+    assert profile.location == [location]
 
 
 def test_profile_rejects_invalid_enum_values() -> None:

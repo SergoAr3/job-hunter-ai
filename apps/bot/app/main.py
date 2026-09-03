@@ -74,7 +74,7 @@ async def receive_target_roles(message: Message, state: FSMContext) -> None:
 
 @dp.message(ProfileSetupStates.skills, F.text)
 async def receive_skills(message: Message, state: FSMContext) -> None:
-    await handle_skills(message, state)
+    await handle_skills(message, state, api_client)
 
 
 @dp.message(ProfileSetupStates.location, F.text)
@@ -89,12 +89,12 @@ async def receive_salary(message: Message, state: FSMContext) -> None:
 
 @dp.message(ProfileSetupStates.languages, F.text)
 async def receive_languages(message: Message, state: FSMContext) -> None:
-    await handle_languages(message, state)
+    await handle_languages(message, state, api_client)
 
 
 @dp.message(ProfileSetupStates.edit_field, F.text)
 async def receive_profile_draft_field_input(message: Message, state: FSMContext) -> None:
-    await handle_profile_draft_field_input(message, state)
+    await handle_profile_draft_field_input(message, state, api_client)
 
 
 @dp.message(ProfileSetupStates.cv_waiting_document, F.document)

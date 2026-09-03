@@ -1,4 +1,4 @@
-from typing import Protocol
+from typing import Protocol, TypeGuard
 
 import httpx
 from aiogram.types import User
@@ -37,6 +37,12 @@ class BotApiClient(Protocol):
     async def get_user_profile(self, user_id: int) -> dict[str, object] | None: ...
 
     async def put_user_profile(self, user_id: int, profile: dict[str, object]) -> dict[str, object]: ...
+
+    async def normalize_profile_skills(self, skills: list[str]) -> list[str]: ...
+
+    async def normalize_profile_languages(
+        self, languages: list[dict[str, str]]
+    ) -> list[dict[str, str]]: ...
 
     async def create_profile_draft_from_cv(
         self, user_id: int, *, filename: str, content_type: str, content: bytes
@@ -121,6 +127,30 @@ class JobHunterApiClient:
         response.raise_for_status()
         return _json_object(response)
 
+    async def normalize_profile_skills(self, skills: list[str]) -> list[str]:
+        response = await self._client.post("/profile/skills/normalize", json={"skills": skills})
+        response.raise_for_status()
+        payload = _json_object(response)
+        normalized = payload.get("skills")
+        if not isinstance(normalized, list) or not all(isinstance(skill, str) for skill in normalized):
+            raise httpx.DecodingError(
+                "API response has invalid normalized skills shape", request=response.request
+            )
+        return normalized
+
+    async def normalize_profile_languages(
+        self, languages: list[dict[str, str]]
+    ) -> list[dict[str, str]]:
+        response = await self._client.post("/profile/languages/normalize", json={"languages": languages})
+        response.raise_for_status()
+        payload = _json_object(response)
+        normalized = payload.get("languages")
+        if not _is_language_list(normalized):
+            raise httpx.DecodingError(
+                "API response has invalid normalized languages shape", request=response.request
+            )
+        return normalized
+
     async def create_profile_draft_from_cv(
         self, user_id: int, *, filename: str, content_type: str, content: bytes
     ) -> dict[str, object]:
@@ -143,6 +173,16 @@ def _json_object(response: httpx.Response) -> dict[str, object]:
     if not isinstance(payload, dict):
         raise httpx.DecodingError("API response must be a JSON object", request=response.request)
     return payload
+
+
+def _is_language_list(value: object) -> TypeGuard[list[dict[str, str]]]:
+    return isinstance(value, list) and all(
+        isinstance(item, dict)
+        and set(item) == {"language", "level"}
+        and isinstance(item.get("language"), str)
+        and isinstance(item.get("level"), str)
+        for item in value
+    )
 
 
 def _user_profile_object(response: httpx.Response) -> dict[str, object]:

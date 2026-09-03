@@ -60,6 +60,58 @@ def test_put_user_profile_calls_full_replace_endpoint() -> None:
     asyncio.run(scenario())
 
 
+def test_normalize_profile_skills_uses_stateless_api_endpoint() -> None:
+    async def scenario() -> None:
+        requests: list[httpx.Request] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            requests.append(request)
+            return httpx.Response(200, json={"skills": ["Python", "PostgreSQL"]}, request=request)
+
+        client = JobHunterApiClient("http://api")
+        await client._client.aclose()
+        client._client = httpx.AsyncClient(base_url="http://api", transport=httpx.MockTransport(handler))
+        try:
+            result = await client.normalize_profile_skills(["python", "postgres"])
+        finally:
+            await client.close()
+
+        assert result == ["Python", "PostgreSQL"]
+        assert requests[0].method == "POST"
+        assert requests[0].url.path == "/profile/skills/normalize"
+        assert requests[0].content == b'{"skills":["python","postgres"]}'
+
+    asyncio.run(scenario())
+
+
+def test_normalize_profile_languages_uses_stateless_api_endpoint() -> None:
+    async def scenario() -> None:
+        requests: list[httpx.Request] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            requests.append(request)
+            return httpx.Response(
+                200,
+                json={"languages": [{"language": "English", "level": "B1"}]},
+                request=request,
+            )
+
+        client = JobHunterApiClient("http://api")
+        await client._client.aclose()
+        client._client = httpx.AsyncClient(base_url="http://api", transport=httpx.MockTransport(handler))
+        try:
+            result = await client.normalize_profile_languages([{"language": "English", "level": "b1"}])
+        finally:
+            await client.close()
+
+        assert result == [{"language": "English", "level": "B1"}]
+        assert requests[0].method == "POST"
+        assert requests[0].url.path == "/profile/languages/normalize"
+        assert requests[0].content == b'{"languages":[{"language":"English","level":"b1"}]}'
+
+    asyncio.run(scenario())
+
+
 def test_get_user_profile_returns_profile_object() -> None:
     async def scenario() -> None:
         requests: list[httpx.Request] = []

@@ -21,10 +21,16 @@ from app.cv_profile import handle_cv_profile_setup
 from app.jobs import handle_add_job, remove_active_match_inline_keyboard
 from app.applications import APPLICATIONS_BUTTON, handle_applications_menu, remove_active_applications_inline_keyboard
 from app.profile import (
+    ACTIVE_PROFILE_PROMPT_MESSAGE_ID,
+    CV_REPLACEMENT_DRAFT_SOURCE,
     PERSISTED_PROFILE_SNAPSHOT,
+    PROFILE_DRAFT_SOURCE,
     PROFILE_SECTION_EDIT_CALLBACK,
     PROFILE_SECTION_MESSAGE_ID,
+    PROFILE_SECTION_REPLACE_CV_CALLBACK,
+    ProfileSetupStates,
     handle_profile_setup,
+    profile_payload,
     remove_active_profile_inline_keyboard,
     show_persisted_profile_editor,
     show_saved_profile_card,
@@ -38,6 +44,8 @@ PROFILE_BUTTON = "👤 Мой профиль"
 MENU_ACTIONS = {ADD_JOB_BUTTON, APPLICATIONS_BUTTON, PROFILE_BUTTON}
 PROFILE_SETUP_CALLBACK = "profile_section:setup"
 PROFILE_CV_CALLBACK = "profile_section:cv"
+PROFILE_REPLACE_CV_CONTINUE_CALLBACK = "profile_replace_cv:continue"
+PROFILE_REPLACE_CV_CANCEL_CALLBACK = "profile_replace_cv:cancel"
 PROFILE_MISSING_MESSAGE = "Профиль пока не заполнен"
 PROFILE_LOAD_ERROR_MESSAGE = "Не удалось загрузить профиль. Попробуй ещё раз."
 
@@ -69,6 +77,15 @@ def missing_profile_keyboard() -> InlineKeyboardMarkup:
                     callback_data=PROFILE_CV_CALLBACK,
                 )
             ],
+        ]
+    )
+
+
+def profile_replacement_warning_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="📄 Продолжить", callback_data=PROFILE_REPLACE_CV_CONTINUE_CALLBACK)],
+            [InlineKeyboardButton(text="↩️ Отмена", callback_data=PROFILE_REPLACE_CV_CANCEL_CALLBACK)],
         ]
     )
 
@@ -143,8 +160,77 @@ async def profile_section_edit(callback: CallbackQuery, state: FSMContext) -> No
     await show_persisted_profile_editor(message, state)
 
 
+async def profile_section_replace_cv(callback: CallbackQuery, state: FSMContext) -> None:
+    await callback.answer()
+    if callback.message is None:
+        return
+    message = cast(Message, callback.message)
+    state_data = await state.get_data()
+    snapshot = state_data.get(PERSISTED_PROFILE_SNAPSHOT)
+    if not await is_active_profile_section_message(message, state) or not isinstance(snapshot, dict):
+        return
+    await remove_active_profile_section_keyboard(message, state)
+    await state.set_state(ProfileSetupStates.cv_replace_warning)
+    await state.update_data(
+        {
+            PROFILE_DRAFT_SOURCE: CV_REPLACEMENT_DRAFT_SOURCE,
+            PERSISTED_PROFILE_SNAPSHOT: profile_payload(snapshot),
+        }
+    )
+    warning = await message.answer(
+        "Новое CV создаст новый черновик профиля. Текущий сохранённый профиль не изменится до «Сохранить». "
+        "После сохранения данные профиля будут полностью заменены новым черновиком. Перед сохранением его можно проверить и отредактировать.",
+        reply_markup=profile_replacement_warning_keyboard(),
+    )
+    await state.update_data({ACTIVE_PROFILE_PROMPT_MESSAGE_ID: warning.message_id})
+
+
+async def profile_replacement_continue(callback: CallbackQuery, state: FSMContext) -> None:
+    await callback.answer()
+    if callback.message is None:
+        return
+    message = cast(Message, callback.message)
+    if not await _is_active_replacement_warning(message, state):
+        return
+    await _remove_inline_keyboard(message)
+    await state.update_data({ACTIVE_PROFILE_PROMPT_MESSAGE_ID: None})
+    await handle_cv_profile_setup(message, state, preserve_replacement_context=True)
+
+
+async def profile_replacement_cancel(callback: CallbackQuery, state: FSMContext) -> None:
+    await callback.answer()
+    if callback.message is None:
+        return
+    message = cast(Message, callback.message)
+    if not await _is_active_replacement_warning(message, state):
+        return
+    snapshot = (await state.get_data()).get(PERSISTED_PROFILE_SNAPSHOT)
+    if not isinstance(snapshot, dict):
+        return
+    await show_saved_profile_card(message, state, snapshot, replace_summary=True)
+
+
+async def _is_active_replacement_warning(message: Message, state: FSMContext) -> bool:
+    data = await state.get_data()
+    return (
+        await state.get_state() == ProfileSetupStates.cv_replace_warning.state
+        and data.get(PROFILE_DRAFT_SOURCE) == CV_REPLACEMENT_DRAFT_SOURCE
+        and data.get(ACTIVE_PROFILE_PROMPT_MESSAGE_ID) == message.message_id
+    )
+
+
+async def _remove_inline_keyboard(message: Message) -> None:
+    try:
+        await message.edit_reply_markup(reply_markup=None)
+    except TelegramAPIError:
+        logger.warning("Could not remove profile replacement warning keyboard", exc_info=True)
+
+
 async def is_active_profile_section_message(message: Message, state: FSMContext) -> bool:
-    return (await state.get_data()).get(PROFILE_SECTION_MESSAGE_ID) == message.message_id
+    return (
+        (await state.get_state()) is None
+        and (await state.get_data()).get(PROFILE_SECTION_MESSAGE_ID) == message.message_id
+    )
 
 
 async def remove_active_profile_section_keyboard(message: Message, state: FSMContext) -> None:
@@ -173,3 +259,6 @@ def register_main_menu_handlers(
     router.callback_query.register(profile_section_setup, F.data == PROFILE_SETUP_CALLBACK)
     router.callback_query.register(profile_section_cv, F.data == PROFILE_CV_CALLBACK)
     router.callback_query.register(profile_section_edit, F.data == PROFILE_SECTION_EDIT_CALLBACK)
+    router.callback_query.register(profile_section_replace_cv, F.data == PROFILE_SECTION_REPLACE_CV_CALLBACK)
+    router.callback_query.register(profile_replacement_continue, F.data == PROFILE_REPLACE_CV_CONTINUE_CALLBACK)
+    router.callback_query.register(profile_replacement_cancel, F.data == PROFILE_REPLACE_CV_CANCEL_CALLBACK)

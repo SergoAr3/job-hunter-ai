@@ -23,16 +23,21 @@ from app.menu import (
     PROFILE_LOAD_ERROR_MESSAGE,
     PROFILE_MISSING_MESSAGE,
     PROFILE_SECTION_MESSAGE_ID,
+    PROFILE_SECTION_REPLACE_CV_CALLBACK,
+    PROFILE_REPLACE_CV_CONTINUE_CALLBACK,
     PROFILE_SETUP_CALLBACK,
     main_menu_action,
     profile_section_edit,
+    profile_section_replace_cv,
     profile_section_setup,
 )
 from app.main import add_job, cancel, dp, profile_setup
 from app.profile import (
     ACTIVE_PROFILE_PROMPT_MESSAGE_ID,
+    CV_REPLACEMENT_DRAFT_SOURCE,
     PERSISTED_PROFILE_SNAPSHOT,
     PROFILE_DRAFT_SOURCE,
+    PROFILE_EDITING_FIELD,
     PROFILE_SECTION_EDIT_CALLBACK,
     PROFILE_CANCELLED_MESSAGE,
     ProfileSetupStates,
@@ -120,6 +125,14 @@ class FakeApiClient:
             raise self.error
         return self.profile
 
+    async def normalize_profile_skills(self, skills: list[str]) -> list[str]:
+        return skills
+
+    async def normalize_profile_languages(
+        self, languages: list[dict[str, str]]
+    ) -> list[dict[str, str]]:
+        return languages
+
 
 def make_state() -> tuple[MemoryStorage, FSMContext]:
     storage = MemoryStorage()
@@ -172,6 +185,153 @@ async def set_dispatcher_state(bot: Bot, state: str | None, data: dict[str, obje
     await context.set_state(state)
     await context.set_data(data or {})
     return context
+
+
+def test_dispatcher_routes_active_field_edit_back_to_picker(monkeypatch) -> None:
+    async def scenario() -> None:
+        bot = Bot("123456:menu-test-token")
+        answers: list[str] = []
+        removed_message_ids: list[int] = []
+
+        async def answer(message: Message, text: str, **kwargs: object) -> SimpleNamespace:
+            answers.append(text)
+            return SimpleNamespace(message_id=30 + len(answers))
+
+        async def edit_reply_markup(message: Message, **kwargs: object) -> None:
+            assert kwargs == {"reply_markup": None}
+            removed_message_ids.append(message.message_id)
+
+        async def callback_answer(callback: CallbackQuery, **kwargs: object) -> None:
+            return None
+
+        monkeypatch.setattr(Message, "answer", answer)
+        monkeypatch.setattr(Message, "edit_reply_markup", edit_reply_markup)
+        monkeypatch.setattr(CallbackQuery, "answer", callback_answer)
+        state = await set_dispatcher_state(
+            bot,
+            ProfileSetupStates.edit_field.state,
+            {
+                "target_roles": ["Engineer"],
+                "skills": ["Python", "PostgreSQL"],
+                PROFILE_DRAFT_SOURCE: "persisted",
+                PROFILE_EDITING_FIELD: "skills",
+                ACTIVE_PROFILE_PROMPT_MESSAGE_ID: 17,
+            },
+        )
+
+        await dp.feed_update(bot, make_profile_callback_update("profile:edit_back", update_id=701, message_id=17))
+
+        data = await state.get_data()
+        assert data["skills"] == ["Python", "PostgreSQL"]
+        assert PROFILE_EDITING_FIELD not in data
+        assert data[ACTIVE_PROFILE_PROMPT_MESSAGE_ID] == 31
+        assert await state.get_state() == ProfileSetupStates.edit_field.state
+        assert answers == ["Какое поле изменить?"]
+        assert removed_message_ids == [17]
+
+        await dp.feed_update(bot, make_profile_callback_update("profile:edit_back", update_id=702, message_id=17))
+
+        assert answers == ["Какое поле изменить?"]
+        assert removed_message_ids == [17]
+        await bot.session.close()
+
+    asyncio.run(scenario())
+
+
+def test_dispatcher_saved_card_callbacks_are_stale_after_editor_or_replacement_transition(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def scenario() -> None:
+        bot = Bot("123456:menu-test-token")
+        answers: list[str] = []
+
+        async def answer(message: Message, text: str, **kwargs: object) -> SimpleNamespace:
+            answers.append(text)
+            return SimpleNamespace(message_id=30 + len(answers))
+
+        async def callback_answer(callback: CallbackQuery, **kwargs: object) -> None:
+            return None
+
+        async def failed_cleanup(
+            _bot: Bot, *, chat_id: int, message_id: int, reply_markup: object | None = None
+        ) -> None:
+            raise TelegramBadRequest(method=EditMessageReplyMarkup(), message="cleanup failed")
+
+        async def edit_reply_markup(message: Message, **kwargs: object) -> None:
+            assert kwargs == {"reply_markup": None}
+
+        monkeypatch.setattr(Message, "answer", answer)
+        monkeypatch.setattr(Message, "edit_reply_markup", edit_reply_markup)
+        monkeypatch.setattr(CallbackQuery, "answer", callback_answer)
+        monkeypatch.setattr(Bot, "edit_message_reply_markup", failed_cleanup)
+
+        snapshot = saved_profile()
+        state = await set_dispatcher_state(
+            bot,
+            None,
+            {PROFILE_SECTION_MESSAGE_ID: 10, PERSISTED_PROFILE_SNAPSHOT: snapshot},
+        )
+        await dp.feed_update(
+            bot, make_profile_callback_update(PROFILE_SECTION_EDIT_CALLBACK, update_id=710, message_id=10)
+        )
+        await state.update_data(skills=["Unsaved draft skill"])
+        await dp.feed_update(
+            bot, make_profile_callback_update(PROFILE_SECTION_EDIT_CALLBACK, update_id=711, message_id=10)
+        )
+
+        assert await state.get_state() == ProfileSetupStates.edit_field.state
+        assert (await state.get_data())["skills"] == ["Unsaved draft skill"]
+        assert answers == ["Какое поле изменить?"]
+
+        await state.set_state(None)
+        await state.set_data({PROFILE_SECTION_MESSAGE_ID: 10, PERSISTED_PROFILE_SNAPSHOT: snapshot})
+        answers.clear()
+        await dp.feed_update(
+            bot,
+            make_profile_callback_update(
+                PROFILE_SECTION_REPLACE_CV_CALLBACK, update_id=712, message_id=10
+            ),
+        )
+        warning_id = (await state.get_data())[ACTIVE_PROFILE_PROMPT_MESSAGE_ID]
+        replacement_data = await state.get_data()
+        await dp.feed_update(
+            bot,
+            make_profile_callback_update(
+                PROFILE_SECTION_REPLACE_CV_CALLBACK, update_id=713, message_id=10
+            ),
+        )
+        await dp.feed_update(
+            bot, make_profile_callback_update(PROFILE_SECTION_EDIT_CALLBACK, update_id=714, message_id=10)
+        )
+
+        assert await state.get_state() == ProfileSetupStates.cv_replace_warning.state
+        assert await state.get_data() == replacement_data
+        assert len(answers) == 1
+
+        await dp.feed_update(
+            bot,
+            make_profile_callback_update(
+                PROFILE_REPLACE_CV_CONTINUE_CALLBACK, update_id=715, message_id=warning_id
+            ),
+        )
+        waiting_data = await state.get_data()
+        await dp.feed_update(
+            bot, make_profile_callback_update(PROFILE_SECTION_EDIT_CALLBACK, update_id=716, message_id=10)
+        )
+        await dp.feed_update(
+            bot,
+            make_profile_callback_update(
+                PROFILE_SECTION_REPLACE_CV_CALLBACK, update_id=717, message_id=10
+            ),
+        )
+
+        assert await state.get_state() == ProfileSetupStates.cv_waiting_document.state
+        assert (await state.get_data()) == waiting_data
+        assert waiting_data[PROFILE_DRAFT_SOURCE] == CV_REPLACEMENT_DRAFT_SOURCE
+        assert waiting_data[PERSISTED_PROFILE_SNAPSHOT] == profile_payload(snapshot)
+        await bot.session.close()
+
+    asyncio.run(scenario())
 
 
 def test_menu_add_job_clears_active_profile_flow_and_removes_skip_keyboard() -> None:
@@ -229,7 +389,7 @@ def test_menu_add_job_cleans_active_profile_enum_keyboard() -> None:
 def test_menu_profile_renders_existing_saved_profile_without_starting_wizard() -> None:
     async def scenario() -> None:
         storage, state = make_state()
-        await state.set_state(AddJobStates.waiting_for_url)
+        await state.set_state(None)
         message = FakeMessage(PROFILE_BUTTON)
 
         api = FakeApiClient(saved_profile())
@@ -336,7 +496,7 @@ def test_menu_profile_invalid_response_shows_load_error_without_snapshot() -> No
 def test_profile_section_setup_button_starts_existing_profile_setup_flow() -> None:
     async def scenario() -> None:
         storage, state = make_state()
-        await state.set_state(AddJobStates.waiting_for_url)
+        await state.set_state(None)
         message = FakeMessage(message_id=12)
         callback = FakeCallback(PROFILE_SETUP_CALLBACK, message)
         await state.update_data(**{PROFILE_SECTION_MESSAGE_ID: 12})
@@ -376,6 +536,7 @@ def test_profile_section_edit_loads_persisted_snapshot_into_generic_draft() -> N
         assert "updated_at" not in data
         assert message.bot.removed_keyboards == [(456, 12)]
         assert message.answers[-1][0] == "Какое поле изменить?"
+        assert message.answers[-1][1].inline_keyboard[-1][0].text == "❌ Отменить"
         await storage.close()
 
     asyncio.run(scenario())
@@ -447,7 +608,7 @@ def test_regular_fsm_text_is_not_a_menu_action() -> None:
         await state.set_state(ProfileSetupStates.skills)
         message = FakeMessage("Python, FastAPI")
 
-        await handle_skills(message, state)
+        await handle_skills(message, state, FakeApiClient())
 
         assert await state.get_state() == ProfileSetupStates.experience.state
         assert message.answers[0][0] != REQUEST_URL_MESSAGE
@@ -489,6 +650,7 @@ def test_dispatcher_routes_regular_text_to_profile_fsm(monkeypatch) -> None:
             return SimpleNamespace(message_id=len(answers))
 
         monkeypatch.setattr(Message, "answer", answer)
+        monkeypatch.setattr(main_module, "api_client", FakeApiClient())
         state = await set_dispatcher_state(bot, ProfileSetupStates.skills.state)
 
         await dp.feed_update(bot, make_update("Python, FastAPI", update_id=1))
