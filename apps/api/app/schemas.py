@@ -226,6 +226,21 @@ class JobOut(BaseModel):
     updated_at: datetime
 
 
+class ApplicationNotePutIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    note: str = Field(strict=True, min_length=1, max_length=1000)
+
+    @field_validator("note", mode="before")
+    @classmethod
+    def trim_note(cls, value: object) -> object:
+        if isinstance(value, str):
+            value = value.strip()
+            if "\u0000" in value:
+                raise ValueError("note must not contain NUL")
+        return value
+
+
 class ApplicationStatusPutIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -239,6 +254,7 @@ class ApplicationOut(BaseModel):
     user_id: int
     job_id: int
     status: ApplicationStatus
+    note: str | None
     created_at: datetime
     updated_at: datetime
 

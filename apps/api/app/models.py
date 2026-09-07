@@ -207,6 +207,7 @@ class Application(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
     job_id: Mapped[int] = mapped_column(ForeignKey("jobs.id"), nullable=False)
+    note: Mapped[str | None] = mapped_column(Text, nullable=True)
     status: Mapped[str] = mapped_column(
         String(16), default=ApplicationStatus.SAVED.value, server_default=ApplicationStatus.SAVED.value
     )

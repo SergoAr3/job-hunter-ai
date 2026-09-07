@@ -307,6 +307,26 @@ def list_applications_for_user(
     )
 
 
+def set_application_note(
+    session: Session, user_id: int, application_id: int, note: str | None,
+) -> tuple[Application, Job] | None:
+    try:
+        application = get_application_for_user(session, user_id, application_id)
+        if application is None:
+            return None
+        job = session.get(Job, application.job_id)
+        if job is None:
+            return None
+        if application.note != note:
+            application.note = note
+            session.commit()
+            session.refresh(application)
+        return application, job
+    except Exception:
+        session.rollback()
+        raise
+
+
 def set_application_status(
     session: Session, user_id: int, application_id: int, status: ApplicationStatus
 ) -> tuple[Application, Job] | None:

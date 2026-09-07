@@ -9,6 +9,7 @@ from app.schemas import (
     ApplicationDetailOut,
     ApplicationListItemOut,
     ApplicationOut,
+    ApplicationNotePutIn,
     ApplicationStatusPutIn,
     ApplicationsPageOut,
     JobOut,
@@ -28,6 +29,7 @@ from app.services.applications import (
     list_applications_for_user,
     save_application_for_user,
     set_application_status,
+    set_application_note,
 )
 from app.services.job_matching import calculate_match
 from app.services.cv_profile_draft import (
@@ -222,6 +224,33 @@ def update_application_status(
     session: Session = Depends(get_session),
 ) -> ApplicationDetailOut:
     result = set_application_status(session, user_id, application_id, payload.status)
+    if result is None:
+        raise HTTPException(status_code=404, detail={"code": "APPLICATION_NOT_FOUND"})
+    application, job = result
+    return ApplicationDetailOut(
+        application=ApplicationOut.model_validate(application), job=JobOut.model_validate(job)
+    )
+
+
+@app.put("/users/{user_id}/applications/{application_id}/note", response_model=ApplicationDetailOut)
+def update_application_note(
+    user_id: int, application_id: int, payload: ApplicationNotePutIn,
+    session: Session = Depends(get_session),
+) -> ApplicationDetailOut:
+    return _write_application_note(session, user_id, application_id, payload.note)
+
+
+@app.delete("/users/{user_id}/applications/{application_id}/note", response_model=ApplicationDetailOut)
+def delete_application_note(
+    user_id: int, application_id: int, session: Session = Depends(get_session),
+) -> ApplicationDetailOut:
+    return _write_application_note(session, user_id, application_id, None)
+
+
+def _write_application_note(
+    session: Session, user_id: int, application_id: int, note: str | None,
+) -> ApplicationDetailOut:
+    result = set_application_note(session, user_id, application_id, note)
     if result is None:
         raise HTTPException(status_code=404, detail={"code": "APPLICATION_NOT_FOUND"})
     application, job = result
