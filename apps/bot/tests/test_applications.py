@@ -19,6 +19,7 @@ from app.applications import (
     APPLICATIONS_APPLICATION_ID,
     APPLICATIONS_MESSAGE_ID,
     APPLICATIONS_OFFSET,
+    APPLICATIONS_LIST_TOKEN,
     APPLICATIONS_VIEW,
     APPLICATIONS_DETAIL_VIEW,
     APPLICATIONS_LIST_VIEW,
@@ -87,7 +88,7 @@ class Api:
             return 5
         return 1
 
-    async def list_applications(self, user_id: int, *, limit: int, offset: int) -> dict[str, object]:
+    async def list_applications(self, user_id: int, *, limit: int, offset: int, status: str | None = None) -> dict[str, object]:
         assert limit == PAGE_SIZE
         self.list_calls.append(user_id)
         return self.pages[offset // PAGE_SIZE]
@@ -118,9 +119,9 @@ def test_list_pagination_detail_and_stale_callback() -> None:
         await show_applications_list(root, state, api)
         canonical = root.answers[-1]
         assert (await state.get_data())[APPLICATIONS_MESSAGE_ID] == canonical.message_id
-        await handle_applications_callback(Callback("applications:page:5", canonical), state, api)
+        await handle_applications_callback(Callback(await list_callback(state, "page:5"), canonical), state, api)
         assert "Second" in canonical.text and (await state.get_data())[APPLICATIONS_OFFSET] == 5
-        await handle_applications_callback(Callback("applications:open:8:5", canonical), state, api)
+        await handle_applications_callback(Callback(await list_callback(state, "open:8"), canonical), state, api)
         assert "Python Developer" in canonical.text
         assert api.detail_calls == [(1, 8)]
         assert 999 not in api.create_users
@@ -218,6 +219,8 @@ async def _dispatcher_state(bot: Bot, data: dict[str, object]) -> FSMContext:
         key=StorageKey(bot_id=bot.id, chat_id=456, user_id=123),
     )
     await state.clear()
+    if data.get(APPLICATIONS_VIEW) == APPLICATIONS_LIST_VIEW:
+        data.setdefault(APPLICATIONS_LIST_TOKEN, "initial-list")
     await state.set_data(data)
     return state
 
@@ -261,7 +264,7 @@ def test_dispatcher_detail_match_list_invalidates_old_detail_context(
         state = await _dispatcher_state(bot, {APPLICATIONS_MESSAGE_ID: 10})
 
         await main_module.dp.feed_update(bot, _applications_callback_update("applications:page:5", update_id=1, message_id=10))
-        await main_module.dp.feed_update(bot, _applications_callback_update("applications:open:18:5", update_id=2, message_id=10))
+        await main_module.dp.feed_update(bot, _applications_callback_update(await list_callback(state, "open:18"), update_id=2, message_id=10))
         await main_module.dp.feed_update(bot, _applications_callback_update("applications:match:18:5", update_id=3, message_id=10))
         data = await state.get_data()
         assert data[APPLICATIONS_MESSAGE_ID] == 10
@@ -457,3 +460,8 @@ def test_application_match_edit_failure_replaces_canonical_message_and_stales_ol
         await storage.close()
 
     asyncio.run(scenario())
+
+
+async def list_callback(state: FSMContext, action: str) -> str:
+    token = (await state.get_data())[APPLICATIONS_LIST_TOKEN]
+    return f"applications:list:{token}:{action}"

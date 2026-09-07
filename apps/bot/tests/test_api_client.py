@@ -305,3 +305,42 @@ def test_put_application_status_contract_and_errors(outcome):
         assert requests[0].url.path == "/users/4/applications/18/status"
         assert requests[0].content == b'{"status":"applied"}'
     asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("status", [None, "saved", "applied", "interview", "rejected", "offer"])
+def test_list_applications_filter_query(status):
+    async def scenario():
+        def handler(request):
+            assert request.method == "GET"
+            assert request.url.path == "/users/7/applications"
+            expected = {"limit": "5", "offset": "10"}
+            if status is not None:
+                expected["status"] = status
+            assert dict(request.url.params) == expected
+            return httpx.Response(200, json={"items": [], "has_next": False})
+        client = JobHunterApiClient("http://api")
+        await client._client.aclose()
+        client._client = httpx.AsyncClient(base_url="http://api", transport=httpx.MockTransport(handler))
+        try:
+            assert await client.list_applications(7, limit=5, offset=10, status=status) == {"items": [], "has_next": False}
+        finally:
+            await client.close()
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("outcome", [422, 500, "timeout"])
+def test_list_applications_filter_does_not_mask_http_error(outcome):
+    async def scenario():
+        def handler(request):
+            if outcome == "timeout":
+                raise httpx.ReadTimeout("test", request=request)
+            return httpx.Response(outcome, json={"detail": "test"})
+        client = JobHunterApiClient("http://api")
+        await client._client.aclose()
+        client._client = httpx.AsyncClient(base_url="http://api", transport=httpx.MockTransport(handler))
+        try:
+            with pytest.raises(httpx.HTTPError):
+                await client.list_applications(7, limit=5, offset=0, status="saved")
+        finally:
+            await client.close()
+    asyncio.run(scenario())

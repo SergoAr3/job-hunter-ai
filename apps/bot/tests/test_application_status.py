@@ -17,7 +17,7 @@ from app.applications import (
     APPLICATIONS_OFFSET, APPLICATIONS_STATUS_TOKEN, APPLICATIONS_DETAIL_VIEW,
     STATUS_LABELS, APPLICATION_NOT_FOUND_MESSAGE,
 )
-from test_applications import DispatcherApi, _dispatcher_state, _applications_callback_update
+from test_applications import list_callback, DispatcherApi, _dispatcher_state, _applications_callback_update
 
 
 @pytest.mark.parametrize("missing_on", ["open", "set", "back"])
@@ -61,7 +61,7 @@ def test_dispatcher_status_not_found_returns_to_list(monkeypatch, missing_on):
             await main_module.dp.feed_update(bot, _applications_callback_update(data, update_id=counter, message_id=10))
 
         try:
-            await feed("applications:open:18:0")
+            await feed(await list_callback(state, "open:18"))
             if missing_on == "open":
                 api.get_application = missing
                 failed_callback = "applications:status:18:0"
@@ -147,7 +147,7 @@ def test_dispatcher_status_lifecycle(monkeypatch, failure):
             counter += 1
             await main_module.dp.feed_update(bot, _applications_callback_update(data, update_id=counter, message_id=message_id))
 
-        await feed("applications:open:18:5")
+        await feed(await list_callback(state, "open:18"))
         assert "Статус: Сохранена" in edits[-1][1]
         await feed("applications:status:999:5")
         assert (await state.get_data()).get(APPLICATIONS_STATUS_TOKEN) is None
@@ -197,7 +197,7 @@ def test_dispatcher_status_lifecycle(monkeypatch, failure):
             await feed("applications:page:5")
             await feed(f"applications:set:{nav_token}:rejected")
             assert len(puts) == 1
-            await feed("applications:open:18:5")
+            await feed(await list_callback(state, "open:18"))
             await feed("applications:status:18:5")
             menu_token = (await state.get_data())[APPLICATIONS_STATUS_TOKEN]
             await main_module.dp.feed_update(bot, Update(update_id=100, message=Message(
