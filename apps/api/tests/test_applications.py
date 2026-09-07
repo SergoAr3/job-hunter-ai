@@ -129,8 +129,9 @@ def test_database_status_check_rejects_unknown_status() -> None:
     job_id = response.json()["job"]["id"]
 
     with TestSessionLocal() as session:
-        session.add(Application(user_id=user_id, job_id=job_id, status="unknown"))
-        with pytest.raises(IntegrityError):
+        application = session.get(Application, response.json()["application"]["id"])
+        application.status = "unknown"
+        with pytest.raises(IntegrityError, match="ck_applications_status"):
             session.commit()
 
 

@@ -3,12 +3,13 @@ from starlette.concurrency import run_in_threadpool
 from sqlalchemy.orm import Session
 
 from app.database import get_session
-from app.models import Job
+from app.models import ApplicationStatus, Job
 from app.schemas import (
     ApplicationCreateIn,
     ApplicationDetailOut,
     ApplicationListItemOut,
     ApplicationOut,
+    ApplicationStatusPutIn,
     ApplicationsPageOut,
     JobOut,
     ProfileLanguagesNormalizeIn,
@@ -26,6 +27,7 @@ from app.services.applications import (
     get_application_for_user,
     list_applications_for_user,
     save_application_for_user,
+    set_application_status,
 )
 from app.services.job_matching import calculate_match
 from app.services.cv_profile_draft import (
@@ -182,6 +184,7 @@ def read_applications(
         items=[
             ApplicationListItemOut(
                 app_id=application.id,
+                status=ApplicationStatus(application.status),
                 job_id=job.id,
                 created_at=application.created_at,
                 title=job.title,
@@ -207,6 +210,20 @@ def read_application(
     job = session.get(Job, application.job_id)
     if job is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail={"code": "APPLICATION_NOT_FOUND"})
+    return ApplicationDetailOut(
+        application=ApplicationOut.model_validate(application), job=JobOut.model_validate(job)
+    )
+
+
+@app.put("/users/{user_id}/applications/{application_id}/status", response_model=ApplicationDetailOut)
+def update_application_status(
+    user_id: int, application_id: int, payload: ApplicationStatusPutIn,
+    session: Session = Depends(get_session),
+) -> ApplicationDetailOut:
+    result = set_application_status(session, user_id, application_id, payload.status)
+    if result is None:
+        raise HTTPException(status_code=404, detail={"code": "APPLICATION_NOT_FOUND"})
+    application, job = result
     return ApplicationDetailOut(
         application=ApplicationOut.model_validate(application), job=JobOut.model_validate(job)
     )
