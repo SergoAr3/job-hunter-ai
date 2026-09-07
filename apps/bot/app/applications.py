@@ -1,6 +1,7 @@
-"""Read-only saved applications section with one active inline message."""
+"""Saved applications and status controls with one active inline message."""
 
 import logging
+import secrets
 from typing import cast
 
 import httpx
@@ -27,6 +28,12 @@ APPLICATIONS_APPLICATION_ID = "applications_application_id"
 APPLICATIONS_LIST_VIEW = "list"
 APPLICATIONS_DETAIL_VIEW = "detail"
 APPLICATIONS_MATCH_VIEW = "match"
+APPLICATIONS_STATUS_VIEW = "status_picker"
+APPLICATIONS_STATUS_TOKEN = "applications_status_token"
+STATUS_LABELS = {
+    "saved": "Сохранена", "applied": "Откликнулся", "interview": "Собеседование",
+    "rejected": "Отказ", "offer": "Оффер",
+}
 PAGE_SIZE = 5
 APPLICATIONS_EMPTY_MESSAGE = "Сохранённых вакансий пока нет."
 APPLICATIONS_LOAD_ERROR_MESSAGE = "Не удалось загрузить вакансии. Попробуй ещё раз."
@@ -41,7 +48,7 @@ def _list_item_text(item: dict[str, object], index: int) -> str:
     title = item.get("title") if isinstance(item.get("title"), str) else "Без названия"
     company = item.get("company") if isinstance(item.get("company"), str) else "Компания не указана"
     location = item.get("location") if isinstance(item.get("location"), str) else "Локация не указана"
-    return f"{index}. {title} — {company}\n📍 {location} · {_workplace_label(item.get('workplace_type'))}"
+    return f"{index}. {title} — {company}\n📍 {location} · {_workplace_label(item.get('workplace_type'))}\nСтатус: {STATUS_LABELS.get(str(item.get('status')), 'Не указан')}"
 
 
 def applications_list_keyboard(items: list[dict[str, object]], *, offset: int, has_next: bool) -> InlineKeyboardMarkup:
@@ -63,6 +70,7 @@ def applications_list_keyboard(items: list[dict[str, object]], *, offset: int, h
 
 def application_detail_keyboard(application_id: int, offset: int) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="Изменить статус", callback_data=f"applications:status:{application_id}:{offset}")],
         [InlineKeyboardButton(text="🔎 Почему подходит?", callback_data=f"applications:match:{application_id}:{offset}")],
         [InlineKeyboardButton(text="⬅️ К списку", callback_data=f"applications:page:{offset}")],
     ])
@@ -89,6 +97,7 @@ async def show_applications_list(
     offset: int = 0,
     user_id: int | None = None,
 ) -> None:
+    await state.update_data({APPLICATIONS_STATUS_TOKEN: None})
     try:
         if user_id is None:
             if message.from_user is None:
@@ -157,6 +166,9 @@ async def handle_applications_callback(callback: CallbackQuery, state: FSMContex
         return
     view = state_data.get(APPLICATIONS_VIEW)
     data = callback.data or ""
+    if data.startswith(("applications:status:", "applications:set:", "applications:status_back:")):
+        await _handle_status_callback(callback, message, state, api_client, state_data)
+        return
     if data == "applications:add":
         await remove_active_applications_inline_keyboard(message, state)
         await handle_add_job(message, state)
@@ -232,12 +244,21 @@ async def _show_application_detail(
     except httpx.HTTPError:
         logger.warning("Could not load application detail", exc_info=True)
         return
+    await _render_application_detail(message, state, detail, application_id, offset)
+
+
+async def _render_application_detail(
+    message: Message, state: FSMContext, detail: dict[str, object], application_id: int, offset: int,
+) -> None:
     job = detail["job"]
     assert isinstance(job, dict)
+    application = detail.get("application")
+    status = application.get("status") if isinstance(application, dict) else None
+    await state.update_data({APPLICATIONS_STATUS_TOKEN: None, APPLICATIONS_VIEW: APPLICATIONS_DETAIL_VIEW})
     await _replace_or_send(
         message,
         state,
-        format_job_card(job) or "Вакансия без данных.",
+        (format_job_card(job) or "Вакансия без данных.") + f"\n\nСтатус: {STATUS_LABELS.get(str(status), 'Не указан')}",
         application_detail_keyboard(application_id, offset),
     )
     await state.update_data(
@@ -257,6 +278,7 @@ async def _show_application_match(
     application_id: int,
     offset: int,
 ) -> None:
+    await state.update_data({APPLICATIONS_STATUS_TOKEN: None})
     try:
         match = await api_client.get_application_match(user_id, application_id)
     except httpx.HTTPError:
@@ -289,8 +311,79 @@ async def _show_application_match(
 
 
 async def remove_active_applications_inline_keyboard(message: Message, state: FSMContext) -> None:
+    await state.update_data({APPLICATIONS_STATUS_TOKEN: None})
     message_id = (await state.get_data()).get(APPLICATIONS_MESSAGE_ID)
     await _remove_applications_inline_keyboard(message, message_id)
+
+
+async def _handle_status_callback(
+    callback: CallbackQuery, message: Message, state: FSMContext, api_client: BotApiClient,
+    context: dict[str, object],
+) -> None:
+    parts = (callback.data or "").split(":")
+    action = parts[1]
+    opening = action == "status"
+    if opening:
+        if len(parts) != 4 or context.get(APPLICATIONS_VIEW) != APPLICATIONS_DETAIL_VIEW:
+            return
+        if not parts[2].isdecimal() or not parts[3].isdecimal():
+            return
+        if int(parts[2]) != context.get(APPLICATIONS_APPLICATION_ID) or int(parts[3]) != context.get(APPLICATIONS_OFFSET):
+            return
+    else:
+        if len(parts) != (4 if action == "set" else 3):
+            return
+        if context.get(APPLICATIONS_VIEW) != APPLICATIONS_STATUS_VIEW or parts[2] != context.get(APPLICATIONS_STATUS_TOKEN):
+            return
+        if action == "set" and parts[3] not in STATUS_LABELS:
+            return
+    application_id = context.get(APPLICATIONS_APPLICATION_ID)
+    offset = context.get(APPLICATIONS_OFFSET)
+    if not isinstance(application_id, int) or not isinstance(offset, int):
+        return
+    if not opening:
+        await state.update_data({APPLICATIONS_STATUS_TOKEN: None, APPLICATIONS_VIEW: "status_loading"})
+    try:
+        user_id = await api_client.create_or_get_user(callback.from_user)
+        if action == "set":
+            detail = await api_client.put_application_status(user_id, application_id, parts[3])
+        else:
+            detail = await api_client.get_application(user_id, application_id)
+    except httpx.HTTPError as error:
+        if isinstance(error, httpx.HTTPStatusError) and error.response.status_code == 404:
+            await state.update_data({
+                APPLICATIONS_STATUS_TOKEN: None,
+                APPLICATIONS_VIEW: "not_found",
+                APPLICATIONS_APPLICATION_ID: None,
+            })
+            await _replace_or_send(
+                message, state, APPLICATION_NOT_FOUND_MESSAGE,
+                InlineKeyboardMarkup(inline_keyboard=[[
+                    InlineKeyboardButton(text="⬅️ К списку", callback_data=f"applications:page:{offset}")
+                ]]),
+            )
+            return
+        logger.warning("Could not load or update application status", exc_info=True)
+        # A timeout may follow a committed write. Do not claim that DB is unchanged.
+        await state.update_data({APPLICATIONS_STATUS_TOKEN: None, APPLICATIONS_VIEW: APPLICATIONS_DETAIL_VIEW})
+        await _replace_or_send(
+            message, state, "Не удалось подтвердить статус. Открой выбор статуса заново, чтобы проверить актуальные данные.",
+            application_detail_keyboard(application_id, offset),
+        )
+        return
+    if not opening:
+        await _render_application_detail(message, state, detail, application_id, offset)
+        return
+    application = detail.get("application")
+    current = application.get("status") if isinstance(application, dict) else None
+    token = secrets.token_hex(4)
+    rows = [[InlineKeyboardButton(
+        text=("✓ " if status == current else "") + label,
+        callback_data=f"applications:set:{token}:{status}",
+    )] for status, label in STATUS_LABELS.items()]
+    rows.append([InlineKeyboardButton(text="⬅️ Назад", callback_data=f"applications:status_back:{token}")])
+    await state.update_data({APPLICATIONS_VIEW: APPLICATIONS_STATUS_VIEW, APPLICATIONS_STATUS_TOKEN: token})
+    await _replace_or_send(message, state, "Выбери статус вакансии:", InlineKeyboardMarkup(inline_keyboard=rows))
 
 
 async def _remove_applications_inline_keyboard(message: Message, message_id: object) -> None:

@@ -267,3 +267,41 @@ def test_create_profile_draft_from_cv_calls_multipart_endpoint() -> None:
         assert b"%PDF-test" in requests[0].content
 
     asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("outcome", ["success", "404", "422", "500", "network", "json", "shape", "wrong_owner", "wrong_status"])
+def test_put_application_status_contract_and_errors(outcome):
+    async def scenario():
+        requests = []
+        payload = {"application": {"id": 18, "user_id": 4, "job_id": 2, "status": "applied"}, "job": {"id": 2}}
+        def handler(request):
+            requests.append(request)
+            if outcome == "network":
+                raise httpx.ConnectError("test", request=request)
+            if outcome.isdecimal():
+                return httpx.Response(int(outcome), json={"detail": {"code": "APPLICATION_NOT_FOUND"}})
+            if outcome == "json":
+                return httpx.Response(200, content=b"invalid json")
+            if outcome == "shape":
+                return httpx.Response(200, json={"application": {}, "job": []})
+            if outcome == "wrong_owner":
+                payload["application"]["user_id"] = 999
+            if outcome == "wrong_status":
+                payload["application"]["status"] = "garbage"
+            return httpx.Response(200, json=payload)
+        client = JobHunterApiClient("http://api")
+        await client._client.aclose()
+        client._client = httpx.AsyncClient(base_url="http://api", transport=httpx.MockTransport(handler))
+        try:
+            if outcome == "success":
+                assert await client.put_application_status(4, 18, "applied") == payload
+            else:
+                with pytest.raises(httpx.HTTPError):
+                    await client.put_application_status(4, 18, "applied")
+        finally:
+            await client.close()
+        assert len(requests) == 1
+        assert requests[0].method == "PUT"
+        assert requests[0].url.path == "/users/4/applications/18/status"
+        assert requests[0].content == b'{"status":"applied"}'
+    asyncio.run(scenario())

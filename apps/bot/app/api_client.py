@@ -34,6 +34,8 @@ class BotApiClient(Protocol):
 
     async def get_application(self, user_id: int, application_id: int) -> dict[str, object]: ...
 
+    async def put_application_status(self, user_id: int, application_id: int, status: str) -> dict[str, object]: ...
+
     async def get_user_profile(self, user_id: int) -> dict[str, object] | None: ...
 
     async def put_user_profile(self, user_id: int, profile: dict[str, object]) -> dict[str, object]: ...
@@ -113,6 +115,25 @@ class JobHunterApiClient:
             or not isinstance(job.get("id"), int)
         ):
             raise httpx.DecodingError("API response has invalid application detail shape", request=response.request)
+        return payload
+
+    async def put_application_status(self, user_id: int, application_id: int, status: str) -> dict[str, object]:
+        response = await self._client.put(
+            f"/users/{user_id}/applications/{application_id}/status", json={"status": status}
+        )
+        response.raise_for_status()
+        payload = _json_object(response)
+        application, job = payload.get("application"), payload.get("job")
+        if (
+            not isinstance(application, dict) or not isinstance(job, dict)
+            or type(application.get("id")) is not int or application["id"] != application_id
+            or type(application.get("user_id")) is not int
+            or application.get("user_id") != user_id
+            or type(application.get("job_id")) is not int
+            or type(job.get("id")) is not int or application.get("job_id") != job["id"]
+            or application.get("status") not in ("saved", "applied", "interview", "rejected", "offer")
+        ):
+            raise httpx.DecodingError("API response has invalid status detail shape", request=response.request)
         return payload
 
     async def get_user_profile(self, user_id: int) -> dict[str, object] | None:

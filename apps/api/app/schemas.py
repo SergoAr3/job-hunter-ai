@@ -226,6 +226,12 @@ class JobOut(BaseModel):
     updated_at: datetime
 
 
+class ApplicationStatusPutIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    status: ApplicationStatus
+
+
 class ApplicationOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -248,6 +254,7 @@ class ApplicationListItemOut(BaseModel):
     """Small application representation intended for the Telegram list."""
 
     app_id: int
+    status: ApplicationStatus
     job_id: int
     created_at: datetime
     title: str | None
