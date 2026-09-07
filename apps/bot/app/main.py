@@ -10,7 +10,7 @@ from aiogram.types import CallbackQuery, Message
 from app.api_client import JobHunterApiClient
 from app.cv_profile import handle_cv_document, handle_unsupported_cv_message
 from app.jobs import AddJobStates, handle_add_job, handle_cancel, handle_job_url, handle_match_callback
-from app.applications import handle_applications_callback
+from app.applications import ApplicationsStates, handle_applications_callback, handle_note_cancel, handle_note_text
 from app.menu import register_main_menu_handlers
 from app.profile import (
     ProfileSetupStates,
@@ -52,7 +52,9 @@ async def profile_setup(message: Message, state: FSMContext) -> None:
 
 @dp.message(Command("cancel"), StateFilter("*"))
 async def cancel(message: Message, state: FSMContext) -> None:
-    if is_profile_state(await state.get_state()):
+    if await state.get_state() == ApplicationsStates.waiting_for_note.state:
+        await handle_note_cancel(message, state, api_client)
+    elif is_profile_state(await state.get_state()):
         await remove_active_profile_inline_keyboard(message, state)
         await handle_profile_cancel(message, state)
     else:
@@ -60,6 +62,16 @@ async def cancel(message: Message, state: FSMContext) -> None:
 
 
 register_main_menu_handlers(dp, lambda: api_client)
+
+
+@dp.message(ApplicationsStates.waiting_for_note, F.text)
+async def receive_note_text(message: Message, state: FSMContext) -> None:
+    await handle_note_text(message, state, api_client)
+
+
+@dp.message(ApplicationsStates.waiting_for_note)
+async def receive_note_non_text(message: Message) -> None:
+    await message.answer("Отправь текст заметки или нажми Отмена.")
 
 
 @dp.message(AddJobStates.waiting_for_url, F.text)

@@ -44,14 +44,14 @@ class Message:
         self.text = ""
         self.reply_markup = None
 
-    async def answer(self, text: str, reply_markup: object = None) -> "Message":
+    async def answer(self, text: str, reply_markup: object = None, **kwargs) -> "Message":
         result = Message()
         result.from_user = SimpleNamespace(id=999, is_bot=True)
         result.text, result.reply_markup = text, reply_markup
         self.answers.append(result)
         return result
 
-    async def edit_text(self, text: str, reply_markup: object = None) -> None:
+    async def edit_text(self, text: str, reply_markup: object = None, **kwargs) -> None:
         self.text, self.reply_markup = text, reply_markup
 
 
@@ -399,7 +399,7 @@ def test_dispatcher_match_back_to_vacancy_restores_detail_as_canonical_view(
         assert api.detail_calls == [(4, 18)]
         assert answers == []
         assert [button.text for row in edits[-1][1].inline_keyboard for button in row] == [
-            "Изменить статус", "🔎 Почему подходит?", "⬅️ К списку"
+            "Изменить статус", "📝 Заметка", "🔎 Почему подходит?", "⬅️ К списку"
         ]
 
         await main_module.dp.feed_update(bot, _applications_callback_update("applications:match:18:5", update_id=22, message_id=10))

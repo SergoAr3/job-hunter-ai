@@ -36,6 +36,10 @@ class BotApiClient(Protocol):
 
     async def put_application_status(self, user_id: int, application_id: int, status: str) -> dict[str, object]: ...
 
+    async def put_application_note(self, user_id: int, application_id: int, note: str) -> dict[str, object]: ...
+
+    async def delete_application_note(self, user_id: int, application_id: int) -> dict[str, object]: ...
+
     async def get_user_profile(self, user_id: int) -> dict[str, object] | None: ...
 
     async def put_user_profile(self, user_id: int, profile: dict[str, object]) -> dict[str, object]: ...
@@ -137,6 +141,33 @@ class JobHunterApiClient:
             or application.get("status") not in ("saved", "applied", "interview", "rejected", "offer")
         ):
             raise httpx.DecodingError("API response has invalid status detail shape", request=response.request)
+        return payload
+
+    async def put_application_note(self, user_id: int, application_id: int, note: str) -> dict[str, object]:
+        response = await self._client.put(
+            f"/users/{user_id}/applications/{application_id}/note", json={"note": note}
+        )
+        return self._note_detail(response, user_id, application_id)
+
+    async def delete_application_note(self, user_id: int, application_id: int) -> dict[str, object]:
+        response = await self._client.delete(f"/users/{user_id}/applications/{application_id}/note")
+        return self._note_detail(response, user_id, application_id)
+
+    @staticmethod
+    def _note_detail(response: httpx.Response, user_id: int, application_id: int) -> dict[str, object]:
+        response.raise_for_status()
+        payload = _json_object(response)
+        application, job = payload.get("application"), payload.get("job")
+        if (
+            not isinstance(application, dict) or not isinstance(job, dict)
+            or type(application.get("id")) is not int or application["id"] != application_id
+            or type(application.get("user_id")) is not int or application["user_id"] != user_id
+            or type(job.get("id")) is not int or application.get("job_id") != job["id"]
+            or application.get("status") not in ("saved", "applied", "interview", "rejected", "offer")
+            or "note" not in application
+            or (application["note"] is not None and not isinstance(application["note"], str))
+        ):
+            raise httpx.DecodingError("API response has invalid note detail shape", request=response.request)
         return payload
 
     async def get_user_profile(self, user_id: int) -> dict[str, object] | None:

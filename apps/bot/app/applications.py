@@ -8,7 +8,8 @@ import httpx
 from aiogram.enums import ParseMode
 from aiogram.exceptions import TelegramAPIError
 from aiogram.fsm.context import FSMContext
-from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
+from aiogram.fsm.state import State, StatesGroup
+from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message, User
 
 from app.api_client import BotApiClient
 from app.jobs import (
@@ -42,6 +43,12 @@ PAGE_SIZE = 5
 APPLICATIONS_EMPTY_MESSAGE = "Сохранённых вакансий пока нет."
 APPLICATIONS_LOAD_ERROR_MESSAGE = "Не удалось загрузить вакансии. Попробуй ещё раз."
 APPLICATION_NOT_FOUND_MESSAGE = "Вакансия больше недоступна."
+APPLICATIONS_NOTE_TOKEN = "applications_note_token"
+APPLICATIONS_NOTE_VIEW = "note_input"
+
+
+class ApplicationsStates(StatesGroup):
+    waiting_for_note = State()
 
 
 def _workplace_label(value: object) -> str:
@@ -78,9 +85,11 @@ def applications_list_keyboard(
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def application_detail_keyboard(application_id: int, offset: int) -> InlineKeyboardMarkup:
+def application_detail_keyboard(application_id: int, offset: int, *, has_note: bool = False) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="Изменить статус", callback_data=f"applications:status:{application_id}:{offset}")],
+        [InlineKeyboardButton(text="📝 Заметка", callback_data=f"applications:note:{application_id}:{offset}")],
+        *([[InlineKeyboardButton(text="🗑 Удалить заметку", callback_data=f"applications:note_delete:{application_id}:{offset}")]] if has_note else []),
         [InlineKeyboardButton(text="🔎 Почему подходит?", callback_data=f"applications:match:{application_id}:{offset}")],
         [InlineKeyboardButton(text="⬅️ К списку", callback_data=f"applications:page:{offset}")],
     ])
@@ -154,11 +163,24 @@ async def _replace_or_send(
     markup: InlineKeyboardMarkup | None,
     *,
     parse_mode: ParseMode | None = None,
+    canonical_target: bool = False,
 ) -> None:
     active_id = (await state.get_data()).get(APPLICATIONS_MESSAGE_ID)
+    if canonical_target and isinstance(active_id, int) and active_id != message.message_id:
+        try:
+            await message.bot.edit_message_text(
+                chat_id=message.chat.id, message_id=active_id, text=text,
+                reply_markup=markup, parse_mode=parse_mode,
+            )
+            return
+        except TelegramAPIError as error:
+            if is_message_not_modified(error):
+                return
+            logger.warning("Could not edit applications message", exc_info=True)
+            await _remove_applications_inline_keyboard(message, active_id)
     if active_id == message.message_id:
         try:
-            if parse_mode is None:
+            if parse_mode is None and not canonical_target:
                 await message.edit_text(text, reply_markup=markup)
             else:
                 await message.edit_text(text, reply_markup=markup, parse_mode=parse_mode)
@@ -168,7 +190,7 @@ async def _replace_or_send(
                 return
             logger.warning("Could not edit applications message", exc_info=True)
             await _remove_applications_inline_keyboard(message, active_id)
-    if parse_mode is None:
+    if parse_mode is None and not canonical_target:
         sent = await message.answer(text, reply_markup=markup)
     else:
         sent = await message.answer(text, reply_markup=markup, parse_mode=parse_mode)
@@ -190,6 +212,11 @@ async def handle_applications_callback(callback: CallbackQuery, state: FSMContex
         return
     view = state_data.get(APPLICATIONS_VIEW)
     data = callback.data or ""
+    if data.startswith(("applications:note:", "applications:note_delete:", "applications:note_cancel:")):
+        await _handle_note_callback(callback, message, state, api_client, state_data)
+        return
+    if view in (APPLICATIONS_NOTE_VIEW, "note_loading") or await state.get_state() == ApplicationsStates.waiting_for_note.state:
+        return
     if data.startswith("applications:list:"):
         await _handle_list_callback(callback, message, state, api_client, state_data)
         return
@@ -339,22 +366,60 @@ async def _show_application_detail(
 async def _render_application_detail(
     message: Message, state: FSMContext, detail: dict[str, object], application_id: int, offset: int,
 ) -> None:
-    job = detail["job"]
-    assert isinstance(job, dict)
-    application = detail.get("application")
-    status = application.get("status") if isinstance(application, dict) else None
-    await state.update_data({APPLICATIONS_STATUS_TOKEN: None, APPLICATIONS_VIEW: APPLICATIONS_DETAIL_VIEW})
-    await _replace_or_send(
-        message,
-        state,
-        (format_job_card(job) or "Вакансия без данных.") + f"\n\nСтатус: {STATUS_LABELS.get(str(status), 'Не указан')}",
-        application_detail_keyboard(application_id, offset),
-    )
+    text, markup = _application_detail_content(detail, application_id, offset)
+    await state.update_data({APPLICATIONS_STATUS_TOKEN: None, APPLICATIONS_NOTE_TOKEN: None, APPLICATIONS_VIEW: APPLICATIONS_DETAIL_VIEW})
+    await _replace_or_send(message, state, text, markup, canonical_target=True)
     await state.update_data(
         **{
             APPLICATIONS_OFFSET: offset,
             APPLICATIONS_VIEW: APPLICATIONS_DETAIL_VIEW,
             APPLICATIONS_APPLICATION_ID: application_id,
+        }
+    )
+
+
+def _application_detail_content(
+    detail: dict[str, object], application_id: int, offset: int,
+) -> tuple[str, InlineKeyboardMarkup]:
+    job = detail["job"]
+    assert isinstance(job, dict)
+    application = detail.get("application")
+    status = application.get("status") if isinstance(application, dict) else None
+    note = application.get("note") if isinstance(application, dict) else None
+    note = note if isinstance(note, str) else None
+    suffix = f"\n\nСтатус: {STATUS_LABELS.get(str(status), 'Не указан')}"
+    if note:
+        suffix += f"\n\n📝 Заметка:\n{note}"
+    # Count UTF-16 units conservatively, including astral emoji.
+    budget = 4096 - len(suffix.encode("utf-16-le")) // 2
+    card = format_job_card(job) or "Вакансия без данных."
+    if len(card.encode("utf-16-le")) // 2 > budget:
+        card = card.encode("utf-16-le")[:max(0, budget - 1) * 2].decode("utf-16-le", errors="ignore") + "…"
+    return card + suffix, application_detail_keyboard(application_id, offset, has_note=bool(note))
+
+
+async def _send_new_application_detail(
+    message: Message, state: FSMContext, detail: dict[str, object], application_id: int, offset: int,
+) -> None:
+    text, markup = _application_detail_content(detail, application_id, offset)
+    old_message_id = (await state.get_data()).get(APPLICATIONS_MESSAGE_ID)
+    await state.update_data(
+        **{
+            APPLICATIONS_MESSAGE_ID: None,
+            APPLICATIONS_OFFSET: offset,
+            APPLICATIONS_VIEW: "note_replacing",
+            APPLICATIONS_APPLICATION_ID: application_id,
+            APPLICATIONS_STATUS_TOKEN: None,
+            APPLICATIONS_NOTE_TOKEN: None,
+            APPLICATIONS_LIST_TOKEN: None,
+        }
+    )
+    await _delete_application_message(message, old_message_id)
+    sent = await message.answer(text, reply_markup=markup, parse_mode=None)
+    await state.update_data(
+        **{
+            APPLICATIONS_MESSAGE_ID: sent.message_id,
+            APPLICATIONS_VIEW: APPLICATIONS_DETAIL_VIEW,
         }
     )
 
@@ -400,7 +465,7 @@ async def _show_application_match(
 
 
 async def remove_active_applications_inline_keyboard(message: Message, state: FSMContext) -> None:
-    await state.update_data({APPLICATIONS_STATUS_TOKEN: None, APPLICATIONS_LIST_TOKEN: None})
+    await state.update_data({APPLICATIONS_STATUS_TOKEN: None, APPLICATIONS_LIST_TOKEN: None, APPLICATIONS_NOTE_TOKEN: None})
     message_id = (await state.get_data()).get(APPLICATIONS_MESSAGE_ID)
     await _remove_applications_inline_keyboard(message, message_id)
 
@@ -473,6 +538,130 @@ async def _handle_status_callback(
     rows.append([InlineKeyboardButton(text="⬅️ Назад", callback_data=f"applications:status_back:{token}")])
     await state.update_data({APPLICATIONS_VIEW: APPLICATIONS_STATUS_VIEW, APPLICATIONS_STATUS_TOKEN: token})
     await _replace_or_send(message, state, "Выбери статус вакансии:", InlineKeyboardMarkup(inline_keyboard=rows))
+
+
+def _note_cancel_keyboard(token: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text="Отмена", callback_data=f"applications:note_cancel:{token}")
+    ]])
+
+
+async def _handle_note_callback(
+    callback: CallbackQuery, message: Message, state: FSMContext,
+    api_client: BotApiClient, context: dict[str, object],
+) -> None:
+    parts = (callback.data or "").split(":")
+    action = parts[1]
+    if action == "note_cancel":
+        if (len(parts) != 3 or not context.get(APPLICATIONS_NOTE_TOKEN)
+                or parts[2] != context[APPLICATIONS_NOTE_TOKEN]
+                or await state.get_state() != ApplicationsStates.waiting_for_note.state):
+            return
+    elif (len(parts) != 4 or context.get(APPLICATIONS_VIEW) != APPLICATIONS_DETAIL_VIEW
+          or not parts[2].isdecimal() or not parts[3].isdecimal()
+          or int(parts[2]) != context.get(APPLICATIONS_APPLICATION_ID)
+          or int(parts[3]) != context.get(APPLICATIONS_OFFSET)):
+        return
+    await _note_action(message, state, api_client, callback.from_user, action)
+
+
+async def handle_note_cancel(message: Message, state: FSMContext, api_client: BotApiClient) -> None:
+    await _note_action(message, state, api_client, message.from_user, "note_cancel")
+
+
+async def handle_note_text(message: Message, state: FSMContext, api_client: BotApiClient) -> None:
+    note = (message.text or "").strip()
+    if not 1 <= len(note) <= 1000 or "\u0000" in note:
+        await message.answer("Заметка должна содержать от 1 до 1000 символов текста.")
+        return
+    await _note_action(message, state, api_client, message.from_user, "save", note)
+
+
+async def _note_action(
+    message: Message, state: FSMContext, api_client: BotApiClient,
+    actor: User | None, action: str, note: str | None = None,
+) -> None:
+    context = await state.get_data()
+    application_id, offset = context.get(APPLICATIONS_APPLICATION_ID), context.get(APPLICATIONS_OFFSET)
+    if actor is None or type(application_id) is not int or type(offset) is not int:
+        return
+    # Event isolation serializes text/callback updates. Claim input before I/O.
+    await state.set_state(None)
+    await state.update_data({APPLICATIONS_VIEW: "note_loading", APPLICATIONS_NOTE_TOKEN: None,
+                             APPLICATIONS_STATUS_TOKEN: None, APPLICATIONS_LIST_TOKEN: None})
+    try:
+        user_id = await api_client.create_or_get_user(actor)
+        if action == "save":
+            assert note is not None
+            detail = await api_client.put_application_note(user_id, application_id, note)
+        elif action == "note_delete":
+            detail = await api_client.delete_application_note(user_id, application_id)
+        else:
+            detail = await api_client.get_application(user_id, application_id)
+    except httpx.HTTPError as error:
+        if isinstance(error, httpx.HTTPStatusError) and error.response.status_code == 404:
+            await state.update_data({APPLICATIONS_VIEW: "not_found", APPLICATIONS_APPLICATION_ID: None})
+            await _replace_or_send(message, state, APPLICATION_NOT_FOUND_MESSAGE,
+                InlineKeyboardMarkup(inline_keyboard=[[
+                    InlineKeyboardButton(text="⬅️ К списку", callback_data=f"applications:page:{offset}")
+                ]]), canonical_target=True)
+            return
+        if action in ("note", "note_delete"):
+            logger.warning("Could not load or delete application note", exc_info=True)
+            await state.update_data({APPLICATIONS_VIEW: APPLICATIONS_DETAIL_VIEW})
+            error_text = (
+                "Не удалось загрузить заметку. Попробуй ещё раз."
+                if action == "note"
+                else "Не удалось подтвердить удаление заметки. Повтори удаление или заново открой вакансию, чтобы проверить актуальные данные."
+            )
+            try:
+                await message.answer(error_text)
+            except TelegramAPIError:
+                logger.warning("Could not send application note error message", exc_info=True)
+            return
+        logger.warning("Could not confirm application note operation", exc_info=True)
+        token = secrets.token_hex(4)
+        await state.set_state(ApplicationsStates.waiting_for_note)
+        await state.update_data({APPLICATIONS_VIEW: APPLICATIONS_NOTE_VIEW, APPLICATIONS_NOTE_TOKEN: token})
+        await _replace_or_send(message, state,
+            "Не удалось подтвердить данные заметки. Отправь текст ещё раз или нажми Отмена, чтобы загрузить актуальную вакансию.",
+            _note_cancel_keyboard(token), canonical_target=True)
+        return
+    if action == "note":
+        application = detail["application"]
+        assert isinstance(application, dict)
+        current = application.get("note")
+        if current:
+            text = (
+                f"📝 Текущая заметка:\n\n{current}\n\n"
+                "Отправь новый текст заметки (1–1000 символов).\n\n"
+                "⚠️ Старая заметка будет полностью заменена."
+            )
+        else:
+            text = "Отправь текст заметки (1–1000 символов)."
+        token = secrets.token_hex(4)
+        await state.set_state(ApplicationsStates.waiting_for_note)
+        await state.update_data({APPLICATIONS_VIEW: APPLICATIONS_NOTE_VIEW, APPLICATIONS_NOTE_TOKEN: token})
+        await _replace_or_send(message, state, text, _note_cancel_keyboard(token), canonical_target=True)
+    elif action in ("save", "note_delete"):
+        try:
+            await _send_new_application_detail(message, state, detail, application_id, offset)
+        except TelegramAPIError:
+            # The API write is complete; stale prompt controls must stay inert.
+            await state.update_data({APPLICATIONS_VIEW: "note_render_failed"})
+            logger.warning("Application note saved/loaded but Telegram delivery failed", exc_info=True)
+    else:
+        await _render_application_detail(message, state, detail, application_id, offset)
+
+
+async def _delete_application_message(message: Message, message_id: object) -> None:
+    if not isinstance(message_id, int) or message.bot is None:
+        return
+    try:
+        await message.bot.delete_message(chat_id=message.chat.id, message_id=message_id)
+    except TelegramAPIError:
+        logger.warning("Could not delete replaced applications message", exc_info=True)
+        await _remove_applications_inline_keyboard(message, message_id)
 
 
 async def _remove_applications_inline_keyboard(message: Message, message_id: object) -> None:

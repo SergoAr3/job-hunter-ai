@@ -6,6 +6,42 @@ import pytest
 from app.api_client import JobHunterApiClient, _json_object
 
 
+@pytest.mark.parametrize("method", ["PUT", "DELETE"])
+def test_note_client_contract(method):
+    async def scenario():
+        requests = []
+        payload = {"application": {"id": 18, "user_id": 4, "job_id": 7,
+                    "status": "interview", "note": "text" if method == "PUT" else None},
+                   "job": {"id": 7}}
+        def handler(request):
+            requests.append(request)
+            return httpx.Response(200, json=payload)
+        client = JobHunterApiClient("http://api")
+        await client._client.aclose()
+        client._client = httpx.AsyncClient(base_url="http://api", transport=httpx.MockTransport(handler))
+        try:
+            if method == "PUT":
+                result = await client.put_application_note(4, 18, "text")
+            else:
+                result = await client.delete_application_note(4, 18)
+            assert result == payload
+            assert requests[0].method == method
+            assert requests[0].url.path == "/users/4/applications/18/note"
+            assert requests[0].content == (b'{"note":"text"}' if method == "PUT" else b"")
+        finally:
+            await client.close()
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("change", [{"id": 19}, {"user_id": 5}, {"job_id": 8}, {"note": 123}, {"status": "invalid"}])
+def test_note_client_rejects_invalid_detail(change):
+    application = {"id": 18, "user_id": 4, "job_id": 7, "status": "saved", "note": "text", **change}
+    response = httpx.Response(200, json={"application": application, "job": {"id": 7}},
+                              request=httpx.Request("PUT", "http://api/note"))
+    with pytest.raises(httpx.DecodingError):
+        JobHunterApiClient._note_detail(response, 4, 18)
+
+
 def complete_profile_response() -> dict[str, object]:
     return {
         "user_id": 7,
