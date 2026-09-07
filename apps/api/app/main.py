@@ -175,11 +175,12 @@ def save_application(
 @app.get("/users/{user_id}/applications", response_model=ApplicationsPageOut)
 def read_applications(
     user_id: int,
+    status: ApplicationStatus | None = Query(default=None),
     limit: int = Query(default=5, ge=1, le=5),
     offset: int = Query(default=0, ge=0),
     session: Session = Depends(get_session),
 ) -> ApplicationsPageOut:
-    rows = list_applications_for_user(session, user_id, limit=limit, offset=offset)
+    rows = list_applications_for_user(session, user_id, limit=limit, offset=offset, status=status)
     return ApplicationsPageOut(
         items=[
             ApplicationListItemOut(
