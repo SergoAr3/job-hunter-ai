@@ -1,4 +1,5 @@
-from datetime import datetime
+import re
+from datetime import date, datetime
 from typing import Protocol, TypeGuard
 
 import httpx
@@ -54,6 +55,10 @@ class BotApiClient(Protocol):
     async def put_application_note(self, user_id: int, application_id: int, note: str) -> dict[str, object]: ...
 
     async def delete_application_note(self, user_id: int, application_id: int) -> dict[str, object]: ...
+
+    async def set_application_next_action(self, user_id: int, application_id: int, action: str, due_on: str) -> dict[str, object]: ...
+
+    async def delete_application_next_action(self, user_id: int, application_id: int) -> dict[str, object]: ...
 
     async def get_user_profile(self, user_id: int) -> dict[str, object] | None: ...
 
@@ -204,6 +209,36 @@ class JobHunterApiClient:
             or (application["note"] is not None and not isinstance(application["note"], str))
         ):
             raise httpx.DecodingError("API response has invalid note detail shape", request=response.request)
+        return payload
+
+    async def set_application_next_action(self, user_id: int, application_id: int, action: str, due_on: str) -> dict[str, object]:
+        response = await self._client.put(
+            f"/users/{user_id}/applications/{application_id}/next-action",
+            json={"next_action": action, "next_action_due_on": due_on},
+        )
+        return self._next_action_detail(response, user_id, application_id)
+
+    async def delete_application_next_action(self, user_id: int, application_id: int) -> dict[str, object]:
+        response = await self._client.delete(f"/users/{user_id}/applications/{application_id}/next-action")
+        return self._next_action_detail(response, user_id, application_id)
+
+    @staticmethod
+    def _next_action_detail(response: httpx.Response, user_id: int, application_id: int) -> dict[str, object]:
+        payload = JobHunterApiClient._note_detail(response, user_id, application_id)
+        application = payload["application"]
+        assert isinstance(application, dict)
+        action, due_on = application.get("next_action"), application.get("next_action_due_on")
+        valid = "next_action" in application and "next_action_due_on" in application
+        if action is not None or due_on is not None:
+            valid = valid and isinstance(action, str) and 1 <= len(action) <= 500
+            valid = valid and isinstance(due_on, str) and re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}", due_on) is not None
+            if valid:
+                try:
+                    date.fromisoformat(str(due_on))
+                except ValueError:
+                    valid = False
+        if not valid:
+            raise httpx.DecodingError("API response has invalid next action detail shape", request=response.request)
         return payload
 
     async def get_user_profile(self, user_id: int) -> dict[str, object] | None:

@@ -1,5 +1,6 @@
 import logging
 import re
+from datetime import date
 from urllib.parse import urlsplit, urlunsplit
 
 from sqlalchemy import select
@@ -351,6 +352,28 @@ def set_application_note(
             return None
         if application.note != note:
             application.note = note
+            session.commit()
+            session.refresh(application)
+        return application, job
+    except Exception:
+        session.rollback()
+        raise
+
+
+def set_application_next_action(
+    session: Session, user_id: int, application_id: int,
+    action: str | None, due_on: date | None,
+) -> tuple[Application, Job] | None:
+    try:
+        application = get_application_for_user(session, user_id, application_id)
+        if application is None:
+            return None
+        job = session.get(Job, application.job_id)
+        if job is None:
+            return None
+        if (application.next_action, application.next_action_due_on) != (action, due_on):
+            application.next_action = action
+            application.next_action_due_on = due_on
             session.commit()
             session.refresh(application)
         return application, job

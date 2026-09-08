@@ -1,8 +1,9 @@
 """Saved applications and status controls with one active inline message."""
 
 import logging
+import re
 import secrets
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from typing import cast
 
 import httpx
@@ -47,10 +48,14 @@ APPLICATIONS_LOAD_ERROR_MESSAGE = "Не удалось загрузить вак
 APPLICATION_NOT_FOUND_MESSAGE = "Вакансия больше недоступна."
 APPLICATIONS_NOTE_TOKEN = "applications_note_token"
 APPLICATIONS_NOTE_VIEW = "note_input"
+APPLICATIONS_NEXT_ACTION_TOKEN = "applications_next_action_token"
+APPLICATIONS_NEXT_ACTION_DRAFT = "applications_next_action_draft"
 
 
 class ApplicationsStates(StatesGroup):
     waiting_for_note = State()
+    waiting_for_next_action = State()
+    waiting_for_next_action_due_on = State()
 
 
 def _workplace_label(value: object) -> str:
@@ -87,9 +92,11 @@ def applications_list_keyboard(
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def application_detail_keyboard(application_id: int, offset: int, *, has_note: bool = False) -> InlineKeyboardMarkup:
+def application_detail_keyboard(application_id: int, offset: int, *, has_note: bool = False, has_next_action: bool = False) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="Изменить статус", callback_data=f"applications:status:{application_id}:{offset}")],
+        [InlineKeyboardButton(text="📅 Следующее действие", callback_data=f"applications:next_action:{application_id}:{offset}")],
+        *([[InlineKeyboardButton(text="🗑 Удалить следующее действие", callback_data=f"applications:next_action_delete:{application_id}:{offset}")]] if has_next_action else []),
         [InlineKeyboardButton(text="📝 Заметка", callback_data=f"applications:note:{application_id}:{offset}")],
         *([[InlineKeyboardButton(text="🗑 Удалить заметку", callback_data=f"applications:note_delete:{application_id}:{offset}")]] if has_note else []),
         [InlineKeyboardButton(text="🕘 История статусов", callback_data=f"applications:history:{application_id}:{offset}")],
@@ -224,6 +231,14 @@ async def handle_applications_callback(callback: CallbackQuery, state: FSMContex
         return
     view = state_data.get(APPLICATIONS_VIEW)
     data = callback.data or ""
+    if data.startswith("applications:next_action"):
+        await _handle_next_action_callback(callback, message, state, api_client, state_data)
+        return
+    if str(view).startswith("next_action_") or await state.get_state() in (
+        ApplicationsStates.waiting_for_next_action.state,
+        ApplicationsStates.waiting_for_next_action_due_on.state,
+    ):
+        return
     if data.startswith(("applications:note:", "applications:note_delete:", "applications:note_cancel:")):
         await _handle_note_callback(callback, message, state, api_client, state_data)
         return
@@ -405,6 +420,10 @@ def _application_detail_content(
     note = application.get("note") if isinstance(application, dict) else None
     note = note if isinstance(note, str) else None
     suffix = f"\n\nСтатус: {STATUS_LABELS.get(str(status), 'Не указан')}"
+    action = application.get("next_action") if isinstance(application, dict) else None
+    due_on = application.get("next_action_due_on") if isinstance(application, dict) else None
+    if isinstance(action, str) and isinstance(due_on, str):
+        suffix += f"\n\n📅 Следующее действие:\n{_display_due_on(due_on)} — {action}"
     if note:
         suffix += f"\n\n📝 Заметка:\n{note}"
     # Count UTF-16 units conservatively, including astral emoji.
@@ -412,7 +431,7 @@ def _application_detail_content(
     card = format_job_card(job) or "Вакансия без данных."
     if len(card.encode("utf-16-le")) // 2 > budget:
         card = card.encode("utf-16-le")[:max(0, budget - 1) * 2].decode("utf-16-le", errors="ignore") + "…"
-    return card + suffix, application_detail_keyboard(application_id, offset, has_note=bool(note))
+    return card + suffix, application_detail_keyboard(application_id, offset, has_note=bool(note), has_next_action=bool(action))
 
 
 async def _send_new_application_detail(
@@ -574,6 +593,7 @@ def _utf16_units(value: str) -> int:
 
 
 async def remove_active_applications_inline_keyboard(message: Message, state: FSMContext) -> None:
+    await state.update_data({APPLICATIONS_NEXT_ACTION_TOKEN: None, APPLICATIONS_NEXT_ACTION_DRAFT: None})
     await state.update_data({APPLICATIONS_STATUS_TOKEN: None, APPLICATIONS_LIST_TOKEN: None, APPLICATIONS_NOTE_TOKEN: None})
     message_id = (await state.get_data()).get(APPLICATIONS_MESSAGE_ID)
     await _remove_applications_inline_keyboard(message, message_id)
@@ -647,6 +667,192 @@ async def _handle_status_callback(
     rows.append([InlineKeyboardButton(text="⬅️ Назад", callback_data=f"applications:status_back:{token}")])
     await state.update_data({APPLICATIONS_VIEW: APPLICATIONS_STATUS_VIEW, APPLICATIONS_STATUS_TOKEN: token})
     await _replace_or_send(message, state, "Выбери статус вакансии:", InlineKeyboardMarkup(inline_keyboard=rows))
+
+
+def _display_due_on(value: str) -> str:
+    parsed = date.fromisoformat(value)
+    return f"{parsed.day:02d}.{parsed.month:02d}.{parsed.year:04d}"
+
+
+def _next_action_keyboard(token: str, *, recovery: bool = False) -> InlineKeyboardMarkup:
+    action = "refresh" if recovery else "cancel"
+    return InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(
+            text="К актуальной вакансии" if recovery else "Отмена",
+            callback_data=f"applications:next_action_{action}:{token}",
+        )
+    ]])
+
+
+def _next_action_due_prompt(*, invalid: bool = False, non_text: bool = False) -> str:
+    text = (
+        "Когда это сделать?\n\n"
+        "Отправь дату в формате ДД.ММ.ГГГГ, например: 12.09.2026.\n"
+        "Пока можно указать только дату, без времени."
+    )
+    if invalid:
+        return text + "\n\n⚠️ Дата некорректна. Попробуй ещё раз."
+    if non_text:
+        return text + "\n\n⚠️ Отправь дату текстом."
+    return text
+
+
+async def _send_next_action_due_prompt(
+    message: Message, state: FSMContext, action: str, token: str,
+) -> bool:
+    old_message_id = (await state.get_data()).get(APPLICATIONS_MESSAGE_ID)
+    try:
+        sent = await message.answer(
+            _next_action_due_prompt(), reply_markup=_next_action_keyboard(token)
+        )
+    except TelegramAPIError:
+        logger.warning("Could not send next action due prompt", exc_info=True)
+        return False
+    await state.set_state(ApplicationsStates.waiting_for_next_action_due_on)
+    await state.update_data({
+        APPLICATIONS_MESSAGE_ID: sent.message_id,
+        APPLICATIONS_NEXT_ACTION_DRAFT: action,
+        APPLICATIONS_NEXT_ACTION_TOKEN: token,
+        APPLICATIONS_VIEW: "next_action_due_input",
+    })
+    await _delete_application_message(message, old_message_id)
+    return True
+
+
+async def handle_next_action_non_text(message: Message, state: FSMContext) -> None:
+    if await state.get_state() != ApplicationsStates.waiting_for_next_action_due_on.state:
+        await message.answer("Отправь текст действия или нажми Отмена.")
+        return
+    token = (await state.get_data()).get(APPLICATIONS_NEXT_ACTION_TOKEN)
+    if not isinstance(token, str):
+        return
+    await _replace_or_send(
+        message,
+        state,
+        _next_action_due_prompt(non_text=True),
+        _next_action_keyboard(token),
+        canonical_target=True,
+    )
+
+
+async def _handle_next_action_callback(
+    callback: CallbackQuery, message: Message, state: FSMContext,
+    api_client: BotApiClient, context: dict[str, object],
+) -> None:
+    parts = (callback.data or "").split(":")
+    action = parts[1]
+    if action in ("next_action_cancel", "next_action_refresh"):
+        if len(parts) != 3 or not context.get(APPLICATIONS_NEXT_ACTION_TOKEN) or parts[2] != context[APPLICATIONS_NEXT_ACTION_TOKEN]:
+            return
+        expected = ("next_action_input", "next_action_due_input") if action == "next_action_cancel" else ("next_action_error",)
+        if context.get(APPLICATIONS_VIEW) not in expected:
+            return
+    elif action in ("next_action", "next_action_delete"):
+        if (len(parts) != 4 or context.get(APPLICATIONS_VIEW) != APPLICATIONS_DETAIL_VIEW
+                or not parts[2].isdecimal() or not parts[3].isdecimal()
+                or int(parts[2]) != context.get(APPLICATIONS_APPLICATION_ID)
+                or int(parts[3]) != context.get(APPLICATIONS_OFFSET)):
+            return
+    else:
+        return
+    await _next_action_operation(message, state, api_client, callback.from_user, action)
+
+
+async def handle_next_action_cancel(message: Message, state: FSMContext, api_client: BotApiClient) -> None:
+    await _next_action_operation(message, state, api_client, message.from_user, "next_action_cancel")
+
+
+async def handle_next_action_text(message: Message, state: FSMContext, api_client: BotApiClient) -> None:
+    text = (message.text or "").strip()
+    if await state.get_state() == ApplicationsStates.waiting_for_next_action.state:
+        if not 1 <= len(text) <= 500 or "\u0000" in text:
+            await message.answer("Действие должно содержать от 1 до 500 символов текста.")
+            return
+        await _send_next_action_due_prompt(message, state, text, secrets.token_hex(4))
+        return
+    try:
+        if re.fullmatch(r"[0-9]{2}\.[0-9]{2}\.[0-9]{4}", text) is None:
+            raise ValueError
+        day, month, year = map(int, text.split("."))
+        due_on = date(year, month, day).isoformat()
+    except ValueError:
+        token = (await state.get_data()).get(APPLICATIONS_NEXT_ACTION_TOKEN)
+        if not isinstance(token, str):
+            return
+        await _replace_or_send(
+            message,
+            state,
+            _next_action_due_prompt(invalid=True),
+            _next_action_keyboard(token),
+            canonical_target=True,
+        )
+        return
+    await _next_action_operation(message, state, api_client, message.from_user, "save", due_on)
+
+
+async def _next_action_operation(
+    message: Message, state: FSMContext, api_client: BotApiClient, actor: User | None,
+    action: str, due_on: str | None = None,
+) -> None:
+    context = await state.get_data()
+    application_id, offset = context.get(APPLICATIONS_APPLICATION_ID), context.get(APPLICATIONS_OFFSET)
+    draft = context.get(APPLICATIONS_NEXT_ACTION_DRAFT)
+    if actor is None or type(application_id) is not int or type(offset) is not int:
+        return
+    await state.set_state(None)
+    await state.update_data({APPLICATIONS_VIEW: "next_action_loading", APPLICATIONS_NEXT_ACTION_TOKEN: None,
+                             APPLICATIONS_NEXT_ACTION_DRAFT: None, APPLICATIONS_STATUS_TOKEN: None,
+                             APPLICATIONS_NOTE_TOKEN: None, APPLICATIONS_LIST_TOKEN: None})
+    try:
+        user_id = await api_client.create_or_get_user(actor)
+        if action == "save":
+            assert isinstance(draft, str) and due_on is not None
+            detail = await api_client.set_application_next_action(user_id, application_id, draft, due_on)
+        elif action == "next_action_delete":
+            detail = await api_client.delete_application_next_action(user_id, application_id)
+        else:
+            detail = await api_client.get_application(user_id, application_id)
+    except httpx.HTTPError as error:
+        if isinstance(error, httpx.HTTPStatusError) and error.response.status_code == 404:
+            await state.update_data({APPLICATIONS_VIEW: "not_found", APPLICATIONS_APPLICATION_ID: None})
+            await _replace_or_send(message, state, APPLICATION_NOT_FOUND_MESSAGE,
+                InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(
+                    text="⬅️ К списку", callback_data=f"applications:page:{offset}")]]), canonical_target=True)
+            return
+        logger.warning("Could not confirm application next action operation", exc_info=True)
+        if action == "next_action":
+            await state.update_data({APPLICATIONS_VIEW: APPLICATIONS_DETAIL_VIEW})
+            try:
+                await message.answer("Не удалось загрузить следующее действие. Попробуй ещё раз.")
+            except TelegramAPIError:
+                logger.warning("Could not send next action load error", exc_info=True)
+            return
+        token = secrets.token_hex(4)
+        await state.update_data({APPLICATIONS_VIEW: "next_action_error", APPLICATIONS_NEXT_ACTION_TOKEN: token})
+        await _replace_or_send(message, state,
+            "Не удалось подтвердить актуальные данные. Открой вакансию, чтобы проверить следующее действие.",
+            _next_action_keyboard(token, recovery=True), canonical_target=True)
+        return
+    if action == "next_action":
+        application = detail["application"]
+        assert isinstance(application, dict)
+        current, current_date = application.get("next_action"), application.get("next_action_due_on")
+        text = "Что нужно сделать дальше?\n\nНапример: «Написать HR»"
+        if isinstance(current, str) and isinstance(current_date, str):
+            text = (f"📅 Текущее следующее действие:\n{_display_due_on(current_date)} — {current}\n\n"
+                    "Отправь новое действие.\n\n⚠️ Текущее действие и дата будут полностью заменены.")
+        token = secrets.token_hex(4)
+        await state.set_state(ApplicationsStates.waiting_for_next_action)
+        await state.update_data({APPLICATIONS_VIEW: "next_action_input", APPLICATIONS_NEXT_ACTION_TOKEN: token})
+        await _replace_or_send(message, state, text, _next_action_keyboard(token), canonical_target=True)
+    elif action in ("save", "next_action_delete"):
+        try:
+            await _send_new_application_detail(message, state, detail, application_id, offset)
+        except TelegramAPIError:
+            await state.update_data({APPLICATIONS_VIEW: "next_action_render_failed"})
+            logger.warning("Next action persisted but Telegram delivery failed", exc_info=True)
+    else:
+        await _render_application_detail(message, state, detail, application_id, offset)
 
 
 def _note_cancel_keyboard(token: str) -> InlineKeyboardMarkup:

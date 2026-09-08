@@ -11,6 +11,7 @@ from app.api_client import JobHunterApiClient
 from app.cv_profile import handle_cv_document, handle_unsupported_cv_message
 from app.jobs import AddJobStates, handle_add_job, handle_cancel, handle_job_url, handle_match_callback
 from app.applications import ApplicationsStates, handle_applications_callback, handle_note_cancel, handle_note_text
+from app.applications import handle_next_action_cancel, handle_next_action_non_text, handle_next_action_text
 from app.menu import register_main_menu_handlers
 from app.profile import (
     ProfileSetupStates,
@@ -54,6 +55,8 @@ async def profile_setup(message: Message, state: FSMContext) -> None:
 async def cancel(message: Message, state: FSMContext) -> None:
     if await state.get_state() == ApplicationsStates.waiting_for_note.state:
         await handle_note_cancel(message, state, api_client)
+    elif await state.get_state() in (ApplicationsStates.waiting_for_next_action.state, ApplicationsStates.waiting_for_next_action_due_on.state):
+        await handle_next_action_cancel(message, state, api_client)
     elif is_profile_state(await state.get_state()):
         await remove_active_profile_inline_keyboard(message, state)
         await handle_profile_cancel(message, state)
@@ -62,6 +65,16 @@ async def cancel(message: Message, state: FSMContext) -> None:
 
 
 register_main_menu_handlers(dp, lambda: api_client)
+
+
+@dp.message(StateFilter(ApplicationsStates.waiting_for_next_action, ApplicationsStates.waiting_for_next_action_due_on), F.text)
+async def receive_next_action_text(message: Message, state: FSMContext) -> None:
+    await handle_next_action_text(message, state, api_client)
+
+
+@dp.message(StateFilter(ApplicationsStates.waiting_for_next_action, ApplicationsStates.waiting_for_next_action_due_on))
+async def receive_next_action_non_text(message: Message, state: FSMContext) -> None:
+    await handle_next_action_non_text(message, state)
 
 
 @dp.message(ApplicationsStates.waiting_for_note, F.text)

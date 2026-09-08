@@ -407,7 +407,7 @@ def test_dispatcher_match_back_to_vacancy_restores_detail_as_canonical_view(
         assert api.detail_calls == [(4, 18)]
         assert answers == []
         assert [button.text for row in edits[-1][1].inline_keyboard for button in row] == [
-            "Изменить статус", "📝 Заметка", "🕘 История статусов",
+            "Изменить статус", "📅 Следующее действие", "📝 Заметка", "🕘 История статусов",
             "🔎 Почему подходит?", "⬅️ К списку"
         ]
 
