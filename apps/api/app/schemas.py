@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timezone
 from decimal import Decimal
 from urllib.parse import urlsplit
 
@@ -245,6 +245,25 @@ class ApplicationStatusPutIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     status: ApplicationStatus
+
+
+class ApplicationStatusHistoryItemOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    status: ApplicationStatus
+    occurred_at: datetime
+
+    @field_validator("occurred_at")
+    @classmethod
+    def ensure_timezone(cls, value: datetime) -> datetime:
+        # SQLite drops timezone metadata; its CURRENT_TIMESTAMP is UTC.
+        if value.tzinfo is None:
+            return value.replace(tzinfo=timezone.utc)
+        return value.astimezone(timezone.utc)
+
+
+class ApplicationStatusHistoryOut(BaseModel):
+    items: list[ApplicationStatusHistoryItemOut]
 
 
 class ApplicationOut(BaseModel):

@@ -2,6 +2,7 @@
 
 import logging
 import secrets
+from datetime import datetime, timezone
 from typing import cast
 
 import httpx
@@ -30,6 +31,7 @@ APPLICATIONS_APPLICATION_ID = "applications_application_id"
 APPLICATIONS_LIST_VIEW = "list"
 APPLICATIONS_DETAIL_VIEW = "detail"
 APPLICATIONS_MATCH_VIEW = "match"
+APPLICATIONS_HISTORY_VIEW = "history"
 APPLICATIONS_STATUS_VIEW = "status_picker"
 APPLICATIONS_STATUS_TOKEN = "applications_status_token"
 APPLICATIONS_FILTER_STATUS = "applications_filter_status"
@@ -90,6 +92,7 @@ def application_detail_keyboard(application_id: int, offset: int, *, has_note: b
         [InlineKeyboardButton(text="Изменить статус", callback_data=f"applications:status:{application_id}:{offset}")],
         [InlineKeyboardButton(text="📝 Заметка", callback_data=f"applications:note:{application_id}:{offset}")],
         *([[InlineKeyboardButton(text="🗑 Удалить заметку", callback_data=f"applications:note_delete:{application_id}:{offset}")]] if has_note else []),
+        [InlineKeyboardButton(text="🕘 История статусов", callback_data=f"applications:history:{application_id}:{offset}")],
         [InlineKeyboardButton(text="🔎 Почему подходит?", callback_data=f"applications:match:{application_id}:{offset}")],
         [InlineKeyboardButton(text="⬅️ К списку", callback_data=f"applications:page:{offset}")],
     ])
@@ -100,6 +103,15 @@ def application_match_keyboard(application_id: int, offset: int) -> InlineKeyboa
         [InlineKeyboardButton(text="⬅️ К вакансии", callback_data=f"applications:detail:{application_id}:{offset}")],
         [InlineKeyboardButton(text="📋 К списку", callback_data=f"applications:page:{offset}")],
     ])
+
+
+def application_history_keyboard(application_id: int, offset: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(
+            text="⬅️ К вакансии",
+            callback_data=f"applications:detail:{application_id}:{offset}",
+        )
+    ]])
 
 
 async def show_applications_list(
@@ -228,9 +240,14 @@ async def handle_applications_callback(callback: CallbackQuery, state: FSMContex
     if data.startswith(("applications:status:", "applications:set:", "applications:status_back:")):
         await _handle_status_callback(callback, message, state, api_client, state_data)
         return
+    if data.startswith("applications:history:"):
+        await _handle_history_callback(callback, message, state, api_client, state_data)
+        return
     if data.startswith("applications:match:") and view not in (None, APPLICATIONS_DETAIL_VIEW):
         return
-    if data.startswith("applications:detail:") and view != APPLICATIONS_MATCH_VIEW:
+    if data.startswith("applications:detail:") and view not in (
+        APPLICATIONS_MATCH_VIEW, APPLICATIONS_HISTORY_VIEW
+    ):
         return
     try:
         user_id = await api_client.create_or_get_user(callback.from_user)
@@ -462,6 +479,98 @@ async def _show_application_match(
             APPLICATIONS_APPLICATION_ID: application_id,
         }
     )
+
+
+async def _handle_history_callback(
+    callback: CallbackQuery,
+    message: Message,
+    state: FSMContext,
+    api_client: BotApiClient,
+    context: dict[str, object],
+) -> None:
+    parts = (callback.data or "").split(":")
+    if (
+        len(parts) != 4
+        or context.get(APPLICATIONS_VIEW) != APPLICATIONS_DETAIL_VIEW
+        or not parts[2].isdecimal()
+        or not parts[3].isdecimal()
+    ):
+        return
+    application_id, offset = int(parts[2]), int(parts[3])
+    if (
+        application_id != context.get(APPLICATIONS_APPLICATION_ID)
+        or offset != context.get(APPLICATIONS_OFFSET)
+    ):
+        return
+    await state.update_data({APPLICATIONS_VIEW: "history_loading"})
+    try:
+        user_id = await api_client.create_or_get_user(callback.from_user)
+        history = await api_client.get_application_status_history(user_id, application_id)
+    except httpx.HTTPError as error:
+        if isinstance(error, httpx.HTTPStatusError) and error.response.status_code == 404:
+            await state.update_data({
+                APPLICATIONS_VIEW: "not_found", APPLICATIONS_APPLICATION_ID: None,
+            })
+            await _replace_or_send(
+                message,
+                state,
+                APPLICATION_NOT_FOUND_MESSAGE,
+                InlineKeyboardMarkup(inline_keyboard=[[
+                    InlineKeyboardButton(
+                        text="⬅️ К списку", callback_data=f"applications:page:{offset}"
+                    )
+                ]]),
+            )
+            return
+        logger.warning("Could not load application status history", exc_info=True)
+        await state.update_data({APPLICATIONS_VIEW: APPLICATIONS_DETAIL_VIEW})
+        try:
+            await message.answer("Не удалось загрузить историю статусов. Попробуй ещё раз.")
+        except TelegramAPIError:
+            logger.warning("Could not send status history error message", exc_info=True)
+        return
+    items = history.get("items")
+    assert isinstance(items, list)
+    text = _format_application_status_history(cast(list[dict[str, object]], items))
+    await state.update_data({APPLICATIONS_VIEW: APPLICATIONS_HISTORY_VIEW})
+    await _replace_or_send(
+        message, state, text, application_history_keyboard(application_id, offset)
+    )
+
+
+def _format_application_status_history(items: list[dict[str, object]]) -> str:
+    header = "🕘 История статусов"
+    if not items:
+        return f"{header}\n\nИстория статусов пока пуста."
+    lines = [
+        f"{_history_timestamp(item['occurred_at'])} — "
+        f"{STATUS_LABELS.get(str(item.get('status')), 'Не указан')}"
+        for item in items
+    ]
+    full = f"{header}\n\n" + "\n".join(lines)
+    if _utf16_units(full) <= 4096:
+        return full
+    notice = "Показана только часть истории."
+    visible: list[str] = []
+    for line in lines:
+        candidate = f"{header}\n\n" + "\n".join([*visible, line]) + f"\n\n{notice}"
+        if _utf16_units(candidate) > 4096:
+            break
+        visible.append(line)
+    return f"{header}\n\n" + "\n".join(visible) + f"\n\n{notice}"
+
+
+def _history_timestamp(value: object) -> str:
+    if not isinstance(value, str):
+        raise ValueError("Status history timestamp must be a string")
+    parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        raise ValueError("Status history timestamp must be timezone-aware")
+    return parsed.astimezone(timezone.utc).strftime("%d.%m.%Y %H:%M UTC")
+
+
+def _utf16_units(value: str) -> int:
+    return len(value.encode("utf-16-le")) // 2
 
 
 async def remove_active_applications_inline_keyboard(message: Message, state: FSMContext) -> None:

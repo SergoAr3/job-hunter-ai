@@ -73,6 +73,8 @@ class Api:
         self.list_calls: list[int] = []
         self.detail_calls: list[tuple[int, int]] = []
         self.match_calls: list[tuple[int, int]] = []
+        self.history_calls: list[tuple[int, int]] = []
+        self.history: dict[str, object] = {"items": []}
         self.match: dict[str, object] = {
             "score": 80,
             "verdict": "high",
@@ -100,6 +102,12 @@ class Api:
     async def get_application_match(self, user_id: int, app_id: int) -> dict[str, object]:
         self.match_calls.append((user_id, app_id))
         return self.match
+
+    async def get_application_status_history(
+        self, user_id: int, app_id: int
+    ) -> dict[str, object]:
+        self.history_calls.append((user_id, app_id))
+        return self.history
 
 
 def _state() -> tuple[MemoryStorage, FSMContext]:
@@ -399,7 +407,8 @@ def test_dispatcher_match_back_to_vacancy_restores_detail_as_canonical_view(
         assert api.detail_calls == [(4, 18)]
         assert answers == []
         assert [button.text for row in edits[-1][1].inline_keyboard for button in row] == [
-            "Изменить статус", "📝 Заметка", "🔎 Почему подходит?", "⬅️ К списку"
+            "Изменить статус", "📝 Заметка", "🕘 История статусов",
+            "🔎 Почему подходит?", "⬅️ К списку"
         ]
 
         await main_module.dp.feed_update(bot, _applications_callback_update("applications:match:18:5", update_id=22, message_id=10))
