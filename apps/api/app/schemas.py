@@ -1,4 +1,5 @@
-from datetime import datetime, timezone
+import re
+from datetime import date, datetime, timezone
 from decimal import Decimal
 from urllib.parse import urlsplit
 
@@ -241,6 +242,29 @@ class ApplicationNotePutIn(BaseModel):
         return value
 
 
+class ApplicationNextActionPutIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    next_action: str = Field(strict=True, min_length=1, max_length=500)
+    next_action_due_on: date
+
+    @field_validator("next_action", mode="before")
+    @classmethod
+    def trim_action(cls, value: object) -> object:
+        if isinstance(value, str):
+            value = value.strip()
+            if "\u0000" in value:
+                raise ValueError("next_action must not contain NUL")
+        return value
+
+    @field_validator("next_action_due_on", mode="before")
+    @classmethod
+    def validate_date(cls, value: object) -> date:
+        if not isinstance(value, str) or re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}", value) is None:
+            raise ValueError("next_action_due_on must be YYYY-MM-DD")
+        return date.fromisoformat(value)
+
+
 class ApplicationStatusPutIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -274,6 +298,8 @@ class ApplicationOut(BaseModel):
     job_id: int
     status: ApplicationStatus
     note: str | None
+    next_action: str | None
+    next_action_due_on: date | None
     created_at: datetime
     updated_at: datetime
 

@@ -1,8 +1,8 @@
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 from enum import Enum
 
-from sqlalchemy import BigInteger, Boolean, CheckConstraint, DateTime, ForeignKey, Index, JSON, Numeric, String, Text, UniqueConstraint, func
+from sqlalchemy import BigInteger, Boolean, CheckConstraint, Date, DateTime, ForeignKey, Index, JSON, Numeric, String, Text, UniqueConstraint, func
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -202,12 +202,19 @@ class Application(Base):
             "status IN ('saved', 'applied', 'interview', 'offer', 'rejected')",
             name="ck_applications_status",
         ),
+        CheckConstraint(
+            "(next_action IS NULL AND next_action_due_on IS NULL) OR "
+            "(next_action IS NOT NULL AND next_action_due_on IS NOT NULL)",
+            name="ck_applications_next_action_block",
+        ),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
     job_id: Mapped[int] = mapped_column(ForeignKey("jobs.id"), nullable=False)
     note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    next_action: Mapped[str | None] = mapped_column(Text, nullable=True)
+    next_action_due_on: Mapped[date | None] = mapped_column(Date, nullable=True)
     status: Mapped[str] = mapped_column(
         String(16), default=ApplicationStatus.SAVED.value, server_default=ApplicationStatus.SAVED.value
     )

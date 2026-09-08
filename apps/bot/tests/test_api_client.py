@@ -1,9 +1,50 @@
 import asyncio
+import json
 
 import httpx
 import pytest
 
 from app.api_client import JobHunterApiClient, _json_object
+
+
+@pytest.mark.parametrize("method", ["PUT", "DELETE"])
+def test_next_action_client_contract(method):
+    async def scenario():
+        requests = []
+        payload = {"application": {"id": 18, "user_id": 4, "job_id": 7, "status": "saved", "note": None,
+                    "next_action": "HR" if method == "PUT" else None,
+                    "next_action_due_on": "2026-09-12" if method == "PUT" else None}, "job": {"id": 7}}
+        def handler(request):
+            requests.append(request)
+            return httpx.Response(200, json=payload)
+        client = JobHunterApiClient("http://api")
+        await client._client.aclose()
+        client._client = httpx.AsyncClient(base_url="http://api", transport=httpx.MockTransport(handler))
+        try:
+            result = (await client.set_application_next_action(4, 18, "HR", "2026-09-12")
+                      if method == "PUT" else await client.delete_application_next_action(4, 18))
+            assert result == payload
+            assert requests[0].method == method
+            assert requests[0].url.path == "/users/4/applications/18/next-action"
+            if method == "PUT":
+                assert json.loads(requests[0].content) == {"next_action": "HR", "next_action_due_on": "2026-09-12"}
+            else:
+                assert requests[0].content == b""
+        finally:
+            await client.close()
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("change", [{"id": 19}, {"user_id": 5}, {"job_id": 8},
+    {"next_action": None}, {"next_action": 123}, {"next_action_due_on": None},
+    {"next_action_due_on": "2026-02-29"}, {"next_action_due_on": "2026-09-12T00:00:00Z"}])
+def test_next_action_client_rejects_invalid_detail(change):
+    application = {"id": 18, "user_id": 4, "job_id": 7, "status": "saved", "note": None,
+                   "next_action": "HR", "next_action_due_on": "2026-09-12", **change}
+    response = httpx.Response(200, json={"application": application, "job": {"id": 7}},
+                              request=httpx.Request("PUT", "http://api/next-action"))
+    with pytest.raises(httpx.DecodingError):
+        JobHunterApiClient._next_action_detail(response, 4, 18)
 
 
 @pytest.mark.parametrize("method", ["PUT", "DELETE"])
