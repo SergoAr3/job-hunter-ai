@@ -6,7 +6,14 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.models import AIEnrichmentStatus, Application, ApplicationStatus, Job, User
+from app.models import (
+    AIEnrichmentStatus,
+    Application,
+    ApplicationStatus,
+    ApplicationStatusHistory,
+    Job,
+    User,
+)
 from app.models import IngestionMethod, ParsingStatus
 from app.services.job_ai_enrichment import (
     AIEnrichmentResult,
@@ -65,11 +72,17 @@ def save_application_for_user(
     if session.get(User, user_id) is None:
         raise UserNotFoundError
 
-    job, job_created = _get_or_create_job(session, normalized_url, detect_job_source(normalized_url))
-    application, application_created = _get_or_create_application(session, user_id, job.id)
-    job_id = job.id
-    job_url = job.source_url
-    session.commit()
+    try:
+        job, job_created = _get_or_create_job(
+            session, normalized_url, detect_job_source(normalized_url)
+        )
+        application, application_created = _get_or_create_application(session, user_id, job.id)
+        job_id = job.id
+        job_url = job.source_url
+        session.commit()
+    except Exception:
+        session.rollback()
+        raise
     if session.in_transaction():
         raise RuntimeError("Database transaction must be closed before enrichment")
     if job_created:
@@ -269,6 +282,10 @@ def _get_or_create_application(session: Session, user_id: int, job_id: int) -> t
         with session.begin_nested():
             session.add(application)
             session.flush()
+            session.add(ApplicationStatusHistory(
+                application_id=application.id, status=ApplicationStatus.SAVED.value
+            ))
+            session.flush()
     except IntegrityError:
         application = session.scalar(
             select(Application).where(Application.user_id == user_id, Application.job_id == job_id)
@@ -284,6 +301,21 @@ def get_application_for_user(session: Session, user_id: int, application_id: int
     return session.scalar(
         select(Application).where(Application.id == application_id, Application.user_id == user_id)
     )
+
+
+def get_application_status_history(
+    session: Session, user_id: int, application_id: int,
+) -> list[ApplicationStatusHistory] | None:
+    if get_application_for_user(session, user_id, application_id) is None:
+        return None
+    return list(session.scalars(
+        select(ApplicationStatusHistory)
+        .where(ApplicationStatusHistory.application_id == application_id)
+        .order_by(
+            ApplicationStatusHistory.occurred_at.desc(),
+            ApplicationStatusHistory.id.desc(),
+        )
+    ).all())
 
 
 def list_applications_for_user(
@@ -339,6 +371,9 @@ def set_application_status(
             return None
         if application.status != status.value:
             application.status = status.value
+            session.add(ApplicationStatusHistory(
+                application_id=application.id, status=status.value
+            ))
             session.commit()
             session.refresh(application)
         return application, job

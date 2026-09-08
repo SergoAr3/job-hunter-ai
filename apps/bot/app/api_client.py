@@ -1,3 +1,4 @@
+from datetime import datetime
 from typing import Protocol, TypeGuard
 
 import httpx
@@ -23,6 +24,16 @@ _APPLICATION_LIST_ITEM_FIELDS = {
 }
 
 
+def _is_aware_iso_datetime(value: object) -> bool:
+    if not isinstance(value, str):
+        return False
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return False
+    return parsed.tzinfo is not None and parsed.utcoffset() is not None
+
+
 class BotApiClient(Protocol):
     async def create_or_get_user(self, telegram_user: User) -> int: ...
 
@@ -35,6 +46,10 @@ class BotApiClient(Protocol):
     async def get_application(self, user_id: int, application_id: int) -> dict[str, object]: ...
 
     async def put_application_status(self, user_id: int, application_id: int, status: str) -> dict[str, object]: ...
+
+    async def get_application_status_history(
+        self, user_id: int, application_id: int
+    ) -> dict[str, object]: ...
 
     async def put_application_note(self, user_id: int, application_id: int, note: str) -> dict[str, object]: ...
 
@@ -141,6 +156,27 @@ class JobHunterApiClient:
             or application.get("status") not in ("saved", "applied", "interview", "rejected", "offer")
         ):
             raise httpx.DecodingError("API response has invalid status detail shape", request=response.request)
+        return payload
+
+    async def get_application_status_history(
+        self, user_id: int, application_id: int
+    ) -> dict[str, object]:
+        response = await self._client.get(
+            f"/users/{user_id}/applications/{application_id}/status-history"
+        )
+        response.raise_for_status()
+        payload = _json_object(response)
+        items = payload.get("items")
+        if not isinstance(items, list) or not all(
+            isinstance(item, dict)
+            and item.get("status") in ("saved", "applied", "interview", "rejected", "offer")
+            and _is_aware_iso_datetime(item.get("occurred_at"))
+            for item in items
+        ):
+            raise httpx.DecodingError(
+                "API response has invalid application status history shape",
+                request=response.request,
+            )
         return payload
 
     async def put_application_note(self, user_id: int, application_id: int, note: str) -> dict[str, object]:

@@ -343,6 +343,50 @@ def test_put_application_status_contract_and_errors(outcome):
     asyncio.run(scenario())
 
 
+@pytest.mark.parametrize(
+    "outcome", ["success", "404", "500", "network", "shape", "status", "naive_time"]
+)
+def test_get_application_status_history_contract_and_errors(outcome):
+    async def scenario():
+        requests = []
+        payload = {
+            "items": [{"status": "interview", "occurred_at": "2026-09-07T17:14:00+00:00"}]
+        }
+
+        def handler(request):
+            requests.append(request)
+            if outcome == "network":
+                raise httpx.ConnectError("test", request=request)
+            if outcome.isdecimal():
+                return httpx.Response(int(outcome), json={"detail": "test"})
+            if outcome == "shape":
+                return httpx.Response(200, json={"items": {}})
+            if outcome == "status":
+                payload["items"][0]["status"] = "unknown"
+            if outcome == "naive_time":
+                payload["items"][0]["occurred_at"] = "2026-09-07T17:14:00"
+            return httpx.Response(200, json=payload)
+
+        client = JobHunterApiClient("http://api")
+        await client._client.aclose()
+        client._client = httpx.AsyncClient(
+            base_url="http://api", transport=httpx.MockTransport(handler)
+        )
+        try:
+            if outcome == "success":
+                assert await client.get_application_status_history(4, 18) == payload
+            else:
+                with pytest.raises(httpx.HTTPError):
+                    await client.get_application_status_history(4, 18)
+        finally:
+            await client.close()
+        assert len(requests) == 1
+        assert requests[0].method == "GET"
+        assert requests[0].url.path == "/users/4/applications/18/status-history"
+
+    asyncio.run(scenario())
+
+
 @pytest.mark.parametrize("status", [None, "saved", "applied", "interview", "rejected", "offer"])
 def test_list_applications_filter_query(status):
     async def scenario():

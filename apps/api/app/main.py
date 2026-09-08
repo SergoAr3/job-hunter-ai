@@ -11,6 +11,8 @@ from app.schemas import (
     ApplicationOut,
     ApplicationNotePutIn,
     ApplicationStatusPutIn,
+    ApplicationStatusHistoryItemOut,
+    ApplicationStatusHistoryOut,
     ApplicationsPageOut,
     JobOut,
     ProfileLanguagesNormalizeIn,
@@ -26,6 +28,7 @@ from app.services.applications import (
     UnsafeUrlError,
     UserNotFoundError,
     get_application_for_user,
+    get_application_status_history,
     list_applications_for_user,
     save_application_for_user,
     set_application_status,
@@ -229,6 +232,21 @@ def update_application_status(
     application, job = result
     return ApplicationDetailOut(
         application=ApplicationOut.model_validate(application), job=JobOut.model_validate(job)
+    )
+
+
+@app.get(
+    "/users/{user_id}/applications/{application_id}/status-history",
+    response_model=ApplicationStatusHistoryOut,
+)
+def read_application_status_history(
+    user_id: int, application_id: int, session: Session = Depends(get_session),
+) -> ApplicationStatusHistoryOut:
+    history = get_application_status_history(session, user_id, application_id)
+    if history is None:
+        raise HTTPException(status_code=404, detail={"code": "APPLICATION_NOT_FOUND"})
+    return ApplicationStatusHistoryOut(
+        items=[ApplicationStatusHistoryItemOut.model_validate(item) for item in history]
     )
 
 
