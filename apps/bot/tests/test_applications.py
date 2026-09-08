@@ -90,7 +90,7 @@ class Api:
             return 5
         return 1
 
-    async def list_applications(self, user_id: int, *, limit: int, offset: int, status: str | None = None) -> dict[str, object]:
+    async def list_applications(self, user_id: int, *, limit: int, offset: int, status: str | None = None, q: str | None = None) -> dict[str, object]:
         assert limit == PAGE_SIZE
         self.list_calls.append(user_id)
         return self.pages[offset // PAGE_SIZE]

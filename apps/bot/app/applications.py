@@ -36,6 +36,8 @@ APPLICATIONS_HISTORY_VIEW = "history"
 APPLICATIONS_STATUS_VIEW = "status_picker"
 APPLICATIONS_STATUS_TOKEN = "applications_status_token"
 APPLICATIONS_FILTER_STATUS = "applications_filter_status"
+APPLICATIONS_SEARCH_QUERY = "applications_search_query"
+APPLICATIONS_SEARCH_TOKEN = "applications_search_token"
 APPLICATIONS_LIST_TOKEN = "applications_list_token"
 APPLICATIONS_FILTER_VIEW = "filter_picker"
 STATUS_LABELS = {
@@ -53,6 +55,7 @@ APPLICATIONS_NEXT_ACTION_DRAFT = "applications_next_action_draft"
 
 
 class ApplicationsStates(StatesGroup):
+    waiting_for_search = State()
     waiting_for_note = State()
     waiting_for_next_action = State()
     waiting_for_next_action_due_on = State()
@@ -71,6 +74,7 @@ def _list_item_text(item: dict[str, object], index: int) -> str:
 
 def applications_list_keyboard(
     items: list[dict[str, object]], *, offset: int, has_next: bool, token: str, status: str | None,
+    q: str | None,
 ) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = []
     for item in items:
@@ -89,7 +93,25 @@ def applications_list_keyboard(
         text=f"Фильтр: {STATUS_LABELS[status] if status else 'Все'}",
         callback_data=f"applications:list:{token}:filter",
     )])
+    rows.append([InlineKeyboardButton(
+        text="🔎 Поиск", callback_data=f"applications:list:{token}:search",
+    )])
+    if q is not None:
+        rows.append([InlineKeyboardButton(
+            text="✖️ Сбросить поиск", callback_data=f"applications:list:{token}:reset_search",
+        )])
     return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def _search_prompt_text(error: str | None = None) -> str:
+    text = "Отправь название вакансии или компании. Для отмены — /cancel."
+    return f"{text}\n\n⚠️ {error}" if error else text
+
+
+def _search_prompt_keyboard(token: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text="Отмена", callback_data=f"applications:search_cancel:{token}")
+    ]])
 
 
 def application_detail_keyboard(application_id: int, offset: int, *, has_note: bool = False, has_next_action: bool = False) -> InlineKeyboardMarkup:
@@ -128,51 +150,75 @@ async def show_applications_list(
     *,
     offset: int = 0,
     user_id: int | None = None,
-) -> None:
+    q: str | None = None,
+    commit_search_query: bool = False,
+    search_failure_prompt: bool = False,
+) -> bool:
     await state.update_data({APPLICATIONS_STATUS_TOKEN: None, APPLICATIONS_LIST_TOKEN: None})
-    status = cast(str | None, (await state.get_data()).get(APPLICATIONS_FILTER_STATUS))
+    context = await state.get_data()
+    status = cast(str | None, context.get(APPLICATIONS_FILTER_STATUS))
+    search_query = q if commit_search_query else cast(str | None, context.get(APPLICATIONS_SEARCH_QUERY))
     try:
         if user_id is None:
             if message.from_user is None:
-                return
+                return False
             user_id = await api_client.create_or_get_user(message.from_user)
         while True:
-            page = await api_client.list_applications(user_id, limit=PAGE_SIZE, offset=offset, status=status)
+            page = await api_client.list_applications(
+                user_id, limit=PAGE_SIZE, offset=offset, status=status, q=search_query
+            )
             items = cast(list[dict[str, object]], page["items"])
             if items or offset == 0:
                 break
             offset = max(0, offset - PAGE_SIZE)
     except httpx.HTTPError:
         logger.warning("Could not load applications through API", exc_info=True)
+        if search_failure_prompt:
+            token = context.get(APPLICATIONS_SEARCH_TOKEN)
+            if isinstance(token, str):
+                await _replace_or_send(
+                    message, state, _search_prompt_text("Не удалось выполнить поиск. Попробуй ещё раз."),
+                    _search_prompt_keyboard(token), canonical_target=True,
+                )
+                return False
         await _replace_or_send(message, state, APPLICATIONS_LOAD_ERROR_MESSAGE, None)
-        return
+        return False
     token = secrets.token_hex(4)
     markup = applications_list_keyboard(
-        items, offset=offset, has_next=bool(page["has_next"]), token=token, status=status,
+        items, offset=offset, has_next=bool(page["has_next"]), token=token, status=status, q=search_query,
     )
-    empty_status_filter = not items and status is not None
     if not items:
-        text = f"Вакансий со статусом <b>«{STATUS_LABELS[status]}»</b> пока нет." if status else APPLICATIONS_EMPTY_MESSAGE
-        if status is None:
+        if search_query is not None:
+            text = (
+                f"По запросу «{search_query}» среди вакансий со статусом «{STATUS_LABELS[status]}» ничего не найдено."
+                if status else f"По запросу «{search_query}» вакансий не найдено."
+            )
+        else:
+            text = f"Вакансий со статусом «{STATUS_LABELS[status]}» пока нет." if status else APPLICATIONS_EMPTY_MESSAGE
+        if status is None and search_query is None:
             markup.inline_keyboard.insert(0, [InlineKeyboardButton(
                 text="💼 Добавить вакансию", callback_data=f"applications:list:{token}:add",
             )])
     else:
-        text = f"📋 Мои вакансии\nСтатус: {STATUS_LABELS[status] if status else 'Все'}\n\n" + "\n\n".join(
+        header = f"📋 Мои вакансии\nСтатус: {STATUS_LABELS[status] if status else 'Все'}"
+        if search_query is not None:
+            header += f"\nПоиск: {search_query}"
+        text = header + "\n\n" + "\n\n".join(
             _list_item_text(item, offset + index + 1) for index, item in enumerate(items)
         )
-    if empty_status_filter:
-        await _replace_or_send(message, state, text, markup, parse_mode=ParseMode.HTML)
-    else:
-        await _replace_or_send(message, state, text, markup)
+    await _replace_or_send(message, state, text, markup)
     await state.update_data(
         **{
             APPLICATIONS_OFFSET: offset,
             APPLICATIONS_VIEW: APPLICATIONS_LIST_VIEW,
             APPLICATIONS_APPLICATION_ID: None,
             APPLICATIONS_LIST_TOKEN: token,
+            APPLICATIONS_SEARCH_QUERY: search_query,
+            APPLICATIONS_SEARCH_TOKEN: None,
         }
     )
+    await state.set_state(None)
+    return True
 
 
 async def _replace_or_send(
@@ -217,7 +263,7 @@ async def _replace_or_send(
 
 
 async def handle_applications_menu(message: Message, state: FSMContext, api_client: BotApiClient) -> None:
-    await state.update_data({APPLICATIONS_FILTER_STATUS: None, APPLICATIONS_OFFSET: 0})
+    await state.update_data({APPLICATIONS_FILTER_STATUS: None, APPLICATIONS_SEARCH_QUERY: None, APPLICATIONS_OFFSET: 0})
     await show_applications_list(message, state, api_client)
 
 
@@ -231,6 +277,9 @@ async def handle_applications_callback(callback: CallbackQuery, state: FSMContex
         return
     view = state_data.get(APPLICATIONS_VIEW)
     data = callback.data or ""
+    if data.startswith("applications:search_cancel:"):
+        await _handle_search_cancel_callback(message, state, api_client, callback.from_user, state_data, data)
+        return
     if data.startswith("applications:next_action"):
         await _handle_next_action_callback(callback, message, state, api_client, state_data)
         return
@@ -317,11 +366,14 @@ async def _handle_list_callback(
     if type(offset) is not int:
         return
     status = cast(str | None, context.get(APPLICATIONS_FILTER_STATUS))
-    if action in ("filter", "add", "open", "page"):
+    q = cast(str | None, context.get(APPLICATIONS_SEARCH_QUERY))
+    if action in ("filter", "add", "open", "page", "search", "reset_search"):
         if view != APPLICATIONS_LIST_VIEW:
             return
-        if action in ("filter", "add"):
-            if len(parts) != 4 or (action == "add" and status is not None):
+        if action in ("filter", "add", "search", "reset_search"):
+            if len(parts) != 4 or (action == "add" and (status is not None or q is not None)):
+                return
+            if action == "reset_search" and q is None:
                 return
         elif len(parts) != 5 or not parts[4].isdecimal():
             return
@@ -349,6 +401,14 @@ async def _handle_list_callback(
         await _replace_or_send(message, state, "Показать вакансии:", InlineKeyboardMarkup(inline_keyboard=rows))
         await state.update_data({APPLICATIONS_VIEW: APPLICATIONS_FILTER_VIEW, APPLICATIONS_LIST_TOKEN: token})
         return
+    if action == "search":
+        token = secrets.token_hex(4)
+        await state.set_state(ApplicationsStates.waiting_for_search)
+        await state.update_data({APPLICATIONS_VIEW: "search_input", APPLICATIONS_SEARCH_TOKEN: token})
+        await _replace_or_send(
+            message, state, _search_prompt_text(), _search_prompt_keyboard(token), canonical_target=True,
+        )
+        return
     if action == "add":
         await remove_active_applications_inline_keyboard(message, state)
         await handle_add_job(message, state)
@@ -359,6 +419,8 @@ async def _handle_list_callback(
         await state.update_data({APPLICATIONS_FILTER_STATUS: status, APPLICATIONS_OFFSET: offset})
     elif action == "page":
         offset = int(parts[4])
+    elif action == "reset_search":
+        offset = 0
     try:
         user_id = await api_client.create_or_get_user(callback.from_user)
     except httpx.HTTPError:
@@ -368,7 +430,92 @@ async def _handle_list_callback(
     if action == "open":
         await _show_application_detail(message, state, api_client, user_id, int(parts[4]), offset)
     else:
-        await show_applications_list(message, state, api_client, offset=offset, user_id=user_id)
+        await show_applications_list(
+            message, state, api_client, offset=offset, user_id=user_id,
+            q=None if action == "reset_search" else None,
+            commit_search_query=action == "reset_search",
+        )
+
+
+async def handle_search_text(message: Message, state: FSMContext, api_client: BotApiClient) -> None:
+    query = (message.text or "").strip()
+    if not query:
+        await _show_search_input_error(message, state, "Введите непустое название вакансии или компании.")
+        return
+    if "\u0000" in query or len(query) > 100:
+        await _show_search_input_error(message, state, "Поисковый запрос должен содержать от 1 до 100 символов без NUL.")
+        return
+    context = await state.get_data()
+    if await state.get_state() != ApplicationsStates.waiting_for_search.state:
+        return
+    token = context.get(APPLICATIONS_SEARCH_TOKEN)
+    if not isinstance(token, str):
+        return
+    search_prompt_message_id = context.get(APPLICATIONS_MESSAGE_ID)
+    actor = message.from_user
+    if actor is None:
+        return
+    try:
+        user_id = await api_client.create_or_get_user(actor)
+    except httpx.HTTPError:
+        await _show_search_input_error(message, state, "Не удалось выполнить поиск. Попробуй ещё раз.")
+        return
+    shown = await show_applications_list(
+        message, state, api_client, offset=0, user_id=user_id, q=query,
+        commit_search_query=True, search_failure_prompt=True,
+    )
+    if shown and search_prompt_message_id != (await state.get_data()).get(APPLICATIONS_MESSAGE_ID):
+        await _delete_application_message(message, search_prompt_message_id)
+
+
+async def handle_search_non_text(message: Message, state: FSMContext) -> None:
+    await _show_search_input_error(message, state, "Отправьте поисковый запрос текстом.")
+
+
+async def handle_search_cancel(message: Message, state: FSMContext, api_client: BotApiClient) -> None:
+    await _cancel_search(message, state, api_client, message.from_user)
+
+
+async def _handle_search_cancel_callback(
+    message: Message, state: FSMContext, api_client: BotApiClient, actor: User | None,
+    context: dict[str, object], data: str,
+) -> None:
+    parts = data.split(":")
+    if (
+        len(parts) != 3
+        or context.get(APPLICATIONS_VIEW) != "search_input"
+        or await state.get_state() != ApplicationsStates.waiting_for_search.state
+        or parts[2] != context.get(APPLICATIONS_SEARCH_TOKEN)
+    ):
+        return
+    await _cancel_search(message, state, api_client, actor)
+
+
+async def _cancel_search(
+    message: Message, state: FSMContext, api_client: BotApiClient, actor: User | None,
+) -> None:
+    if actor is None:
+        return
+    try:
+        user_id = await api_client.create_or_get_user(actor)
+    except httpx.HTTPError:
+        await _show_search_input_error(message, state, "Не удалось загрузить текущий список. Попробуй ещё раз.")
+        return
+    offset = (await state.get_data()).get(APPLICATIONS_OFFSET, 0)
+    if type(offset) is not int:
+        return
+    await show_applications_list(
+        message, state, api_client, offset=offset, user_id=user_id, search_failure_prompt=True,
+    )
+
+
+async def _show_search_input_error(message: Message, state: FSMContext, error: str) -> None:
+    token = (await state.get_data()).get(APPLICATIONS_SEARCH_TOKEN)
+    if not isinstance(token, str):
+        return
+    await _replace_or_send(
+        message, state, _search_prompt_text(error), _search_prompt_keyboard(token), canonical_target=True,
+    )
 
 
 async def _show_application_detail(

@@ -42,7 +42,7 @@ class BotApiClient(Protocol):
 
     async def get_application_match(self, user_id: int, application_id: int) -> dict[str, object]: ...
 
-    async def list_applications(self, user_id: int, *, limit: int, offset: int, status: str | None = None) -> dict[str, object]: ...
+    async def list_applications(self, user_id: int, *, limit: int, offset: int, status: str | None = None, q: str | None = None) -> dict[str, object]: ...
 
     async def get_application(self, user_id: int, application_id: int) -> dict[str, object]: ...
 
@@ -109,10 +109,15 @@ class JobHunterApiClient:
         response.raise_for_status()
         return _json_object(response)
 
-    async def list_applications(self, user_id: int, *, limit: int, offset: int, status: str | None = None) -> dict[str, object]:
+    async def list_applications(
+        self, user_id: int, *, limit: int, offset: int, status: str | None = None,
+        q: str | None = None,
+    ) -> dict[str, object]:
         params: dict[str, str | int] = {"limit": limit, "offset": offset}
         if status is not None:
             params["status"] = status
+        if q is not None:
+            params["q"] = q
         response = await self._client.get(
             f"/users/{user_id}/applications", params=params
         )

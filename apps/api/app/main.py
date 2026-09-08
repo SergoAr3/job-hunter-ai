@@ -33,6 +33,8 @@ from app.services.applications import (
     get_application_for_user,
     get_application_status_history,
     list_applications_for_user,
+    normalize_application_search_query,
+    InvalidApplicationSearchQueryError,
     save_application_for_user,
     set_application_status,
     set_application_note,
@@ -185,11 +187,18 @@ def save_application(
 def read_applications(
     user_id: int,
     status: ApplicationStatus | None = Query(default=None),
+    q: str | None = Query(default=None),
     limit: int = Query(default=5, ge=1, le=5),
     offset: int = Query(default=0, ge=0),
     session: Session = Depends(get_session),
 ) -> ApplicationsPageOut:
-    rows = list_applications_for_user(session, user_id, limit=limit, offset=offset, status=status)
+    try:
+        search_query = normalize_application_search_query(q)
+    except InvalidApplicationSearchQueryError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    rows = list_applications_for_user(
+        session, user_id, limit=limit, offset=offset, status=status, q=search_query
+    )
     return ApplicationsPageOut(
         items=[
             ApplicationListItemOut(

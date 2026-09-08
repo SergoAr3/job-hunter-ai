@@ -429,7 +429,8 @@ def test_get_application_status_history_contract_and_errors(outcome):
 
 
 @pytest.mark.parametrize("status", [None, "saved", "applied", "interview", "rejected", "offer"])
-def test_list_applications_filter_query(status):
+@pytest.mark.parametrize("q", [None, "Python & SQL"])
+def test_list_applications_filter_query(status, q):
     async def scenario():
         def handler(request):
             assert request.method == "GET"
@@ -437,13 +438,15 @@ def test_list_applications_filter_query(status):
             expected = {"limit": "5", "offset": "10"}
             if status is not None:
                 expected["status"] = status
+            if q is not None:
+                expected["q"] = q
             assert dict(request.url.params) == expected
             return httpx.Response(200, json={"items": [], "has_next": False})
         client = JobHunterApiClient("http://api")
         await client._client.aclose()
         client._client = httpx.AsyncClient(base_url="http://api", transport=httpx.MockTransport(handler))
         try:
-            assert await client.list_applications(7, limit=5, offset=10, status=status) == {"items": [], "has_next": False}
+            assert await client.list_applications(7, limit=5, offset=10, status=status, q=q) == {"items": [], "has_next": False}
         finally:
             await client.close()
     asyncio.run(scenario())
