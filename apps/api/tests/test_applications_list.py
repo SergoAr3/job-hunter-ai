@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 
 import pytest
 
@@ -12,6 +12,7 @@ def _user(telegram_id: int) -> int:
 
 def _application(
     user_id: int, title: str, created_at: datetime, status: str = "saved", company: str | None = None,
+    next_action_due_on: date | None = None,
 ) -> int:
     with TestSessionLocal() as session:
         job = Job(
@@ -23,7 +24,14 @@ def _application(
         )
         session.add(job)
         session.flush()
-        application = Application(user_id=user_id, job_id=job.id, status=status, created_at=created_at)
+        application = Application(
+            user_id=user_id,
+            job_id=job.id,
+            status=status,
+            created_at=created_at,
+            next_action="Follow up" if next_action_due_on is not None else None,
+            next_action_due_on=next_action_due_on,
+        )
         session.add(application)
         session.commit()
         return application.id
@@ -41,6 +49,107 @@ def test_applications_page_is_newest_first_and_compact() -> None:
     assert payload["items"][0]["app_id"] == newer
     assert set(payload["items"][0]) == {"app_id", "status", "job_id", "created_at", "title", "company", "location", "workplace_type", "parsing_status", "ai_enrichment_status"}
     assert client.get(f"/users/{user_id}/applications?limit=1&offset=1").json()["items"][0]["app_id"] == older
+
+
+def test_applications_explicit_newest_and_oldest_are_deterministic() -> None:
+    user_id = _user(115)
+    now = datetime.now(timezone.utc)
+    first = _application(user_id, "First", now)
+    second = _application(user_id, "Second", now)
+    third = _application(user_id, "Third", now + timedelta(seconds=1))
+    url = f"/users/{user_id}/applications"
+
+    newest = client.get(url, params={"sort": "newest"})
+    oldest = client.get(url, params={"sort": "oldest"})
+
+    assert newest.status_code == oldest.status_code == 200
+    assert [item["app_id"] for item in newest.json()["items"]] == [third, second, first]
+    assert [item["app_id"] for item in oldest.json()["items"]] == [first, second, third]
+
+
+def test_next_action_sort_orders_due_dates_then_nulls_deterministically() -> None:
+    user_id = _user(116)
+    now = datetime.now(timezone.utc)
+    null_older = _application(user_id, "Legacy null", now)
+    null_newer = _application(user_id, "New null", now + timedelta(seconds=1))
+    later = _application(user_id, "Later", now, next_action_due_on=date(2026, 9, 20))
+    same_due_older = _application(
+        user_id, "Same due older", now, next_action_due_on=date(2026, 9, 10)
+    )
+    same_due_newer_low_id = _application(
+        user_id, "Same due newer low id", now + timedelta(seconds=1),
+        next_action_due_on=date(2026, 9, 10),
+    )
+    same_due_newer_high_id = _application(
+        user_id, "Same due newer high id", now + timedelta(seconds=1),
+        next_action_due_on=date(2026, 9, 10),
+    )
+
+    payload = client.get(
+        f"/users/{user_id}/applications", params={"sort": "next_action", "limit": 5}
+    ).json()
+
+    assert [item["app_id"] for item in payload["items"]] == [
+        same_due_newer_high_id, same_due_newer_low_id, same_due_older, later, null_newer,
+    ]
+    assert payload["has_next"] is True
+    second_page = client.get(
+        f"/users/{user_id}/applications",
+        params={"sort": "next_action", "limit": 5, "offset": 5},
+    ).json()
+    assert [item["app_id"] for item in second_page["items"]] == [null_older]
+    assert second_page["has_next"] is False
+
+
+@pytest.mark.parametrize("sort", ["", "NEWEST", "unknown", "newest,oldest"])
+def test_invalid_application_sort_returns_422(sort: str) -> None:
+    assert client.get("/users/123/applications", params={"sort": sort}).status_code == 422
+
+
+@pytest.mark.parametrize(
+    ("params", "expected_title"),
+    [
+        ({"sort": "oldest", "q": "python"}, "Python oldest"),
+        ({"sort": "oldest", "status": "interview"}, "Interview oldest"),
+        (
+            {"sort": "oldest", "q": "python", "status": "interview"},
+            "Python interview oldest",
+        ),
+    ],
+)
+def test_sort_composes_with_search_and_status(
+    params: dict[str, str], expected_title: str,
+) -> None:
+    owner = _user(117)
+    now = datetime.now(timezone.utc)
+    matching = _application(owner, expected_title, now, "interview")
+    _application(owner, "Python newer", now + timedelta(seconds=1), "saved")
+    _application(owner, "Interview newer", now + timedelta(seconds=2), "interview")
+
+    response = client.get(f"/users/{owner}/applications", params=params)
+
+    assert response.status_code == 200
+    assert response.json()["items"][0]["app_id"] == matching
+
+
+def test_sort_precedes_pagination_and_remains_user_scoped() -> None:
+    owner, other = _user(118), _user(119)
+    now = datetime.now(timezone.utc)
+    ids = [_application(owner, f"Owner {index}", now + timedelta(seconds=index)) for index in range(6)]
+    _application(other, "Foreign oldest", now - timedelta(days=1))
+    url = f"/users/{owner}/applications"
+
+    first = client.get(url, params={"sort": "oldest", "limit": 5})
+    second = client.get(url, params={"sort": "oldest", "limit": 5, "offset": 5})
+
+    assert [item["app_id"] for item in first.json()["items"]] == ids[:5]
+    assert first.json()["has_next"] is True
+    assert [item["app_id"] for item in second.json()["items"]] == ids[5:]
+    assert second.json()["has_next"] is False
+    assert set(first.json()["items"][0]) == {
+        "app_id", "status", "job_id", "created_at", "title", "company", "location",
+        "workplace_type", "parsing_status", "ai_enrichment_status",
+    }
 
 
 def test_application_detail_is_user_scoped() -> None:

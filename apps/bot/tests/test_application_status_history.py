@@ -21,6 +21,7 @@ from app.applications import (
     APPLICATIONS_MESSAGE_ID,
     APPLICATIONS_OFFSET,
     APPLICATIONS_STATUS_TOKEN,
+    APPLICATIONS_SORT,
     APPLICATIONS_VIEW,
     APPLICATION_NOT_FOUND_MESSAGE,
 )
@@ -73,6 +74,7 @@ def test_dispatcher_history_lifecycle_order_localization_utc_and_stale_callbacks
             APPLICATIONS_APPLICATION_ID: 18,
             APPLICATIONS_OFFSET: 5,
             APPLICATIONS_FILTER_STATUS: "interview",
+            APPLICATIONS_SORT: "next_action",
         })
 
         await main_module.dp.feed_update(
@@ -88,6 +90,7 @@ def test_dispatcher_history_lifecycle_order_localization_utc_and_stale_callbacks
         assert data[APPLICATIONS_APPLICATION_ID] == 18
         assert data[APPLICATIONS_OFFSET] == 5
         assert data[APPLICATIONS_FILTER_STATUS] == "interview"
+        assert data[APPLICATIONS_SORT] == "next_action"
         assert edits[-1][0].splitlines() == [
             "🕘 История статусов",
             "",
@@ -120,6 +123,7 @@ def test_dispatcher_history_lifecycle_order_localization_utc_and_stale_callbacks
         )
         assert api.detail_calls == [(4, 18)]
         assert (await state.get_data())[APPLICATIONS_VIEW] == APPLICATIONS_DETAIL_VIEW
+        assert (await state.get_data())[APPLICATIONS_SORT] == "next_action"
         await main_module.dp.feed_update(
             bot,
             _applications_callback_update(back.callback_data, update_id=5, message_id=10),

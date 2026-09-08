@@ -15,6 +15,7 @@ import app.main as main_module
 from app.applications import (
     ApplicationsStates, APPLICATIONS_MESSAGE_ID, APPLICATIONS_VIEW,
     APPLICATIONS_OFFSET, APPLICATIONS_FILTER_STATUS, APPLICATION_NOT_FOUND_MESSAGE,
+    APPLICATIONS_SORT,
 )
 from test_application_filters import setup
 
@@ -72,6 +73,9 @@ async def note_setup(monkeypatch, initial=None):
     await ui.click("Собеседование")
     await ui.click("Вперёд ➡️")
     await ui.click("Vacancy 6")
+    for item in api.items:
+        item["next_action_due_on"] = f"2026-10-{int(item['app_id']):02d}"
+    await state.update_data({APPLICATIONS_SORT: "next_action"})
     return ui, api, state
 
 
@@ -125,6 +129,8 @@ def test_dispatcher_note_lifecycle_and_duplicate_text(monkeypatch):
             assert ui.deleted[-1] == 101
             await ui.click("⬅️ К списку")
             assert api.queries[-1] == (4, "interview", 5, 5)
+            assert api.sort_queries[-1] == "next_action"
+            assert (await state.get_data())[APPLICATIONS_SORT] == "next_action"
             await ui.click("Vacancy 6")
             assert "Replacement" in ui.text
             await ui.click("🗑 Удалить заметку")
@@ -201,6 +207,7 @@ def test_dispatcher_note_api_errors(monkeypatch, error):
                 assert await state.get_state() is None
                 await ui.click("⬅️ К списку")
                 assert api.queries[-1] == (4, "interview", 5, 5)
+                assert api.sort_queries[-1] == "next_action"
             else:
                 assert "Не удалось подтвердить" in ui.text
                 assert await state.get_state() == ApplicationsStates.waiting_for_note.state

@@ -16,6 +16,7 @@ from app.schemas import (
     ApplicationStatusPutIn,
     ApplicationStatusHistoryItemOut,
     ApplicationStatusHistoryOut,
+    ApplicationSort,
     ApplicationsPageOut,
     JobOut,
     ProfileLanguagesNormalizeIn,
@@ -188,6 +189,7 @@ def read_applications(
     user_id: int,
     status: ApplicationStatus | None = Query(default=None),
     q: str | None = Query(default=None),
+    sort: ApplicationSort = Query(default=ApplicationSort.NEWEST),
     limit: int = Query(default=5, ge=1, le=5),
     offset: int = Query(default=0, ge=0),
     session: Session = Depends(get_session),
@@ -197,7 +199,7 @@ def read_applications(
     except InvalidApplicationSearchQueryError as error:
         raise HTTPException(status_code=422, detail=str(error)) from error
     rows = list_applications_for_user(
-        session, user_id, limit=limit, offset=offset, status=status, q=search_query
+        session, user_id, limit=limit, offset=offset, status=status, q=search_query, sort=sort
     )
     return ApplicationsPageOut(
         items=[

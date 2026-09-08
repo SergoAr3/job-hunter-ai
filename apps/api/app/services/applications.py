@@ -3,7 +3,7 @@ import re
 from datetime import date
 from urllib.parse import urlsplit, urlunsplit
 
-from sqlalchemy import or_, select
+from sqlalchemy import case, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -16,6 +16,7 @@ from app.models import (
     User,
 )
 from app.models import IngestionMethod, ParsingStatus
+from app.schemas import ApplicationSort
 from app.services.job_ai_enrichment import (
     AIEnrichmentResult,
     JobAIEnrichmentService,
@@ -355,6 +356,7 @@ def list_applications_for_user(
     offset: int,
     status: ApplicationStatus | None = None,
     q: str | None = None,
+    sort: ApplicationSort = ApplicationSort.NEWEST,
 ) -> list[tuple[Application, Job]]:
     """Fetch one extra row so callers can expose pagination without a count query."""
     query = (
@@ -372,10 +374,26 @@ def list_applications_for_user(
                 Job.company.ilike(pattern, escape="\\"),
             )
         )
+    ordering = {
+        ApplicationSort.NEWEST: (
+            Application.created_at.desc(),
+            Application.id.desc(),
+        ),
+        ApplicationSort.OLDEST: (
+            Application.created_at.asc(),
+            Application.id.asc(),
+        ),
+        ApplicationSort.NEXT_ACTION: (
+            case((Application.next_action_due_on.is_(None), 1), else_=0).asc(),
+            Application.next_action_due_on.asc(),
+            Application.created_at.desc(),
+            Application.id.desc(),
+        ),
+    }[sort]
     return list(
         session.execute(
             query
-            .order_by(Application.created_at.desc(), Application.id.desc())
+            .order_by(*ordering)
             .offset(offset)
             .limit(limit + 1)
         ).tuples().all()

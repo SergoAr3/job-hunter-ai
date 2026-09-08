@@ -71,6 +71,7 @@ class Api:
         self.detail: dict[str, object] = {"application": {"id": 7}, "job": {"title": "Python Developer", "workplace_type": "remote"}}
         self.create_users: list[int] = []
         self.list_calls: list[int] = []
+        self.list_sorts: list[str] = []
         self.detail_calls: list[tuple[int, int]] = []
         self.match_calls: list[tuple[int, int]] = []
         self.history_calls: list[tuple[int, int]] = []
@@ -90,9 +91,13 @@ class Api:
             return 5
         return 1
 
-    async def list_applications(self, user_id: int, *, limit: int, offset: int, status: str | None = None, q: str | None = None) -> dict[str, object]:
+    async def list_applications(
+        self, user_id: int, *, limit: int, offset: int, status: str | None = None,
+        q: str | None = None, sort: str = "newest",
+    ) -> dict[str, object]:
         assert limit == PAGE_SIZE
         self.list_calls.append(user_id)
+        self.list_sorts.append(sort)
         return self.pages[offset // PAGE_SIZE]
 
     async def get_application(self, user_id: int, app_id: int) -> dict[str, object]:

@@ -15,7 +15,7 @@ import app.main as main_module
 from app.applications import (
     APPLICATIONS_MESSAGE_ID, APPLICATIONS_VIEW, APPLICATIONS_APPLICATION_ID,
     APPLICATIONS_OFFSET, APPLICATIONS_STATUS_TOKEN, APPLICATIONS_DETAIL_VIEW,
-    STATUS_LABELS, APPLICATION_NOT_FOUND_MESSAGE,
+    APPLICATIONS_SORT, STATUS_LABELS, APPLICATION_NOT_FOUND_MESSAGE,
 )
 from test_applications import list_callback, DispatcherApi, _dispatcher_state, _applications_callback_update
 
@@ -139,6 +139,7 @@ def test_dispatcher_status_lifecycle(monkeypatch, failure):
         monkeypatch.setattr(CallbackQuery, "answer", ack)
         state = await _dispatcher_state(bot, {
             APPLICATIONS_MESSAGE_ID: 10, APPLICATIONS_VIEW: "list", APPLICATIONS_OFFSET: 5,
+            APPLICATIONS_SORT: "oldest",
         })
         counter = 0
 
@@ -174,6 +175,7 @@ def test_dispatcher_status_lifecycle(monkeypatch, failure):
         assert data[APPLICATIONS_VIEW] == APPLICATIONS_DETAIL_VIEW
         assert data[APPLICATIONS_OFFSET] == 5
         assert data[APPLICATIONS_APPLICATION_ID] == 18
+        assert data[APPLICATIONS_SORT] == "oldest"
         await feed(f"applications:set:{token}:rejected")
         assert len(puts) == 1
         if failure == "api":
