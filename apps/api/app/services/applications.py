@@ -3,7 +3,7 @@ import re
 from datetime import date
 from urllib.parse import urlsplit, urlunsplit
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -30,6 +30,8 @@ from app.services.vacancy_enrichment import VacancyEnrichmentService
 
 logger = logging.getLogger(__name__)
 
+MAX_APPLICATIONS_SEARCH_QUERY_LENGTH = 100
+
 
 class UserNotFoundError(Exception):
     pass
@@ -37,6 +39,32 @@ class UserNotFoundError(Exception):
 
 class UnsafeUrlError(Exception):
     pass
+
+
+class InvalidApplicationSearchQueryError(ValueError):
+    pass
+
+
+def normalize_application_search_query(value: str | None) -> str | None:
+    """Normalize the optional list-search query at the API boundary."""
+    if value is None:
+        return None
+    query = value.strip()
+    if not query:
+        return None
+    if "\u0000" in query:
+        raise InvalidApplicationSearchQueryError("q must not contain NUL")
+    if len(query) > MAX_APPLICATIONS_SEARCH_QUERY_LENGTH:
+        raise InvalidApplicationSearchQueryError(
+            f"q must not exceed {MAX_APPLICATIONS_SEARCH_QUERY_LENGTH} characters"
+        )
+    return query
+
+
+def _application_search_pattern(query: str) -> str:
+    """Build a literal SQL LIKE substring pattern for a normalized query."""
+    escaped = query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    return f"%{escaped}%"
 
 
 def normalize_source_url(source_url: str) -> str:
@@ -320,7 +348,13 @@ def get_application_status_history(
 
 
 def list_applications_for_user(
-    session: Session, user_id: int, *, limit: int, offset: int, status: ApplicationStatus | None = None
+    session: Session,
+    user_id: int,
+    *,
+    limit: int,
+    offset: int,
+    status: ApplicationStatus | None = None,
+    q: str | None = None,
 ) -> list[tuple[Application, Job]]:
     """Fetch one extra row so callers can expose pagination without a count query."""
     query = (
@@ -330,6 +364,14 @@ def list_applications_for_user(
     )
     if status is not None:
         query = query.where(Application.status == status.value)
+    if q is not None:
+        pattern = _application_search_pattern(q)
+        query = query.where(
+            or_(
+                Job.title.ilike(pattern, escape="\\"),
+                Job.company.ilike(pattern, escape="\\"),
+            )
+        )
     return list(
         session.execute(
             query
