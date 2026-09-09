@@ -107,6 +107,41 @@ def test_exact_role_phrase_aliases_match(user_role: str, job_title: str) -> None
     assert result.components["role"].status == "matched"
 
 
+def test_exact_role_match_takes_priority_over_earlier_partial_match() -> None:
+    result = match(
+        profile=profile(target_roles=["Software Data Engineer", "Software QA Engineer"]),
+        job=job(title="Software QA Engineer"),
+    )
+
+    assert result.components["role"].score == 100
+    assert result.components["role"].status == "matched"
+    assert result.components["role"].matched == ["Software QA Engineer"]
+
+
+def test_first_exact_role_match_still_wins_over_later_partial_match() -> None:
+    result = match(
+        profile=profile(target_roles=["Software QA Engineer", "Software Data Engineer"]),
+        job=job(title="Software QA Engineer"),
+    )
+
+    assert result.components["role"].score == 100
+    assert result.components["role"].status == "matched"
+    assert result.components["role"].matched == ["Software QA Engineer"]
+
+
+@pytest.mark.parametrize(
+    ("target_roles", "title"),
+    [([], "Software QA Engineer"), (["Software QA Engineer"], None)],
+)
+def test_role_without_comparable_data_is_unknown(
+    target_roles: list[str], title: str | None
+) -> None:
+    result = match(profile=profile(target_roles=target_roles), job=job(title=title))
+
+    assert result.components["role"].score is None
+    assert result.components["role"].status == "unknown"
+
+
 @pytest.mark.parametrize(
     ("user_role", "job_title"),
     [
