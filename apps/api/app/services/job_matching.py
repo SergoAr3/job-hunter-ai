@@ -106,6 +106,7 @@ def _role_component(roles: list[str], title: str | None) -> MatchComponentOut:
     if not title or not roles:
         return _component("role", None, "unknown")
     title_key, title_tokens = _role_key(title)
+    partial_role: str | None = None
     for role in roles:
         role_key, role_tokens = _role_key(role)
         if title_key == role_key:
@@ -113,8 +114,10 @@ def _role_component(roles: list[str], title: str | None) -> MatchComponentOut:
         shared = title_tokens & role_tokens
         if len(shared) >= 2 and (shared == title_tokens or shared == role_tokens):
             return _component("role", 100, "matched", [role])
-        if len(shared) >= 2:
-            return _component("role", 50, "partial", [role])
+        if len(shared) >= 2 and partial_role is None:
+            partial_role = role
+    if partial_role is not None:
+        return _component("role", 50, "partial", [partial_role])
     return _component("role", 0, "mismatch", missing=roles)
 
 
