@@ -1,6 +1,7 @@
 import re
 from datetime import date, datetime, timezone
 from decimal import Decimal
+from enum import Enum
 from urllib.parse import urlsplit
 
 from pydantic import AnyHttpUrl, BaseModel, ConfigDict, Field, TypeAdapter, ValidationError, ValidationInfo, field_validator, model_validator
@@ -16,6 +17,12 @@ from app.services.profile_normalization import (
 from app.services.salary_validation import is_iso_4217_currency
 
 http_url_adapter = TypeAdapter(AnyHttpUrl)
+
+
+class ApplicationSort(str, Enum):
+    NEWEST = "newest"
+    OLDEST = "oldest"
+    NEXT_ACTION = "next_action"
 
 
 class TelegramUserIn(BaseModel):

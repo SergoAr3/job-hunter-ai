@@ -42,7 +42,10 @@ class BotApiClient(Protocol):
 
     async def get_application_match(self, user_id: int, application_id: int) -> dict[str, object]: ...
 
-    async def list_applications(self, user_id: int, *, limit: int, offset: int, status: str | None = None, q: str | None = None) -> dict[str, object]: ...
+    async def list_applications(
+        self, user_id: int, *, limit: int, offset: int, status: str | None = None,
+        q: str | None = None, sort: str = "newest",
+    ) -> dict[str, object]: ...
 
     async def get_application(self, user_id: int, application_id: int) -> dict[str, object]: ...
 
@@ -111,9 +114,9 @@ class JobHunterApiClient:
 
     async def list_applications(
         self, user_id: int, *, limit: int, offset: int, status: str | None = None,
-        q: str | None = None,
+        q: str | None = None, sort: str = "newest",
     ) -> dict[str, object]:
-        params: dict[str, str | int] = {"limit": limit, "offset": offset}
+        params: dict[str, str | int] = {"limit": limit, "offset": offset, "sort": sort}
         if status is not None:
             params["status"] = status
         if q is not None:

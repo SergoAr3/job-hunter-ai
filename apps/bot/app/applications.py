@@ -4,11 +4,11 @@ import logging
 import re
 import secrets
 from datetime import date, datetime, timezone
-from typing import cast
+from typing import Any, cast
 
 import httpx
 from aiogram.enums import ParseMode
-from aiogram.exceptions import TelegramAPIError
+from aiogram.exceptions import TelegramAPIError, TelegramBadRequest
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message, User
@@ -40,10 +40,23 @@ APPLICATIONS_SEARCH_QUERY = "applications_search_query"
 APPLICATIONS_SEARCH_TOKEN = "applications_search_token"
 APPLICATIONS_LIST_TOKEN = "applications_list_token"
 APPLICATIONS_FILTER_VIEW = "filter_picker"
+APPLICATIONS_SORT = "applications_sort"
+APPLICATIONS_SORT_VIEW = "sort_picker"
 STATUS_LABELS = {
     "saved": "Сохранена", "applied": "Откликнулся", "interview": "Собеседование",
     "rejected": "Отказ", "offer": "Оффер",
 }
+SORT_LABELS = {
+    "newest": "Сначала новые",
+    "oldest": "Сначала старые",
+    "next_action": "Ближайшее действие",
+}
+SORT_PICKER_LABELS = {
+    "newest": "🆕 Сначала новые",
+    "oldest": "🕰 Сначала старые",
+    "next_action": "📅 Ближайшее действие",
+}
+SORT_CALLBACK_VALUES = {"n": "newest", "o": "oldest", "a": "next_action"}
 PAGE_SIZE = 5
 APPLICATIONS_EMPTY_MESSAGE = "Сохранённых вакансий пока нет."
 APPLICATIONS_LOAD_ERROR_MESSAGE = "Не удалось загрузить вакансии. Попробуй ещё раз."
@@ -74,7 +87,7 @@ def _list_item_text(item: dict[str, object], index: int) -> str:
 
 def applications_list_keyboard(
     items: list[dict[str, object]], *, offset: int, has_next: bool, token: str, status: str | None,
-    q: str | None,
+    q: str | None, sort: str,
 ) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = []
     for item in items:
@@ -92,6 +105,10 @@ def applications_list_keyboard(
     rows.append([InlineKeyboardButton(
         text=f"Фильтр: {STATUS_LABELS[status] if status else 'Все'}",
         callback_data=f"applications:list:{token}:filter",
+    )])
+    rows.append([InlineKeyboardButton(
+        text=f"Сортировка: {SORT_LABELS[sort]}",
+        callback_data=f"applications:list:{token}:sort",
     )])
     rows.append([InlineKeyboardButton(
         text="🔎 Поиск", callback_data=f"applications:list:{token}:search",
@@ -112,6 +129,28 @@ def _search_prompt_keyboard(token: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[[
         InlineKeyboardButton(text="Отмена", callback_data=f"applications:search_cancel:{token}")
     ]])
+
+
+def _committed_sort(context: dict[str, object]) -> str:
+    value = context.get(APPLICATIONS_SORT)
+    return value if isinstance(value, str) and value in SORT_LABELS else "newest"
+
+
+def _sort_picker_content(
+    token: str, current_sort: str, error: str | None = None,
+) -> tuple[str, InlineKeyboardMarkup]:
+    text = "Выбери сортировку вакансий:"
+    if error:
+        text += f"\n\n⚠️ {error}"
+    reverse_values = {value: key for key, value in SORT_CALLBACK_VALUES.items()}
+    rows = [[InlineKeyboardButton(
+        text=("✓ " if value == current_sort else "") + label,
+        callback_data=f"applications:list:{token}:sort_set:{reverse_values[value]}",
+    )] for value, label in SORT_PICKER_LABELS.items()]
+    rows.append([InlineKeyboardButton(
+        text="Отмена", callback_data=f"applications:list:{token}:sort_cancel",
+    )])
+    return text, InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def application_detail_keyboard(application_id: int, offset: int, *, has_note: bool = False, has_next_action: bool = False) -> InlineKeyboardMarkup:
@@ -158,6 +197,7 @@ async def show_applications_list(
     context = await state.get_data()
     status = cast(str | None, context.get(APPLICATIONS_FILTER_STATUS))
     search_query = q if commit_search_query else cast(str | None, context.get(APPLICATIONS_SEARCH_QUERY))
+    sort = _committed_sort(context)
     try:
         if user_id is None:
             if message.from_user is None:
@@ -165,7 +205,7 @@ async def show_applications_list(
             user_id = await api_client.create_or_get_user(message.from_user)
         while True:
             page = await api_client.list_applications(
-                user_id, limit=PAGE_SIZE, offset=offset, status=status, q=search_query
+                user_id, limit=PAGE_SIZE, offset=offset, status=status, q=search_query, sort=sort
             )
             items = cast(list[dict[str, object]], page["items"])
             if items or offset == 0:
@@ -184,28 +224,10 @@ async def show_applications_list(
         await _replace_or_send(message, state, APPLICATIONS_LOAD_ERROR_MESSAGE, None)
         return False
     token = secrets.token_hex(4)
-    markup = applications_list_keyboard(
-        items, offset=offset, has_next=bool(page["has_next"]), token=token, status=status, q=search_query,
+    text, markup = _applications_list_content(
+        items, offset=offset, has_next=bool(page["has_next"]), token=token,
+        status=status, q=search_query, sort=sort,
     )
-    if not items:
-        if search_query is not None:
-            text = (
-                f"По запросу «{search_query}» среди вакансий со статусом «{STATUS_LABELS[status]}» ничего не найдено."
-                if status else f"По запросу «{search_query}» вакансий не найдено."
-            )
-        else:
-            text = f"Вакансий со статусом «{STATUS_LABELS[status]}» пока нет." if status else APPLICATIONS_EMPTY_MESSAGE
-        if status is None and search_query is None:
-            markup.inline_keyboard.insert(0, [InlineKeyboardButton(
-                text="💼 Добавить вакансию", callback_data=f"applications:list:{token}:add",
-            )])
-    else:
-        header = f"📋 Мои вакансии\nСтатус: {STATUS_LABELS[status] if status else 'Все'}"
-        if search_query is not None:
-            header += f"\nПоиск: {search_query}"
-        text = header + "\n\n" + "\n\n".join(
-            _list_item_text(item, offset + index + 1) for index, item in enumerate(items)
-        )
     await _replace_or_send(message, state, text, markup)
     await state.update_data(
         **{
@@ -215,10 +237,40 @@ async def show_applications_list(
             APPLICATIONS_LIST_TOKEN: token,
             APPLICATIONS_SEARCH_QUERY: search_query,
             APPLICATIONS_SEARCH_TOKEN: None,
+            APPLICATIONS_SORT: sort,
         }
     )
     await state.set_state(None)
     return True
+
+
+def _applications_list_content(
+    items: list[dict[str, object]], *, offset: int, has_next: bool, token: str,
+    status: str | None, q: str | None, sort: str,
+) -> tuple[str, InlineKeyboardMarkup]:
+    markup = applications_list_keyboard(
+        items, offset=offset, has_next=has_next, token=token, status=status, q=q, sort=sort,
+    )
+    if not items:
+        if q is not None:
+            text = (
+                f"По запросу «{q}» среди вакансий со статусом «{STATUS_LABELS[status]}» ничего не найдено."
+                if status else f"По запросу «{q}» вакансий не найдено."
+            )
+        else:
+            text = f"Вакансий со статусом «{STATUS_LABELS[status]}» пока нет." if status else APPLICATIONS_EMPTY_MESSAGE
+        if status is None and q is None:
+            markup.inline_keyboard.insert(0, [InlineKeyboardButton(
+                text="💼 Добавить вакансию", callback_data=f"applications:list:{token}:add",
+            )])
+    else:
+        header = f"📋 Мои вакансии\nСтатус: {STATUS_LABELS[status] if status else 'Все'}"
+        if q is not None:
+            header += f"\nПоиск: {q}"
+        text = header + "\n\n" + "\n\n".join(
+            _list_item_text(item, offset + index + 1) for index, item in enumerate(items)
+        )
+    return text, markup
 
 
 async def _replace_or_send(
@@ -262,8 +314,51 @@ async def _replace_or_send(
     await state.update_data(**{APPLICATIONS_MESSAGE_ID: sent.message_id})
 
 
+async def _render_sort_transition(
+    message: Message,
+    state: FSMContext,
+    text: str,
+    markup: InlineKeyboardMarkup,
+    commit_data: dict[str, Any],
+) -> bool:
+    """Render first, then atomically switch the sort interaction context."""
+    active_id = (await state.get_data()).get(APPLICATIONS_MESSAGE_ID)
+    try:
+        if isinstance(active_id, int) and active_id != message.message_id:
+            if message.bot is None:
+                return False
+            await message.bot.edit_message_text(
+                chat_id=message.chat.id,
+                message_id=active_id,
+                text=text,
+                reply_markup=markup,
+            )
+        else:
+            await message.edit_text(text, reply_markup=markup)
+    except TelegramAPIError as error:
+        if isinstance(error, TelegramBadRequest) and is_message_not_modified(error):
+            await state.update_data(**commit_data)
+            return True
+        logger.warning("Could not edit applications sort context", exc_info=True)
+        try:
+            sent = await message.answer(text, reply_markup=markup)
+        except TelegramAPIError:
+            logger.warning("Could not send applications sort context", exc_info=True)
+            return False
+        await state.update_data(**{APPLICATIONS_MESSAGE_ID: sent.message_id, **commit_data})
+        await _remove_applications_inline_keyboard(message, active_id)
+        return True
+    await state.update_data(**commit_data)
+    return True
+
+
 async def handle_applications_menu(message: Message, state: FSMContext, api_client: BotApiClient) -> None:
-    await state.update_data({APPLICATIONS_FILTER_STATUS: None, APPLICATIONS_SEARCH_QUERY: None, APPLICATIONS_OFFSET: 0})
+    await state.update_data({
+        APPLICATIONS_FILTER_STATUS: None,
+        APPLICATIONS_SEARCH_QUERY: None,
+        APPLICATIONS_OFFSET: 0,
+        APPLICATIONS_SORT: "newest",
+    })
     await show_applications_list(message, state, api_client)
 
 
@@ -299,7 +394,9 @@ async def handle_applications_callback(callback: CallbackQuery, state: FSMContex
     # List controls use one-shot tokens. Legacy controls must not bypass them.
     if data.startswith("applications:open:") or data == "applications:add":
         return
-    if data.startswith("applications:page:") and view in (APPLICATIONS_LIST_VIEW, APPLICATIONS_FILTER_VIEW):
+    if data.startswith("applications:page:") and view in (
+        APPLICATIONS_LIST_VIEW, APPLICATIONS_FILTER_VIEW, APPLICATIONS_SORT_VIEW,
+    ):
         return
     if data.startswith(("applications:status:", "applications:set:", "applications:status_back:")):
         await _handle_status_callback(callback, message, state, api_client, state_data)
@@ -367,10 +464,10 @@ async def _handle_list_callback(
         return
     status = cast(str | None, context.get(APPLICATIONS_FILTER_STATUS))
     q = cast(str | None, context.get(APPLICATIONS_SEARCH_QUERY))
-    if action in ("filter", "add", "open", "page", "search", "reset_search"):
+    if action in ("filter", "sort", "add", "open", "page", "search", "reset_search"):
         if view != APPLICATIONS_LIST_VIEW:
             return
-        if action in ("filter", "add", "search", "reset_search"):
+        if action in ("filter", "sort", "add", "search", "reset_search"):
             if len(parts) != 4 or (action == "add" and (status is not None or q is not None)):
                 return
             if action == "reset_search" and q is None:
@@ -386,7 +483,37 @@ async def _handle_list_callback(
             return
         if action == "back" and len(parts) != 4:
             return
+    elif action in ("sort_set", "sort_cancel"):
+        if view != APPLICATIONS_SORT_VIEW:
+            return
+        if action == "sort_set" and (
+            len(parts) != 5 or parts[4] not in SORT_CALLBACK_VALUES
+        ):
+            return
+        if action == "sort_cancel" and len(parts) != 4:
+            return
     else:
+        return
+    if action == "sort":
+        token = secrets.token_hex(4)
+        text, markup = _sort_picker_content(token, _committed_sort(context))
+        await _render_sort_transition(
+            message,
+            state,
+            text,
+            markup,
+            {APPLICATIONS_VIEW: APPLICATIONS_SORT_VIEW, APPLICATIONS_LIST_TOKEN: token},
+        )
+        return
+    if action in ("sort_set", "sort_cancel"):
+        await _handle_sort_choice(
+            message,
+            state,
+            api_client,
+            callback.from_user,
+            context,
+            SORT_CALLBACK_VALUES[parts[4]] if action == "sort_set" else None,
+        )
         return
     # Dispatcher event isolation serializes acceptance; consume before any API work.
     await state.update_data({APPLICATIONS_LIST_TOKEN: None})
@@ -435,6 +562,84 @@ async def _handle_list_callback(
             q=None if action == "reset_search" else None,
             commit_search_query=action == "reset_search",
         )
+
+
+async def handle_sort_cancel(
+    message: Message, state: FSMContext, api_client: BotApiClient,
+) -> None:
+    context = await state.get_data()
+    if (
+        context.get(APPLICATIONS_VIEW) != APPLICATIONS_SORT_VIEW
+        or not isinstance(context.get(APPLICATIONS_LIST_TOKEN), str)
+    ):
+        return
+    await _handle_sort_choice(message, state, api_client, message.from_user, context, None)
+
+
+async def _handle_sort_choice(
+    message: Message,
+    state: FSMContext,
+    api_client: BotApiClient,
+    actor: User | None,
+    context: dict[str, object],
+    candidate_sort: str | None,
+) -> None:
+    if actor is None:
+        return
+    current_sort = _committed_sort(context)
+    status = cast(str | None, context.get(APPLICATIONS_FILTER_STATUS))
+    q = cast(str | None, context.get(APPLICATIONS_SEARCH_QUERY))
+    current_offset = context.get(APPLICATIONS_OFFSET, 0)
+    if type(current_offset) is not int:
+        return
+    target_sort = candidate_sort or current_sort
+    target_offset = 0 if candidate_sort is not None else current_offset
+    try:
+        user_id = await api_client.create_or_get_user(actor)
+        page = await api_client.list_applications(
+            user_id,
+            limit=PAGE_SIZE,
+            offset=target_offset,
+            status=status,
+            q=q,
+            sort=target_sort,
+        )
+        items = cast(list[dict[str, object]], page["items"])
+    except httpx.HTTPError:
+        logger.warning("Could not load applications for sort transition", exc_info=True)
+        token = context.get(APPLICATIONS_LIST_TOKEN)
+        if isinstance(token, str):
+            text, markup = _sort_picker_content(
+                token, current_sort, "Не удалось загрузить вакансии. Попробуй ещё раз.",
+            )
+            await _render_sort_transition(message, state, text, markup, {})
+        return
+    token = secrets.token_hex(4)
+    text, markup = _applications_list_content(
+        items,
+        offset=target_offset,
+        has_next=bool(page["has_next"]),
+        token=token,
+        status=status,
+        q=q,
+        sort=target_sort,
+    )
+    rendered = await _render_sort_transition(
+        message,
+        state,
+        text,
+        markup,
+        {
+            APPLICATIONS_OFFSET: target_offset,
+            APPLICATIONS_VIEW: APPLICATIONS_LIST_VIEW,
+            APPLICATIONS_APPLICATION_ID: None,
+            APPLICATIONS_LIST_TOKEN: token,
+            APPLICATIONS_SEARCH_TOKEN: None,
+            APPLICATIONS_SORT: target_sort,
+        },
+    )
+    if rendered:
+        await state.set_state(None)
 
 
 async def handle_search_text(message: Message, state: FSMContext, api_client: BotApiClient) -> None:

@@ -7,7 +7,7 @@ import httpx
 import pytest
 from aiogram import Bot
 from aiogram.exceptions import TelegramBadRequest
-from aiogram.methods import EditMessageText
+from aiogram.methods import EditMessageText, SendMessage
 from aiogram.types import CallbackQuery, Chat, Message, MessageEntity, Update, User
 
 from test_applications import DispatcherApi, _applications_callback_update, _dispatcher_state
@@ -16,7 +16,8 @@ from app.applications import (
     APPLICATIONS_BUTTON, APPLICATIONS_EMPTY_MESSAGE, APPLICATIONS_FILTER_STATUS,
     APPLICATIONS_FILTER_VIEW, APPLICATIONS_LIST_TOKEN, APPLICATIONS_MESSAGE_ID,
     APPLICATIONS_OFFSET, APPLICATIONS_SEARCH_QUERY, APPLICATIONS_SEARCH_TOKEN,
-    ApplicationsStates, APPLICATIONS_STATUS_TOKEN, APPLICATIONS_VIEW, STATUS_LABELS,
+    APPLICATIONS_SORT, APPLICATIONS_SORT_VIEW, ApplicationsStates,
+    APPLICATIONS_STATUS_TOKEN, APPLICATIONS_VIEW, SORT_LABELS, STATUS_LABELS,
 )
 
 
@@ -27,16 +28,28 @@ class FilterApi(DispatcherApi):
                       for index in range(1, count + 1)]
         self.queries = []
         self.search_queries = []
+        self.sort_queries = []
         self.puts = []
         self.fail_list = False
 
-    async def list_applications(self, user_id, *, limit, offset, status=None, q=None):
+    async def list_applications(
+        self, user_id, *, limit, offset, status=None, q=None, sort="newest",
+    ):
         self.queries.append((user_id, status, limit, offset))
         self.search_queries.append(q)
+        self.sort_queries.append(sort)
         if self.fail_list:
             raise httpx.ReadTimeout("test")
         items = [dict(item) for item in self.items if (status is None or item["status"] == status)
                  and (q is None or q.lower() in item["title"].lower())]
+        if sort == "oldest":
+            items.reverse()
+        elif sort == "next_action":
+            items.sort(key=lambda item: (
+                item.get("next_action_due_on") is None,
+                item.get("next_action_due_on") or "",
+                -int(item["app_id"]),
+            ))
         return {"items": items[offset:offset + limit], "has_next": len(items) > offset + limit}
 
     async def get_application(self, user_id, app_id):
@@ -60,11 +73,16 @@ class UI:
         self.sends, self.edits, self.cleaned, self.deleted, self.acks = [], [], [], [], []
         self.counter = 0
         self.fail_edit = False
+        self.fail_send = False
         self.fail_cleanup = False
         self.fail_delete = False
         self.not_modified = False
 
     async def send(self, message, text, **kwargs):
+        if self.fail_send:
+            raise TelegramBadRequest(
+                method=SendMessage(chat_id=456, text=text), message="send failed"
+            )
         self.message_id = 100 + len(self.sends)
         self.text, self.markup, self.parse_mode = text, kwargs.get("reply_markup"), kwargs.get("parse_mode")
         self.sends.append(self.message_id)
@@ -151,6 +169,195 @@ async def setup(monkeypatch, count=12):
     monkeypatch.setattr(CallbackQuery, "answer", ack)
     state = await _dispatcher_state(bot, {})
     return ui, api, state
+
+
+@pytest.mark.parametrize(
+    ("choice", "sort"),
+    [
+        ("✓ 🆕 Сначала новые", "newest"),
+        ("🕰 Сначала старые", "oldest"),
+        ("📅 Ближайшее действие", "next_action"),
+    ],
+)
+def test_dispatcher_sort_picker_selects_each_mode_and_resets_offset(
+    monkeypatch, choice, sort,
+):
+    async def scenario():
+        ui, api, state = await setup(monkeypatch, count=7)
+        try:
+            await ui.menu()
+            await ui.click("Вперёд ➡️")
+            await state.update_data({
+                APPLICATIONS_SEARCH_QUERY: "Vacancy",
+                APPLICATIONS_FILTER_STATUS: "saved",
+            })
+            await ui.click("Сортировка: Сначала новые")
+            assert (await state.get_data())[APPLICATIONS_VIEW] == APPLICATIONS_SORT_VIEW
+            assert ui.button("✓ 🆕 Сначала новые")
+            before = len(api.queries)
+            await ui.click(choice)
+            data = await state.get_data()
+            assert data[APPLICATIONS_SORT] == sort
+            assert data[APPLICATIONS_OFFSET] == 0
+            assert data[APPLICATIONS_SEARCH_QUERY] == "Vacancy"
+            assert data[APPLICATIONS_FILTER_STATUS] == "saved"
+            assert api.sort_queries[-1] == sort
+            assert api.queries[-1] == (4, "saved", 5, 0)
+            assert len(api.queries) == before + 1
+            assert ui.button(f"Сортировка: {SORT_LABELS[sort]}")
+        finally:
+            await state.clear()
+            await ui.bot.session.close()
+    asyncio.run(scenario())
+
+
+def test_dispatcher_sort_survives_list_search_filter_detail_and_match(monkeypatch):
+    async def scenario():
+        ui, api, state = await setup(monkeypatch, count=7)
+        try:
+            await ui.menu()
+            await ui.click("Сортировка: Сначала новые")
+            await ui.click("🕰 Сначала старые")
+            await ui.click("Вперёд ➡️")
+            assert api.sort_queries[-1] == "oldest"
+            await ui.click("🔎 Поиск")
+            await ui.text_input("Vacancy")
+            assert api.sort_queries[-1] == "oldest"
+            await ui.click("✖️ Сбросить поиск")
+            assert api.sort_queries[-1] == "oldest"
+            await ui.click("Фильтр: Все")
+            await ui.click("Сохранена")
+            assert api.sort_queries[-1] == "oldest"
+            await ui.click("Vacancy 7")
+            await ui.click("⬅️ К списку")
+            assert api.sort_queries[-1] == "oldest"
+            await ui.click("Vacancy 7")
+            await ui.click("🔎 Почему подходит?")
+            await ui.click("⬅️ К вакансии")
+            assert (await state.get_data())[APPLICATIONS_SORT] == "oldest"
+            await ui.click("🔎 Почему подходит?")
+            await ui.click("📋 К списку")
+            assert api.sort_queries[-1] == "oldest"
+            assert (await state.get_data())[APPLICATIONS_SORT] == "oldest"
+        finally:
+            await state.clear()
+            await ui.bot.session.close()
+    asyncio.run(scenario())
+
+
+def test_dispatcher_sort_cancel_button_and_command_preserve_context(monkeypatch):
+    async def scenario():
+        ui, api, state = await setup(monkeypatch, count=7)
+        try:
+            await ui.menu()
+            await ui.click("Вперёд ➡️")
+            await state.update_data({APPLICATIONS_SEARCH_QUERY: "Vacancy"})
+            await ui.click("Сортировка: Сначала новые")
+            await ui.click("Отмена")
+            data = await state.get_data()
+            assert data[APPLICATIONS_SORT] == "newest"
+            assert data[APPLICATIONS_OFFSET] == 5
+            assert data[APPLICATIONS_SEARCH_QUERY] == "Vacancy"
+            assert api.sort_queries[-1] == "newest"
+
+            await ui.click("Сортировка: Сначала новые")
+            await ui.cancel()
+            data = await state.get_data()
+            assert data[APPLICATIONS_SORT] == "newest"
+            assert data[APPLICATIONS_OFFSET] == 5
+            assert data[APPLICATIONS_SEARCH_QUERY] == "Vacancy"
+            assert data[APPLICATIONS_VIEW] == "list"
+        finally:
+            await state.clear()
+            await ui.bot.session.close()
+    asyncio.run(scenario())
+
+
+def test_dispatcher_sort_stale_duplicate_and_api_failure_are_safe(monkeypatch):
+    async def scenario():
+        ui, api, state = await setup(monkeypatch, count=7)
+        try:
+            await ui.menu()
+            await ui.click("Вперёд ➡️")
+            await ui.click("Сортировка: Сначала новые")
+            choice = ui.button("🕰 Сначала старые")
+            old_id = ui.message_id
+            api.fail_list = True
+            await ui.feed(choice)
+            data = await state.get_data()
+            assert data[APPLICATIONS_SORT] == "newest"
+            assert data[APPLICATIONS_OFFSET] == 5
+            assert data[APPLICATIONS_VIEW] == APPLICATIONS_SORT_VIEW
+            assert "Не удалось загрузить" in ui.text
+            assert ui.button("Отмена")
+
+            api.fail_list = False
+            await asyncio.gather(ui.feed(choice), ui.feed(choice))
+            assert api.sort_queries[-1] == "oldest"
+            successful_calls = len(api.queries)
+            await ui.feed(choice)
+            await ui.feed(choice, message_id=old_id + 999)
+            assert len(api.queries) == successful_calls
+        finally:
+            await state.clear()
+            await ui.bot.session.close()
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize(("fail_send", "fail_cleanup"), [(False, False), (False, True), (True, False)])
+def test_dispatcher_sort_render_failures_preserve_canonical_rules(
+    monkeypatch, fail_send, fail_cleanup,
+):
+    async def scenario():
+        ui, api, state = await setup(monkeypatch, count=7)
+        try:
+            await ui.menu()
+            await ui.click("Сортировка: Сначала новые")
+            old_message_id = ui.message_id
+            old_token = (await state.get_data())[APPLICATIONS_LIST_TOKEN]
+            ui.fail_edit = True
+            ui.fail_send = fail_send
+            ui.fail_cleanup = fail_cleanup
+            await ui.click("🕰 Сначала старые")
+            data = await state.get_data()
+            if fail_send:
+                assert data[APPLICATIONS_MESSAGE_ID] == old_message_id
+                assert data[APPLICATIONS_LIST_TOKEN] == old_token
+                assert data[APPLICATIONS_VIEW] == APPLICATIONS_SORT_VIEW
+                assert data[APPLICATIONS_SORT] == "newest"
+                assert ui.cleaned == []
+            else:
+                assert data[APPLICATIONS_MESSAGE_ID] != old_message_id
+                assert data[APPLICATIONS_VIEW] == "list"
+                assert data[APPLICATIONS_SORT] == "oldest"
+                assert old_message_id in ui.cleaned
+                assert ui.button("Сортировка: Сначала старые")
+        finally:
+            await state.clear()
+            await ui.bot.session.close()
+    asyncio.run(scenario())
+
+
+def test_dispatcher_sort_picker_is_available_when_empty_and_main_menu_resets_it(monkeypatch):
+    async def scenario():
+        ui, api, state = await setup(monkeypatch, count=0)
+        try:
+            await ui.menu()
+            await ui.click("Сортировка: Сначала новые")
+            stale_choice = ui.button("🕰 Сначала старые")
+            stale_id = ui.message_id
+            await ui.menu("💼 Добавить вакансию")
+            assert (await state.get_data()).get(APPLICATIONS_SORT) is None
+            calls = len(api.queries)
+            await ui.feed(stale_choice, message_id=stale_id)
+            assert len(api.queries) == calls
+            await ui.menu()
+            assert (await state.get_data())[APPLICATIONS_SORT] == "newest"
+            assert ui.button("Сортировка: Сначала новые")
+        finally:
+            await state.clear()
+            await ui.bot.session.close()
+    asyncio.run(scenario())
 
 
 @pytest.mark.parametrize("status", [None, *STATUS_LABELS])

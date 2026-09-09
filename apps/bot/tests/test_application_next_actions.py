@@ -11,6 +11,7 @@ from app.applications import (
     ApplicationsStates, APPLICATIONS_MESSAGE_ID, APPLICATIONS_VIEW,
     APPLICATIONS_OFFSET, APPLICATIONS_FILTER_STATUS, APPLICATIONS_NEXT_ACTION_DRAFT,
     APPLICATIONS_NEXT_ACTION_TOKEN,
+    APPLICATIONS_SORT,
 )
 from test_application_notes import note_setup, text_update
 
@@ -18,6 +19,7 @@ from test_application_notes import note_setup, text_update
 async def setup(monkeypatch, initial=None):
     ui, api, state = await note_setup(monkeypatch, "Keep note")
     api.actions = initial
+    api.items[-1]["next_action_due_on"] = initial[1] if initial else None
     api.action_puts, api.action_deletes = [], []
     api.action_error = None
     original = api.get_application
@@ -30,6 +32,7 @@ async def setup(monkeypatch, initial=None):
         api.action_puts.append((user_id, app_id, action, due_on))
         if api.action_error not in ("timeout", "500", "404"):
             api.actions = (action, due_on)
+            api.items[-1]["next_action_due_on"] = due_on
         fail()
         return await get(user_id, app_id)
     def fail():
@@ -41,6 +44,7 @@ async def setup(monkeypatch, initial=None):
         api.action_deletes.append((user_id, app_id))
         if api.action_error not in ("timeout", "500", "404"):
             api.actions = None
+            api.items[-1]["next_action_due_on"] = None
         fail()
         return await get(user_id, app_id)
     api.get_application, api.set_application_next_action, api.delete_application_next_action = get, write, delete
@@ -88,9 +92,35 @@ def test_create_replace_delete_canonical_and_stale(monkeypatch):
         assert await state.get_state() is None
         await ui.click("⬅️ К списку")
         assert api.queries[-1] == (4, "interview", 5, 5)
+        assert api.sort_queries[-1] == "next_action"
+        assert (await state.get_data())[APPLICATIONS_SORT] == "next_action"
         assert api.puts == []  # no status mutation, hence no history write
         assert api.note_puts == []
     run(monkeypatch, scenario)
+
+
+@pytest.mark.parametrize("delete", [False, True])
+def test_next_action_change_then_back_fetches_fresh_sorted_page(monkeypatch, delete):
+    async def scenario(ui, api, state):
+        for item in api.items:
+            item["next_action_due_on"] = None
+        if delete:
+            await ui.click("📅 Следующее действие")
+            await ui.click("Отмена")
+            await ui.click("🗑 Удалить следующее действие")
+        else:
+            api.items[0]["next_action_due_on"] = "2026-09-10"
+            await ui.click("📅 Следующее действие")
+            await text_update(ui, "Follow up")
+            await text_update(ui, "12.09.2026")
+        before = len(api.queries)
+        await ui.click("⬅️ К списку")
+        assert len(api.queries) == before + 1
+        assert api.sort_queries[-1] == "next_action"
+        assert (await state.get_data())[APPLICATIONS_OFFSET] == 5
+        assert "Vacancy 6" not in ui.text
+        assert "Vacancy 1" in ui.text if delete else "Vacancy 2" in ui.text
+    run(monkeypatch, scenario, ("Existing", "2026-09-01") if delete else None)
 
 
 @pytest.mark.parametrize("date_step", [False, True])
