@@ -42,7 +42,10 @@ def test_owner_gets_on_demand_match_and_algorithm_version() -> None:
     application_id, _ = create_application(user_id)
     response = client.get(f"/users/{user_id}/applications/{application_id}/match")
     assert response.status_code == 200
-    assert response.json()["algorithm_version"] == "job-match-v1"
+    payload = response.json()
+    assert payload["algorithm_version"] == "job-match-v2"
+    assert "unknowns" in payload
+    assert payload["recommendation"]["code"] == "apply"
 
 
 def test_foreign_and_missing_application_are_indistinguishable() -> None:

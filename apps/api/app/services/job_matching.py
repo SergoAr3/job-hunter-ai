@@ -5,7 +5,7 @@ import unicodedata
 from decimal import Decimal
 
 from app.models import Application, Job, UserProfile
-from app.schemas import MatchComponentOut, MatchInputStateOut, MatchReasonOut, MatchResultOut
+from app.schemas import MatchComponentOut, MatchInputStateOut, MatchReasonOut, MatchRecommendationOut, MatchResultOut
 from app.services.match_aliases import (
     LANGUAGE_ALIASES,
     ROLE_PHRASE_ALIASES,
@@ -15,7 +15,7 @@ from app.services.match_aliases import (
     SKILL_ALIASES,
 )
 
-ALGORITHM_VERSION = "job-match-v1"
+ALGORITHM_VERSION = "job-match-v2"
 WEIGHTS = {
     "role": 20,
     "required_skills": 30,
@@ -41,29 +41,19 @@ def canonical_skill(value: str) -> str:
 
 def calculate_match(profile: UserProfile, job: Job, application: Application) -> MatchResultOut:
     components: dict[str, MatchComponentOut] = {}
-    strengths: list[MatchReasonOut] = []
-    gaps: list[MatchReasonOut] = []
     conflicts: list[MatchReasonOut] = []
 
     components["role"] = _role_component(profile.target_roles, job.title)
-    _reasons_for_component("role", components["role"], strengths, gaps)
 
     skills_available = job.ai_enrichment_status == "success"
     components["required_skills"] = _skills_component(profile.skills, job.required_skills, skills_available, "required_skills")
-    _reasons_for_component("required_skills", components["required_skills"], strengths, gaps)
     components["nice_to_have_skills"] = _skills_component(profile.skills, job.nice_to_have_skills, skills_available, "nice_to_have_skills")
-    _reasons_for_component("nice_to_have_skills", components["nice_to_have_skills"], strengths, gaps)
 
     components["seniority"] = _seniority_component(profile.experience, job.seniority)
-    _reasons_for_component("seniority", components["seniority"], strengths, gaps)
     components["languages"] = _languages_component(profile.languages, job.language_requirements, skills_available)
-    _reasons_for_component("languages", components["languages"], strengths, gaps)
     components["workplace"] = _workplace_component(profile.workplace_preference, job.workplace_type)
-    _reasons_for_component("workplace", components["workplace"], strengths, gaps)
     components["location"] = _location_component(profile.location, job.location, job.workplace_type)
-    _reasons_for_component("location", components["location"], strengths, gaps)
     components["salary"], salary_conflict = _salary_component(profile, job)
-    _reasons_for_component("salary", components["salary"], strengths, gaps)
     if salary_conflict:
         conflicts.append(MatchReasonOut(code="salary_below_minimum", component="salary"))
 
@@ -77,6 +67,9 @@ def calculate_match(profile: UserProfile, job: Job, application: Application) ->
         weighted = sum(component.weight * component.score / 100 for component in components.values() if component.score is not None)
         score = _round_to_five(weighted * 100 / evaluated_weight)
         verdict = "high" if score >= 75 else "medium" if score >= 50 else "low"
+
+    strengths, gaps, unknowns = _explanation_reasons(profile, job, components, skills_available)
+    recommendation = _recommendation(verdict, conflicts, gaps, unknowns)
 
     return MatchResultOut(
         algorithm_version=ALGORITHM_VERSION,
@@ -94,7 +87,9 @@ def calculate_match(profile: UserProfile, job: Job, application: Application) ->
         components=components,
         strengths=strengths,
         gaps=gaps,
+        unknowns=unknowns,
         conflicts=conflicts,
+        recommendation=recommendation,
     )
 
 
@@ -272,15 +267,109 @@ def _annual_amount(amount: Decimal, period: str) -> Decimal:
     return amount * 12 if period == "month" else amount
 
 
-def _reasons_for_component(component: str, value: MatchComponentOut, strengths: list[MatchReasonOut], gaps: list[MatchReasonOut]) -> None:
-    if component == "role" and value.status == "partial":
-        for item in value.matched:
-            gaps.append(MatchReasonOut(code="role_partial", component=component, value=item))
-        return
-    for item in value.matched:
-        strengths.append(MatchReasonOut(code=f"{component}_matched", component=component, value=item))
-    for item in value.missing:
-        gaps.append(MatchReasonOut(code=f"{component}_missing", component=component, value=item))
+def _explanation_reasons(
+    profile: UserProfile, job: Job, components: dict[str, MatchComponentOut], skills_available: bool
+) -> tuple[list[MatchReasonOut], list[MatchReasonOut], list[MatchReasonOut]]:
+    strengths: list[MatchReasonOut] = []
+    gaps: list[MatchReasonOut] = []
+    unknowns: list[MatchReasonOut] = []
+
+    role = components["role"]
+    if role.status == "matched":
+        strengths.extend(MatchReasonOut(code="role_matched", component="role", value=value) for value in role.matched)
+    elif role.status == "partial":
+        gaps.extend(MatchReasonOut(code="role_partial", component="role", value=value) for value in role.matched)
+    elif role.status == "mismatch":
+        gaps.extend(MatchReasonOut(code="role_not_matched", component="role", value=value) for value in role.missing)
+    elif job.title is None:
+        unknowns.append(MatchReasonOut(code="vacancy_role_unknown", component="role"))
+    else:
+        unknowns.append(MatchReasonOut(code="profile_target_roles_missing", component="role"))
+
+    for component, match_code, gap_code in (
+        ("required_skills", "required_skill_listed", "required_skill_not_listed"),
+        ("nice_to_have_skills", "nice_to_have_skill_listed", "nice_to_have_skill_not_listed"),
+    ):
+        value = components[component]
+        strengths.extend(MatchReasonOut(code=match_code, component=component, value=item) for item in value.matched)
+        gaps.extend(MatchReasonOut(code=gap_code, component=component, value=item) for item in value.missing)
+    if not skills_available and (job.required_skills or job.nice_to_have_skills):
+        unknowns.append(MatchReasonOut(code="vacancy_skills_unavailable", component="required_skills"))
+    elif job.required_skills and not profile.skills:
+        unknowns.append(MatchReasonOut(code="profile_skills_missing", component="required_skills"))
+
+    seniority = components["seniority"]
+    if seniority.status == "matched":
+        strengths.extend(MatchReasonOut(code="seniority_matches", component="seniority", value=item) for item in seniority.matched)
+    elif seniority.status in {"partial", "mismatch"}:
+        gaps.extend(MatchReasonOut(code="seniority_below_requirement", component="seniority", value=item) for item in seniority.missing)
+    elif job.seniority == "unknown":
+        unknowns.append(MatchReasonOut(code="vacancy_seniority_unknown", component="seniority"))
+    else:
+        unknowns.append(MatchReasonOut(code="profile_seniority_unknown", component="seniority"))
+
+    languages = components["languages"]
+    strengths.extend(MatchReasonOut(code="language_level_sufficient", component="languages", value=item) for item in languages.matched)
+    if skills_available and job.language_requirements:
+        parsed = [_parse_language_requirement(item) for item in job.language_requirements]
+        usable = [(language, level, raw) for language, level, raw in parsed if language is not None and level is not None]
+        if not usable:
+            unknowns.append(MatchReasonOut(code="language_requirements_unparseable", component="languages"))
+        else:
+            levels = {_canonical_language(str(item.get("language", ""))): _level(str(item.get("level", ""))) for item in profile.languages}
+            for language, level, raw in usable:
+                actual = levels.get(language)
+                if actual is None:
+                    gaps.append(MatchReasonOut(code="language_not_listed", component="languages", value=raw))
+                elif actual < level:
+                    gaps.append(MatchReasonOut(code="language_level_below_requirement", component="languages", value=raw))
+    elif not skills_available and job.language_requirements:
+        unknowns.append(MatchReasonOut(code="vacancy_language_requirements_unavailable", component="languages"))
+
+    workplace = components["workplace"]
+    if workplace.status == "matched":
+        strengths.append(MatchReasonOut(code="workplace_matches", component="workplace"))
+    elif workplace.status == "mismatch":
+        gaps.extend(MatchReasonOut(code="workplace_not_preferred", component="workplace", value=item) for item in workplace.missing)
+    else:
+        unknowns.append(MatchReasonOut(code="vacancy_workplace_unknown", component="workplace"))
+
+    location = components["location"]
+    if location.status == "matched":
+        strengths.extend(MatchReasonOut(code="location_matches", component="location", value=item) for item in location.matched)
+    elif location.status == "mismatch":
+        gaps.extend(MatchReasonOut(code="location_not_listed", component="location", value=item) for item in location.missing)
+    elif job.workplace_type in {"onsite", "hybrid"}:
+        unknowns.append(MatchReasonOut(code="vacancy_location_missing" if not job.location else "profile_locations_missing", component="location"))
+
+    salary = components["salary"]
+    if salary.status == "matched":
+        strengths.append(MatchReasonOut(code="salary_meets_expectations", component="salary"))
+    elif salary.status == "unknown":
+        unknowns.append(_salary_unknown_reason(profile, job))
+    return strengths, gaps, unknowns
+
+
+def _salary_unknown_reason(profile: UserProfile, job: Job) -> MatchReasonOut:
+    if job.salary_min is None and job.salary_max is None:
+        return MatchReasonOut(code="vacancy_salary_missing", component="salary")
+    if profile.salary_min is None:
+        return MatchReasonOut(code="profile_salary_missing", component="salary")
+    if job.salary_period_inferred:
+        return MatchReasonOut(code="salary_period_inferred", component="salary")
+    return MatchReasonOut(code="salary_not_comparable", component="salary")
+
+
+def _recommendation(
+    verdict: str, conflicts: list[MatchReasonOut], gaps: list[MatchReasonOut], unknowns: list[MatchReasonOut]
+) -> MatchRecommendationOut:
+    if verdict == "insufficient_data":
+        return MatchRecommendationOut(code="insufficient_data", primary_reason=unknowns[0] if unknowns else None)
+    if verdict == "low":
+        return MatchRecommendationOut(code="unlikely_fit", primary_reason=conflicts[0] if conflicts else gaps[0] if gaps else None)
+    if verdict == "medium" or conflicts:
+        return MatchRecommendationOut(code="apply_with_risks", primary_reason=conflicts[0] if conflicts else gaps[0] if gaps else None)
+    return MatchRecommendationOut(code="apply", primary_reason=None)
 
 
 def _round_percent(numerator: int, denominator: int) -> int:

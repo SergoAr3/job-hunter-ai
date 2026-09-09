@@ -12,3 +12,14 @@
 - Сопровождайте новый функционал релевантными тестами.
 - Предпочитайте простые решения преждевременным абстракциям и инфраструктуре
   «на будущее».
+
+## Project-specific review
+
+- При изменениях БД/SQLAlchemy проверяйте согласованность моделей и миграций,
+  nullable/defaults/constraints/foreign keys, transaction boundaries,
+  commit/rollback/savepoints и состояние session после exceptions, concurrency,
+  legacy data/backfill, upgrade/downgrade и различия PostgreSQL и SQLite.
+- При изменениях bot/client проверяйте thin-client boundary, error UX,
+  nullable values, API failures, Telegram message limits, state transitions
+  и retry/cancel behavior. Для Telegram routing и lifecycle соблюдайте
+  `apps/bot/AGENTS.md`.

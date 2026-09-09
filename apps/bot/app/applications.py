@@ -16,7 +16,7 @@ from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMar
 from app.api_client import BotApiClient
 from app.jobs import (
     format_job_card,
-    format_match_details,
+    format_match_message,
     handle_add_job,
     remove_active_match_inline_keyboard,
 )
@@ -831,12 +831,7 @@ async def _show_application_match(
         return
     await remove_active_match_inline_keyboard(message, state)
 
-    score = match.get("score")
-    verdict = match.get("verdict")
-    if verdict == "insufficient_data" or not isinstance(score, int) or isinstance(score, bool):
-        text = "🎯 Недостаточно данных для надёжной оценки."
-    else:
-        text = f"🎯 Совпадение: {score}%\n\n{format_match_details(match)}"
+    text = format_match_message(match)
     await _replace_or_send(
         message,
         state,

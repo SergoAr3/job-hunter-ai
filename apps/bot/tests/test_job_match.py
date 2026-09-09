@@ -9,7 +9,7 @@ from aiogram.exceptions import TelegramAPIError
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.storage.base import StorageKey
 from aiogram.fsm.storage.memory import MemoryStorage
-from aiogram.methods import EditMessageReplyMarkup
+from aiogram.methods import EditMessageReplyMarkup, EditMessageText, SendMessage
 from aiogram import Bot
 from aiogram.types import CallbackQuery, Chat, Message, MessageEntity, Update, User
 
@@ -24,6 +24,7 @@ from app.jobs import (
     handle_add_job,
     handle_match_callback,
     format_match_details,
+    format_match_message,
     remove_active_match_inline_keyboard,
 )
 from app.jobs import AddJobStates
@@ -85,12 +86,25 @@ class FakeMessage:
         self.reply_markup: object | None = None
         self.deleted = False
         self.fail_match_keyboard_cleanup = False
+        self.fail_match_edit = False
+        self.fail_match_send = False
+        self.edits: list[tuple[str, object | None]] = []
 
     async def answer(self, text: str, reply_markup: object | None = None) -> "FakeMessage":
+        if self.fail_match_send:
+            raise TelegramAPIError(SendMessage(chat_id=self.chat.id, text=text), "send failed")
         result = FakeMessage(text, bot=self.bot)
         result.reply_markup = reply_markup
         self.answers.append(result)
         return result
+
+    async def edit_text(self, text: str, *, reply_markup: object | None = None) -> "FakeMessage":
+        if self.fail_match_edit:
+            raise TelegramAPIError(EditMessageText(chat_id=self.chat.id, message_id=self.message_id, text=text), "edit failed")
+        self.text = text
+        self.reply_markup = reply_markup
+        self.edits.append((text, reply_markup))
+        return self
 
     async def delete(self) -> None:
         self.deleted = True
@@ -157,7 +171,7 @@ def test_new_job_shows_match_and_match_failure_does_not_break_save() -> None:
         message = FakeMessage("https://example.com/job")
         api = FakeApi()
         await handle_job_url(message, current_state, api)
-        assert [item.text for item in message.answers] == [PROCESSING_MESSAGE, SAVED_MESSAGE, "🎯 Совпадение: 80%"]
+        assert [item.text for item in message.answers] == [PROCESSING_MESSAGE, SAVED_MESSAGE, "🎯 Совпадение: 80% · Хорошее совпадение"]
         keyboard = message.answers[-1].reply_markup
         assert getattr(keyboard, "inline_keyboard")[0][0].callback_data == f"{MATCH_DETAILS_PREFIX}42"
         assert await current_state.get_state() is None
@@ -185,14 +199,33 @@ def test_profile_required_and_insufficient_data_messages() -> None:
 
         await current_state.set_state(AddJobStates.waiting_for_url)
         insufficient = FakeMessage("https://example.com/job-2")
-        await handle_job_url(insufficient, current_state, FakeApi({"score": None, "verdict": "insufficient_data"}))
-        assert insufficient.answers[-1].text == "🎯 Недостаточно данных для надёжной оценки."
+        await handle_job_url(
+            insufficient,
+            current_state,
+            FakeApi(
+                {
+                    "score": None,
+                    "verdict": "insufficient_data",
+                    "strengths": [],
+                    "gaps": [],
+                    "conflicts": [],
+                    "unknowns": [{"code": "profile_skills_missing", "component": "required_skills", "value": None}],
+                    "recommendation": {
+                        "code": "insufficient_data",
+                        "primary_reason": {"code": "profile_skills_missing", "component": "required_skills", "value": None},
+                    },
+                }
+            ),
+        )
+        assert "Навыки не указаны в профиле" in insufficient.answers[-1].text
+        assert "Заполните недостающие данные профиля для более точной оценки." in insufficient.answers[-1].text
+        assert getattr(insufficient.answers[-1].reply_markup, "inline_keyboard")[0][0].callback_data == f"{MATCH_DETAILS_PREFIX}42"
         await storage.close()
 
     asyncio.run(scenario())
 
 
-def test_details_callback_cleans_keyboard_and_duplicate_is_stale() -> None:
+def test_details_callback_replaces_summary_and_duplicate_is_stale() -> None:
     async def scenario() -> None:
         storage, current_state = state()
         message = FakeMessage()
@@ -204,15 +237,16 @@ def test_details_callback_cleans_keyboard_and_duplicate_is_stale() -> None:
         assert callback.answered is True
         assert api.match_calls == 1
         assert message.reply_markup is None
-        assert len(message.answers) == 1
-        assert "Сильные стороны:" in message.answers[-1].text
-        assert "Что проверить:" in message.answers[-1].text
+        assert len(message.answers) == 0
+        assert "Сильные стороны:" in message.text
+        assert "Что проверить:" in message.text
+        assert (await current_state.get_data()).get(ACTIVE_MATCH_MESSAGE_ID) == message.message_id
 
         stale = FakeCallback(f"{MATCH_DETAILS_PREFIX}42", message)
         await handle_match_callback(stale, current_state, api)
         assert stale.answered is True
         assert api.match_calls == 1
-        assert len(message.answers) == 1
+        assert len(message.answers) == 0
         await storage.close()
 
     asyncio.run(scenario())
@@ -231,8 +265,8 @@ def test_concurrent_details_callbacks_claim_one_request_and_one_message() -> Non
         assert api.match_calls == 1
         api.release.set()
         await asyncio.gather(first, second)
-        assert len(message.answers) == 1
-        assert (await current_state.get_data()).get(ACTIVE_MATCH_MESSAGE_ID) is None
+        assert len(message.answers) == 0
+        assert (await current_state.get_data()).get(ACTIVE_MATCH_MESSAGE_ID) == message.message_id
         assert (await current_state.get_data()).get(ACTIVE_MATCH_DETAILS_CLAIM_ID) is None
         await storage.close()
 
@@ -254,7 +288,7 @@ def test_details_api_failure_restores_active_summary_for_retry() -> None:
         api.match = {"score": 80, "verdict": "high", "strengths": [], "gaps": [], "conflicts": []}
         await handle_match_callback(FakeCallback(f"{MATCH_DETAILS_PREFIX}42", message), current_state, api)
         assert api.match_calls == 2
-        assert len(message.answers) == 1
+        assert len(message.answers) == 0
         await storage.close()
 
     asyncio.run(scenario())
@@ -285,15 +319,37 @@ def test_navigation_during_claim_does_not_restore_or_send_stale_details() -> Non
     asyncio.run(scenario())
 
 
-def test_details_are_sent_when_keyboard_cleanup_fails() -> None:
+def test_details_edit_failure_sends_new_canonical_card_and_cleans_old_keyboard() -> None:
     async def scenario() -> None:
         storage, current_state = state()
         message = FakeMessage()
-        message.fail_match_keyboard_cleanup = True
+        message.fail_match_edit = True
+        message.reply_markup = object()
         await current_state.update_data({ACTIVE_MATCH_MESSAGE_ID: message.message_id})
         await handle_match_callback(FakeCallback(f"{MATCH_DETAILS_PREFIX}42", message), current_state, FakeApi())
         assert len(message.answers) == 1
-        assert (await current_state.get_data()).get(ACTIVE_MATCH_MESSAGE_ID) is None
+        assert message.reply_markup is None
+        assert (await current_state.get_data()).get(ACTIVE_MATCH_MESSAGE_ID) == message.answers[0].message_id
+        assert (await current_state.get_data()).get(ACTIVE_MATCH_DETAILS_CLAIM_ID) is None
+        await storage.close()
+
+    asyncio.run(scenario())
+
+
+def test_details_edit_and_send_failure_restores_usable_summary() -> None:
+    async def scenario() -> None:
+        storage, current_state = state()
+        message = FakeMessage()
+        message.fail_match_edit = True
+        message.fail_match_send = True
+        message.reply_markup = object()
+        await current_state.update_data({ACTIVE_MATCH_MESSAGE_ID: message.message_id})
+
+        await handle_match_callback(FakeCallback(f"{MATCH_DETAILS_PREFIX}42", message), current_state, FakeApi())
+
+        assert len(message.answers) == 0
+        assert message.reply_markup is not None
+        assert (await current_state.get_data()).get(ACTIVE_MATCH_MESSAGE_ID) == message.message_id
         assert (await current_state.get_data()).get(ACTIVE_MATCH_DETAILS_CLAIM_ID) is None
         await storage.close()
 
@@ -338,10 +394,84 @@ def test_partial_role_is_not_rendered_as_full_match() -> None:
     assert "Подходящая роль" not in rendered
 
 
+def test_v2_match_details_prioritize_conflicts_and_limit_sections() -> None:
+    rendered = format_match_details(
+        {
+            "strengths": [
+                {"code": "role_matched", "component": "role", "value": "Backend Developer"},
+                *[{"code": "required_skill_listed", "component": "required_skills", "value": value} for value in ("Python", "SQL", "Docker", "Git")],
+            ],
+            "gaps": [
+                {"code": "required_skill_not_listed", "component": "required_skills", "value": "Kubernetes"},
+                {"code": "nice_to_have_skill_not_listed", "component": "nice_to_have_skills", "value": "Redis"},
+                {"code": "language_level_below_requirement", "component": "languages", "value": "English C1"},
+            ],
+            "conflicts": [{"code": "salary_below_minimum", "component": "salary", "value": None}],
+            "unknowns": [
+                {"code": "vacancy_salary_missing", "component": "salary", "value": None},
+                {"code": "vacancy_workplace_unknown", "component": "workplace", "value": None},
+                {"code": "vacancy_role_unknown", "component": "role", "value": None},
+            ],
+            "recommendation": {"code": "apply_with_risks"},
+        }
+    )
+
+    assert "✅ Сильные стороны:" in rendered
+    assert "⚠️ Что проверить:" in rendered
+    assert rendered.index("Зарплата ниже") < rendered.index("Kubernetes")
+    assert rendered.count("• ") == 8
+    assert "Роль вакансии не указана" not in rendered
+    assert "💡 Можно откликнуться" in rendered
+    assert len(rendered) < 4096
+
+
+@pytest.mark.parametrize(
+    ("primary_reason", "expected"),
+    [
+        ({"code": "profile_seniority_unknown"}, "Заполните недостающие данные профиля для более точной оценки."),
+        ({"code": "vacancy_workplace_unknown"}, "В вакансии недостаточно данных для надёжной оценки."),
+        (None, "Недостаточно данных для надёжной оценки."),
+    ],
+)
+def test_insufficient_data_recommendation_uses_primary_reason(
+    primary_reason: dict[str, str] | None, expected: str
+) -> None:
+    rendered = format_match_details(
+        {
+            "strengths": [],
+            "gaps": [],
+            "conflicts": [],
+            "unknowns": [],
+            "recommendation": {"code": "insufficient_data", "primary_reason": primary_reason},
+        }
+    )
+
+    assert rendered == f"💡 {expected}"
+
+
+def test_v2_match_message_caps_utf16_and_keeps_plain_text_characters() -> None:
+    long_value = "🚀<skill>&" * 1000
+    rendered = format_match_message(
+        {
+            "score": 80,
+            "verdict": "high",
+            "strengths": [{"code": "required_skill_listed", "component": "required_skills", "value": long_value}],
+            "gaps": [],
+            "conflicts": [],
+            "unknowns": [],
+            "recommendation": {"code": "apply"},
+        }
+    )
+
+    assert len(rendered.encode("utf-16-le")) // 2 <= 3800
+    assert rendered.endswith("…")
+    assert "<skill>&" in rendered
+
+
 def test_workplace_match_explanation_is_neutral_for_any_preference() -> None:
     rendered = format_match_details(
         {
-            "strengths": [{"component": "workplace", "code": "workplace_matched", "value": "onsite"}],
+            "strengths": [{"component": "workplace", "code": "workplace_matches", "value": "onsite"}],
             "gaps": [],
             "conflicts": [],
         }
@@ -350,21 +480,21 @@ def test_workplace_match_explanation_is_neutral_for_any_preference() -> None:
     assert "onsite" not in rendered
 
 
-def test_workplace_match_hidden_by_strength_limit_is_shown_once_in_other_criteria() -> None:
+def test_workplace_match_hidden_by_strength_limit_does_not_add_generic_status_noise() -> None:
     strengths = [
         {"component": "role", "code": "role_matched", "value": "Python-разработчик"},
         *[
             {"component": "required_skills", "code": "required_skills_matched", "value": skill}
             for skill in ("Python", "PostgreSQL", "Docker", "Linux", "Git")
         ],
-        {"component": "workplace", "code": "workplace_matched", "value": "onsite"},
+        {"component": "workplace", "code": "workplace_matches", "value": "onsite"},
     ]
     rendered = format_match_details(
         {"strengths": strengths, "gaps": [], "conflicts": [], "components": {"workplace": {"status": "matched"}}}
     )
 
     assert "Формат работы подходит" not in rendered
-    assert rendered.count("🏠 Формат работы: соответствует") == 1
+    assert "🏠 Формат работы:" not in rendered
 
 
 def test_workplace_mismatch_and_unknown_are_rendered_once() -> None:
@@ -382,14 +512,14 @@ def test_workplace_mismatch_and_unknown_are_rendered_once() -> None:
 
     assert mismatch.count("Формат работы для проверки: remote") == 1
     assert "🏠 Формат работы:" not in mismatch
-    assert unknown.count("🏠 Формат работы: нет данных") == 1
+    assert unknown == "Недостаточно данных для объяснения совпадения."
 
 
 def test_match_details_render_other_component_statuses_without_guessing() -> None:
     rendered = format_match_details(
         {
             "strengths": [{"component": "seniority", "code": "seniority_matched", "value": "senior"}],
-            "gaps": [{"component": "languages", "code": "languages_missing", "value": "English B2"}],
+            "gaps": [{"component": "languages", "code": "language_not_listed", "value": "English B2"}],
             "conflicts": [{"component": "salary", "code": "salary_below_minimum", "value": None}],
             "components": {
                 "seniority": {"status": "matched"},
@@ -402,28 +532,17 @@ def test_match_details_render_other_component_statuses_without_guessing() -> Non
     )
     assert "Сильные стороны:" in rendered
     assert "Что проверить:" in rendered
-    assert "Конфликты:" in rendered
-    assert "Другие критерии:" in rendered
+    assert "⚠️ Что проверить:" in rendered
     assert "📈 Опыт:" not in rendered
     assert "🌍 Языки:" not in rendered
     assert "💰 Зарплата:" not in rendered
-    assert "🏠 Формат работы: есть расхождение" in rendered
-    assert "📍 Локация: нет данных" in rendered
+    assert "Конфликты:" not in rendered
 
 
-@pytest.mark.parametrize(
-    ("status", "expected"),
-    [
-        ("matched", "🌍 Языки: соответствует"),
-        ("partial", "🌍 Языки: частичное совпадение"),
-        ("mismatch", "🌍 Языки: есть расхождение"),
-        ("unknown", "🌍 Языки: нет данных"),
-    ],
-)
-def test_match_details_render_component_statuses(status: str, expected: str) -> None:
+@pytest.mark.parametrize("status", ["matched", "partial", "mismatch", "unknown"])
+def test_match_details_do_not_render_generic_component_statuses(status: str) -> None:
     rendered = format_match_details({"strengths": [], "gaps": [], "conflicts": [], "components": {"languages": {"status": status}}})
-    assert expected in rendered
-    assert "unknown" not in rendered
+    assert rendered == "Недостаточно данных для объяснения совпадения."
 
 
 def test_dispatcher_routes_match_callback(monkeypatch: pytest.MonkeyPatch) -> None:

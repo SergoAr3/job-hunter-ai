@@ -27,6 +27,8 @@ MATCH_DETAILS_PREFIX = "match:details:"
 MATCH_PROFILE_CALLBACK = "match:profile"
 ACTIVE_MATCH_MESSAGE_ID = "active_match_message_id"
 ACTIVE_MATCH_DETAILS_CLAIM_ID = "active_match_details_claim_id"
+ACTIVE_MATCH_DETAILS_SHOWN_MESSAGE_ID = "active_match_details_shown_message_id"
+MATCH_MESSAGE_MAX_UTF16_UNITS = 3800
 
 
 class AddJobStates(StatesGroup):
@@ -206,20 +208,24 @@ async def _show_match_summary(
     verdict = match.get("verdict")
     score = match.get("score")
     if verdict == "insufficient_data" or not isinstance(score, int) or isinstance(score, bool):
-        await message.answer("🎯 Недостаточно данных для надёжной оценки.")
+        await _send_match_message(message, state, format_match_message(match), f"{MATCH_DETAILS_PREFIX}{application_id}")
         return
-    await _send_match_message(message, state, f"🎯 Совпадение: {score}%", f"{MATCH_DETAILS_PREFIX}{application_id}")
+    await _send_match_message(message, state, format_match_heading(match), f"{MATCH_DETAILS_PREFIX}{application_id}")
 
 
 async def _send_match_message(message: Message, state: FSMContext, text: str, callback_data: str) -> None:
     summary = await message.answer(
-        text,
+        _truncate_match_message(text),
         reply_markup=InlineKeyboardMarkup(
             inline_keyboard=[[InlineKeyboardButton(text="🔎 Почему подходит?" if callback_data.startswith(MATCH_DETAILS_PREFIX) else "👤 Заполнить профиль", callback_data=callback_data)]]
         ),
     )
     await state.update_data(
-        {ACTIVE_MATCH_MESSAGE_ID: summary.message_id, ACTIVE_MATCH_DETAILS_CLAIM_ID: None}
+        {
+            ACTIVE_MATCH_MESSAGE_ID: summary.message_id,
+            ACTIVE_MATCH_DETAILS_CLAIM_ID: None,
+            ACTIVE_MATCH_DETAILS_SHOWN_MESSAGE_ID: None,
+        }
     )
 
 
@@ -249,13 +255,7 @@ async def handle_match_callback(callback: CallbackQuery, state: FSMContext, api_
             await _restore_match_details_claim(message, state)
             logger.warning("Could not refresh match through API", exc_info=True)
             return
-        if not await _has_match_details_claim(message, state):
-            return
-        await _remove_match_keyboard(message)
-        if not await _has_match_details_claim(message, state):
-            return
-        await state.update_data({ACTIVE_MATCH_DETAILS_CLAIM_ID: None})
-        await message.answer(format_match_details(match))
+        await _replace_claimed_match_with_details(message, state, format_match_message(match))
         return
 
     await callback.answer()
@@ -270,7 +270,11 @@ async def handle_match_callback(callback: CallbackQuery, state: FSMContext, api_
 
 
 async def _claim_active_match_details(message: Message, state: FSMContext) -> bool:
-    if not await _is_active_match_callback(message, state):
+    data = await state.get_data()
+    if (
+        data.get(ACTIVE_MATCH_MESSAGE_ID) != message.message_id
+        or data.get(ACTIVE_MATCH_DETAILS_SHOWN_MESSAGE_ID) == message.message_id
+    ):
         return False
     await state.update_data(
         {ACTIVE_MATCH_MESSAGE_ID: None, ACTIVE_MATCH_DETAILS_CLAIM_ID: message.message_id}
@@ -303,33 +307,118 @@ async def _replace_claimed_match_with_profile_cta(message: Message, state: FSMCo
     await _send_match_message(message, state, "🎯 Заполни профиль, чтобы оценить совпадение.", MATCH_PROFILE_CALLBACK)
 
 
+async def _replace_claimed_match_with_details(message: Message, state: FSMContext, text: str) -> None:
+    """Replace the active summary, falling back to a new canonical details card."""
+    if not await _has_match_details_claim(message, state):
+        return
+    try:
+        await message.edit_text(text, reply_markup=None)
+    except TelegramBadRequest as error:
+        if is_message_not_modified(error):
+            await _restore_match_details_claim(message, state)
+            return
+        logger.warning("Could not edit match summary", exc_info=True)
+    except TelegramAPIError:
+        logger.warning("Could not edit match summary", exc_info=True)
+    else:
+        if await _has_match_details_claim(message, state):
+            await state.update_data(
+                {
+                    ACTIVE_MATCH_MESSAGE_ID: message.message_id,
+                    ACTIVE_MATCH_DETAILS_CLAIM_ID: None,
+                    ACTIVE_MATCH_DETAILS_SHOWN_MESSAGE_ID: message.message_id,
+                }
+            )
+        return
+    if not await _has_match_details_claim(message, state):
+        return
+    try:
+        details = await message.answer(text)
+    except TelegramAPIError:
+        logger.warning("Could not send match details after edit failure", exc_info=True)
+        await _restore_match_details_claim(message, state)
+        return
+    if not await _has_match_details_claim(message, state):
+        return
+    await state.update_data(
+        {
+            ACTIVE_MATCH_MESSAGE_ID: details.message_id,
+            ACTIVE_MATCH_DETAILS_CLAIM_ID: None,
+            ACTIVE_MATCH_DETAILS_SHOWN_MESSAGE_ID: details.message_id,
+        }
+    )
+    await _remove_match_keyboard(message)
+
+
 def format_match_details(match: dict[str, object]) -> str:
     strengths = _reason_values(match.get("strengths"))
     gaps = _reason_values(match.get("gaps"))
     conflicts = _reason_values(match.get("conflicts"))
+    unknowns = _reason_values(match.get("unknowns"))
     lines: list[str] = []
     if strengths:
-        lines.extend(["Сильные стороны:", *[f"• {value}" for _, value in strengths[:5]]])
-    if gaps:
+        lines.extend(["✅ Сильные стороны:", *[f"• {value}" for _, value in strengths[:3]]])
+    checks = [*conflicts, *gaps]
+    if checks:
         if lines:
             lines.append("")
-        lines.extend(["Что проверить:", *[f"• {value}" for _, value in gaps[:5]]])
-    if conflicts:
+        lines.extend(["⚠️ Что проверить:", *[f"• {value}" for _, value in checks[:3]]])
+    if unknowns:
         if lines:
             lines.append("")
-        lines.extend(["Конфликты:", *[f"• {value}" for _, value in conflicts[:3]]])
-    visible_components = {
-        component
-        for reasons in (strengths[:5], gaps[:5], conflicts[:3])
-        for component, _ in reasons
-        if component is not None
-    }
-    other_components = _other_component_values(match, visible_components)
-    if other_components:
+        lines.extend(["❓ Неизвестно:", *[f"• {value}" for _, value in unknowns[:2]]])
+    recommendation = _recommendation_text(match.get("recommendation"))
+    if recommendation:
         if lines:
             lines.append("")
-        lines.extend(["Другие критерии:", *other_components])
+        lines.append(f"💡 {recommendation}")
     return "\n".join(lines) or "Недостаточно данных для объяснения совпадения."
+
+
+def format_match_message(match: dict[str, object]) -> str:
+    return _truncate_match_message(f"{format_match_heading(match)}\n\n{format_match_details(match)}")
+
+
+def _truncate_match_message(text: str, limit: int = MATCH_MESSAGE_MAX_UTF16_UNITS) -> str:
+    if len(text.encode("utf-16-le")) // 2 <= limit:
+        return text
+    ellipsis = "…"
+    body_units = max(0, limit - len(ellipsis.encode("utf-16-le")) // 2)
+    return text.encode("utf-16-le")[:body_units * 2].decode("utf-16-le", errors="ignore") + ellipsis
+
+
+def format_match_heading(match: dict[str, object]) -> str:
+    score = match.get("score")
+    verdict = match.get("verdict")
+    labels = {
+        "high": "Хорошее совпадение",
+        "medium": "Есть совпадение, но нужны проверки",
+        "low": "Слабое совпадение",
+        "insufficient_data": "Недостаточно данных",
+    }
+    if isinstance(score, int) and not isinstance(score, bool):
+        return f"🎯 Совпадение: {score}% · {labels.get(verdict, 'Оценка')}"
+    return f"🎯 {labels.get(verdict, 'Недостаточно данных для надёжной оценки.')}"
+
+
+def _recommendation_text(value: object) -> str | None:
+    if not isinstance(value, dict):
+        return None
+    code = value.get("code")
+    if code == "insufficient_data":
+        primary_reason = value.get("primary_reason")
+        primary_code = primary_reason.get("code") if isinstance(primary_reason, dict) else None
+        if isinstance(primary_code, str) and primary_code.startswith("profile_"):
+            return "Заполните недостающие данные профиля для более точной оценки."
+        if isinstance(primary_code, str) and primary_code.startswith("vacancy_"):
+            return "В вакансии недостаточно данных для надёжной оценки."
+        return "Недостаточно данных для надёжной оценки."
+    texts = {
+        "apply": "Стоит откликнуться.",
+        "apply_with_risks": "Можно откликнуться, но сначала проверьте риски.",
+        "unlikely_fit": "Скорее не стоит откликаться без дополнительной причины.",
+    }
+    return texts.get(code) if isinstance(code, str) else None
 
 
 def _other_component_values(match: dict[str, object], visible_components: set[str]) -> list[str]:
@@ -374,14 +463,13 @@ def _reason_values(value: object) -> list[tuple[str | None, str]]:
         code = item.get("code")
         component = item.get("component")
         component_name = component if isinstance(component, str) else None
-        if isinstance(raw, str) and raw:
-            values.append((component_name, _format_reason_value(code, raw)))
-        elif code == "salary_below_minimum":
-            values.append((component_name, "Зарплата ниже указанного минимума"))
+        formatted = _format_reason_value(code, raw if isinstance(raw, str) else None)
+        if formatted is not None:
+            values.append((component_name, formatted))
     return values
 
 
-def _format_reason_value(code: object, value: str) -> str:
+def _format_reason_value(code: object, value: str | None) -> str | None:
     templates = {
         "role_matched": "Подходящая роль: {value}",
         "role_partial": "Роль совпадает частично: {value}",
@@ -398,8 +486,46 @@ def _format_reason_value(code: object, value: str) -> str:
         "workplace_missing": "Формат работы для проверки: {value}",
         "location_matched": "Локация соответствует: {value}",
         "location_missing": "Локация для проверки: {value}",
+        "required_skill_listed": "{value} указан в профиле",
+        "nice_to_have_skill_listed": "{value} указан в профиле как дополнительный навык",
+        "required_skill_not_listed": "{value} не указан в профиле",
+        "nice_to_have_skill_not_listed": "{value} не указан в профиле как дополнительный навык",
+        "role_not_matched": "Роль не совпала: {value}",
+        "seniority_matches": "Уровень опыта соответствует: {value}",
+        "seniority_below_requirement": "Требуемый уровень выше: {value}",
+        "language_level_sufficient": "Язык указан на достаточном уровне: {value}",
+        "language_not_listed": "Требуемый язык не указан в профиле: {value}",
+        "language_level_below_requirement": "Требуемый уровень языка выше: {value}",
+        "workplace_matches": "Формат работы подходит",
+        "workplace_not_preferred": "Формат работы стоит проверить: {value}",
+        "location_matches": "Локация совпадает: {value}",
+        "location_not_listed": "Локация стоит проверить: {value}",
+        "salary_meets_expectations": "Зарплата соответствует ожиданиям",
+        "salary_below_minimum": "Зарплата ниже указанного минимума",
+        "vacancy_role_unknown": "Роль вакансии не указана",
+        "profile_target_roles_missing": "Целевые роли не указаны в профиле",
+        "vacancy_skills_unavailable": "Требования к навыкам вакансии недоступны для сравнения",
+        "profile_skills_missing": "Навыки не указаны в профиле",
+        "vacancy_seniority_unknown": "Уровень вакансии не указан",
+        "profile_seniority_unknown": "Уровень опыта не указан в профиле",
+        "language_requirements_unparseable": "Требования по языкам не удалось распознать",
+        "vacancy_language_requirements_unavailable": "Требования по языкам недоступны для сравнения",
+        "vacancy_workplace_unknown": "Формат работы вакансии не указан",
+        "vacancy_location_missing": "Локация onsite/hybrid вакансии не указана",
+        "profile_locations_missing": "Предпочтительные локации не указаны в профиле",
+        "vacancy_salary_missing": "Зарплата в вакансии не указана",
+        "profile_salary_missing": "Зарплатные ожидания не указаны в профиле",
+        "salary_period_inferred": "Период зарплаты вакансии требует уточнения",
+        "salary_not_comparable": "Зарплату нельзя надёжно сравнить",
     }
-    return templates.get(code, "{value}").format(value=value) if isinstance(code, str) else value
+    if not isinstance(code, str):
+        return value
+    template = templates.get(code)
+    if template is None:
+        return value
+    if "{value}" in template and not value:
+        return None
+    return template.format(value=value)
 
 
 def _error_code(error: httpx.HTTPStatusError) -> str | None:
@@ -414,7 +540,11 @@ async def remove_active_match_inline_keyboard(message: Message, state: FSMContex
     data = await state.get_data()
     message_id = data.get(ACTIVE_MATCH_MESSAGE_ID) or data.get(ACTIVE_MATCH_DETAILS_CLAIM_ID)
     await state.update_data(
-        {ACTIVE_MATCH_MESSAGE_ID: None, ACTIVE_MATCH_DETAILS_CLAIM_ID: None}
+        {
+            ACTIVE_MATCH_MESSAGE_ID: None,
+            ACTIVE_MATCH_DETAILS_CLAIM_ID: None,
+            ACTIVE_MATCH_DETAILS_SHOWN_MESSAGE_ID: None,
+        }
     )
     if not isinstance(message_id, int) or message.bot is None:
         return
