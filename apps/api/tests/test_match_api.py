@@ -43,7 +43,7 @@ def test_owner_gets_on_demand_match_and_algorithm_version() -> None:
     response = client.get(f"/users/{user_id}/applications/{application_id}/match")
     assert response.status_code == 200
     payload = response.json()
-    assert payload["algorithm_version"] == "job-match-v2"
+    assert payload["algorithm_version"] == "job-match-v2.1"
     assert "unknowns" in payload
     assert payload["recommendation"]["code"] == "apply"
 
@@ -122,3 +122,4 @@ def test_api_match_applies_role_and_skill_aliases_without_changing_match_rules()
     }
     assert payload["coverage"] == 65
     assert payload["verdict"] == "high"
+    assert payload["confidence"] == "medium"

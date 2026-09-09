@@ -1,3 +1,4 @@
+import json
 from decimal import Decimal
 from datetime import datetime, timezone
 from pathlib import Path
@@ -50,6 +51,20 @@ def test_extracts_embedded_json_vacancy_workplace() -> None:
     assert normalize_job(raw).workplace_type == "onsite"
 
 
+def test_extracts_embedded_vacancy_text_for_ai_enrichment() -> None:
+    html = '''<script type="application/json">{"vacancy":{"name":"Backend Engineer","employer":{"name":"Acme"},"description":"Build APIs","requirements":["Python", "PostgreSQL"],"area":{"name":"Yerevan"},"workFormats":["REMOTE"],"employmentType":"FULL_TIME"}}</script>'''
+
+    result = normalize_job(JobPostingExtractor().extract(html))
+
+    assert result.title == "Backend Engineer"
+    assert result.company == "Acme"
+    assert result.description == "Build APIs"
+    assert result.requirements_text == "Python PostgreSQL"
+    assert result.location == "Yerevan"
+    assert result.workplace_type == "remote"
+    assert result.employment_type == "full_time"
+
+
 def test_ignores_embedded_workplace_without_vacancy_context() -> None:
     html = '<script type="application/json">{"translations":{"workFormats":["ON_SITE"],"name":"work format"}}</script>'
     assert JobPostingExtractor().extract(html).workplace_raw is None
@@ -58,6 +73,24 @@ def test_ignores_embedded_workplace_without_vacancy_context() -> None:
 def test_ignores_embedded_workplace_from_ui_config() -> None:
     html = '<script type="application/json">{"ui_config":{"name":"Vacancy filters","employment":{"full_time":true},"workFormats":["ON_SITE"]}}</script>'
     assert JobPostingExtractor().extract(html).workplace_raw is None
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"ui_config": {"name": "Vacancy filters", "employer": {"name": "Acme"}, "location": {"name": "Yerevan"}}},
+        {"company": {"name": "Acme careers", "description": "Our company profile", "location": {"name": "Yerevan"}}},
+    ],
+)
+def test_generic_embedded_payload_does_not_override_meta_fallback(payload: dict[str, object]) -> None:
+    html = f'<script type="application/json">{json.dumps(payload)}</script><meta property="og:title" content="Real Backend Engineer"><meta property="og:description" content="Build APIs">'
+
+    extracted = JobPostingExtractor().extract(html)
+
+    assert extracted.title == "Real Backend Engineer"
+    assert extracted.description == "Build APIs"
+    assert extracted.company is None
+    assert extracted.location is None
 
 
 def test_embedded_work_formats_skips_malformed_values_for_first_supported_one() -> None:

@@ -59,6 +59,8 @@ def test_strong_match_is_deterministic_and_versioned() -> None:
     assert first.algorithm_version == ALGORITHM_VERSION
     assert first.model_dump() == second.model_dump()
     assert first.verdict == "high"
+    assert first.coverage == 95
+    assert first.confidence == "high"
     assert first.score == 100
     assert first.components["role"].status == "matched"
 
@@ -321,6 +323,34 @@ def test_coverage_below_threshold_has_no_score() -> None:
     assert result.coverage == 20
     assert result.score is None
     assert result.verdict == "insufficient_data"
+    assert result.confidence is None
+
+
+def test_low_coverage_keeps_high_score_and_verdict_but_lowers_confidence() -> None:
+    result = match(
+        profile=profile(
+            workplace_preference="onsite",
+            location=["Yerevan"],
+            salary_min=None,
+            salary_currency=None,
+            salary_period="unknown",
+        ),
+        job=job(
+            required_skills=[],
+            nice_to_have_skills=[],
+            language_requirements=[],
+            workplace_type="onsite",
+            location="Yerevan",
+            salary_min=None,
+            salary_max=None,
+        ),
+    )
+
+    assert result.coverage == 45
+    assert result.score == 100
+    assert result.verdict == "high"
+    assert result.recommendation.code == "apply"
+    assert result.confidence == "low"
 
 
 def test_unknown_core_components_override_sufficient_noncore_coverage() -> None:
@@ -338,7 +368,7 @@ def test_unknown_core_components_override_sufficient_noncore_coverage() -> None:
 def test_v2_explanation_keeps_scoring_and_adds_structured_evidence() -> None:
     result = match(job=job(required_skills=["Python", "Kubernetes"], nice_to_have_skills=["Docker", "Redis"]))
 
-    assert result.algorithm_version == "job-match-v2"
+    assert result.algorithm_version == "job-match-v2.1"
     assert result.score == 80
     assert result.coverage == 95
     assert result.verdict == "high"

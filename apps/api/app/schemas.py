@@ -376,6 +376,7 @@ class MatchResultOut(BaseModel):
     score: int | None
     verdict: str
     coverage: int
+    confidence: str | None
     input_state: MatchInputStateOut
     components: dict[str, MatchComponentOut]
     strengths: list[MatchReasonOut]

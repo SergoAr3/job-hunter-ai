@@ -115,48 +115,110 @@ def save_application_for_user(
         raise
     if session.in_transaction():
         raise RuntimeError("Database transaction must be closed before enrichment")
-    if job_created:
-        data, error = service.enrich(job_url)
-        try:
-            job = session.get(Job, job_id)
-            if job is None:
-                raise RuntimeError("Saved job disappeared before enrichment update")
-            if data is None:
-                job.parsing_status = ParsingStatus.FAILED.value
-                job.parsing_error = error
-            else:
-                for key, value in service.values(data).items():
-                    setattr(job, key, value)
-                job.parsing_error = None
-            session.commit()
-            session.refresh(job)
-        except Exception:
-            session.rollback()
-            logger.exception("Could not persist job enrichment", extra={"job_id": job_id})
-            try:
-                job = session.get(Job, job_id)
-                if job is not None and job.parsing_status == ParsingStatus.PENDING.value:
-                    job.parsing_status = ParsingStatus.FAILED.value
-                    job.parsing_error = "enrichment_update_failed"
-                    session.commit()
-            except Exception:
-                session.rollback()
-                logger.exception("Could not mark failed enrichment", extra={"job_id": job_id})
-    if job_created:
+    source_text_added = False
+    if job_created or _needs_deterministic_recovery(job):
+        source_text_added = _run_deterministic_enrichment(session, job_id, job_url, service, is_new=job_created)
+    if job_created or source_text_added or _needs_ai_recovery(session, job_id):
         job = session.get(Job, job_id)
         if job is None:
             raise RuntimeError("Saved job disappeared before AI enrichment")
-        _run_ai_enrichment(session, job, ai_service)
-    if job_created:
-        job = session.get(Job, job_id)
-        if job is None:
-            raise RuntimeError("Saved job disappeared")
+        _run_ai_enrichment(session, job, ai_service, merge_existing=not job_created)
+    job = session.get(Job, job_id)
     if job is None:
         raise RuntimeError("Saved job disappeared")
     return job, application, job_created, application_created
 
 
-def _run_ai_enrichment(session: Session, job: Job, service: JobAIEnrichmentService) -> None:
+def _needs_deterministic_recovery(job: Job) -> bool:
+    return job.parsing_status in {ParsingStatus.PARTIAL.value, ParsingStatus.FAILED.value}
+
+
+def _needs_ai_recovery(session: Session, job_id: int) -> bool:
+    job = session.get(Job, job_id)
+    if job is None:
+        raise RuntimeError("Saved job disappeared before AI enrichment eligibility check")
+    return job.ai_enrichment_status in {
+        AIEnrichmentStatus.NOT_ATTEMPTED.value,
+        AIEnrichmentStatus.FAILED.value,
+    } and VacancyAIInput.from_job(job) is not None
+
+
+def _run_deterministic_enrichment(
+    session: Session,
+    job_id: int,
+    job_url: str,
+    service: VacancyEnrichmentService,
+    *,
+    is_new: bool,
+) -> bool:
+    """Persist an initial extraction or safely fill gaps in an existing sparse job."""
+    if session.in_transaction():
+        session.commit()
+    data, error = service.enrich(job_url)
+    source_text_added = False
+    try:
+        job = session.get(Job, job_id)
+        if job is None:
+            raise RuntimeError("Saved job disappeared before enrichment update")
+        if data is None:
+            if is_new:
+                job.parsing_status = ParsingStatus.FAILED.value
+                job.parsing_error = error
+        elif is_new:
+            for key, value in service.values(data).items():
+                setattr(job, key, value)
+            job.parsing_error = None
+        else:
+            source_text_added = _merge_deterministic_data(job, service.values(data))
+        session.commit()
+        session.refresh(job)
+        return source_text_added
+    except Exception:
+        session.rollback()
+        logger.exception("Could not persist job enrichment", extra={"job_id": job_id})
+        try:
+            job = session.get(Job, job_id)
+            if job is not None and job.parsing_status == ParsingStatus.PENDING.value:
+                job.parsing_status = ParsingStatus.FAILED.value
+                job.parsing_error = "enrichment_update_failed"
+                session.commit()
+        except Exception:
+            session.rollback()
+            logger.exception("Could not mark failed enrichment", extra={"job_id": job_id})
+        return False
+
+
+def _merge_deterministic_data(job: Job, values: dict[str, object]) -> bool:
+    """Recovery may only fill missing fields; a subsequent scrape cannot erase data."""
+    nullable_fields = (
+        "title", "company", "description", "requirements_text", "salary_text",
+        "salary_min", "salary_max", "salary_currency", "location",
+    )
+    source_text_added = False
+    for field in nullable_fields:
+        candidate = values[field]
+        if getattr(job, field) is None and candidate is not None:
+            setattr(job, field, candidate)
+            source_text_added = source_text_added or field in {"description", "requirements_text"}
+    for field in ("salary_period", "workplace_type", "employment_type"):
+        candidate = values[field]
+        if getattr(job, field) == "unknown" and candidate != "unknown":
+            setattr(job, field, candidate)
+            if field == "salary_period":
+                job.salary_period_inferred = bool(values["salary_period_inferred"])
+    if values["parsing_status"] in {ParsingStatus.PARTIAL.value, ParsingStatus.SUCCESS.value}:
+        job.parsing_status = values["parsing_status"]
+        job.parsing_error = None
+    return source_text_added
+
+
+def _run_ai_enrichment(
+    session: Session,
+    job: Job,
+    service: JobAIEnrichmentService,
+    *,
+    merge_existing: bool = False,
+) -> None:
     vacancy = VacancyAIInput.from_job(job)
     if vacancy is None or not service.configured:
         return
@@ -181,7 +243,7 @@ def _run_ai_enrichment(session: Session, job: Job, service: JobAIEnrichmentServi
             refreshed_job.ai_enrichment_status = AIEnrichmentStatus.FAILED.value
             refreshed_job.ai_enrichment_error = error or "processing_failed"
         else:
-            _apply_ai_enrichment(refreshed_job, result)
+            _apply_ai_enrichment(refreshed_job, result, merge_existing=merge_existing)
             refreshed_job.ai_enrichment_status = AIEnrichmentStatus.SUCCESS.value
             refreshed_job.ai_enrichment_error = None
         session.commit()
@@ -200,13 +262,27 @@ def _run_ai_enrichment(session: Session, job: Job, service: JobAIEnrichmentServi
             logger.exception("Could not mark failed AI enrichment", extra={"job_id": job_id})
 
 
-def _apply_ai_enrichment(job: Job, result: AIEnrichmentResult) -> None:
-    job.required_skills = result.required_skills
-    job.nice_to_have_skills = result.nice_to_have_skills
-    job.experience_requirements = result.experience_requirements
-    job.language_requirements = result.language_requirements
-    job.responsibilities = result.responsibilities
-    job.seniority = _validated_seniority(job, result)
+def _apply_ai_enrichment(
+    job: Job,
+    result: AIEnrichmentResult,
+    *,
+    merge_existing: bool = False,
+) -> None:
+    structured_fields = (
+        "required_skills",
+        "nice_to_have_skills",
+        "experience_requirements",
+        "language_requirements",
+        "responsibilities",
+    )
+    for field in structured_fields:
+        candidate = getattr(result, field)
+        if not merge_existing or not getattr(job, field):
+            setattr(job, field, candidate)
+
+    seniority = _validated_seniority(job, result)
+    if not merge_existing or job.seniority == "unknown":
+        job.seniority = seniority
 
     if job.location is None and result.location is not None:
         job.location = result.location

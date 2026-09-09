@@ -4,6 +4,7 @@ from sqlalchemy.exc import IntegrityError
 from app.models import Application, Job
 from app.models import User
 from app.services.applications import save_application_for_user
+from app.services.job_normalizer import ExtractedJobData, normalize_job
 from app.services.safe_http_fetcher import BlockedUrlError
 import app.main as main_module
 from conftest import TestSessionLocal, client
@@ -202,3 +203,111 @@ def test_safe_url_with_fetch_timeout_is_saved_as_failed() -> None:
     response = save_application(user_id, "https://example.com/jobs/timeout")
     assert response.status_code == 200
     assert response.json()["job"]["parsing_status"] == "failed"
+
+
+def test_existing_sparse_job_recovers_without_overwriting_and_retries_failed_ai() -> None:
+    class RecoveryEnrichment:
+        def preflight(self, url: str) -> None:
+            return None
+
+        def enrich(self, url: str):
+            return normalize_job(ExtractedJobData(
+                title="Replacement title",
+                description="Build reliable APIs",
+                requirements_text="Python and PostgreSQL",
+                workplace_raw="remote",
+            )), None
+
+        @staticmethod
+        def values(data):
+            from dataclasses import asdict
+            return asdict(data)
+
+    class SuccessfulAI:
+        configured = True
+        calls = 0
+
+        def enrich(self, vacancy):
+            self.calls += 1
+            from app.services.job_ai_enrichment import AIEnrichmentResult
+            return AIEnrichmentResult(
+                required_skills=["Python"], nice_to_have_skills=[], experience_requirements=[],
+                language_requirements=[], responsibilities=[], seniority="middle", salary_period="unknown",
+                salary_period_evidence="unknown", workplace_type="unknown", employment_type="unknown",
+            ), None
+
+    with TestSessionLocal() as session:
+        user = User(telegram_id=701, first_name="Анна")
+        job = Job(
+            source="company_site", source_url="https://example.com/jobs/recovery",
+            title="Original title", parsing_status="partial", ai_enrichment_status="failed",
+            ai_enrichment_error="timeout",
+        )
+        session.add_all([user, job])
+        session.commit()
+
+        ai = SuccessfulAI()
+        recovered, application, created, application_created = save_application_for_user(
+            session, user.id, job.source_url, RecoveryEnrichment(), ai
+        )
+
+        assert created is False and application_created is True
+        assert application.job_id == recovered.id
+        assert recovered.title == "Original title"
+        assert recovered.description == "Build reliable APIs"
+        assert recovered.requirements_text == "Python and PostgreSQL"
+        assert recovered.workplace_type == "remote"
+        assert recovered.parsing_status == "partial"
+        assert recovered.parsing_error is None
+        assert recovered.required_skills == ["Python"]
+        assert recovered.ai_enrichment_status == "success"
+        assert ai.calls == 1
+
+
+def test_recovery_ai_preserves_existing_structured_fields_when_new_text_is_found() -> None:
+    class RecoveryEnrichment:
+        def preflight(self, url: str) -> None:
+            return None
+
+        def enrich(self, url: str):
+            return normalize_job(ExtractedJobData(requirements_text="Python and PostgreSQL")), None
+
+        @staticmethod
+        def values(data):
+            from dataclasses import asdict
+            return asdict(data)
+
+    class EmptyAI:
+        configured = True
+        calls = 0
+
+        def enrich(self, vacancy):
+            self.calls += 1
+            from app.services.job_ai_enrichment import AIEnrichmentResult
+            return AIEnrichmentResult(
+                required_skills=[], nice_to_have_skills=[], experience_requirements=[],
+                language_requirements=[], responsibilities=[], seniority="unknown", salary_period="unknown",
+                salary_period_evidence="unknown", workplace_type="unknown", employment_type="unknown",
+            ), None
+
+    with TestSessionLocal() as session:
+        user = User(telegram_id=702, first_name="Анна")
+        job = Job(
+            source="company_site", source_url="https://example.com/jobs/recovery-ai",
+            description="Build reliable APIs", parsing_status="partial", ai_enrichment_status="success",
+            required_skills=["Python"], seniority="senior",
+        )
+        session.add_all([user, job])
+        session.commit()
+
+        ai = EmptyAI()
+        recovered, _, created, _ = save_application_for_user(
+            session, user.id, job.source_url, RecoveryEnrichment(), ai
+        )
+
+        assert created is False
+        assert recovered.requirements_text == "Python and PostgreSQL"
+        assert recovered.required_skills == ["Python"]
+        assert recovered.seniority == "senior"
+        assert recovered.ai_enrichment_status == "success"
+        assert ai.calls == 1
