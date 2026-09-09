@@ -68,7 +68,7 @@ def test_missing_required_skill_is_a_gap() -> None:
 
     assert result.components["required_skills"].score == 50
     assert result.components["required_skills"].missing == ["Kubernetes"]
-    assert any(reason.code == "required_skills_missing" for reason in result.gaps)
+    assert any(reason.code == "required_skill_not_listed" for reason in result.gaps)
 
 
 @pytest.mark.parametrize(
@@ -212,7 +212,7 @@ def test_language_match_and_mismatch() -> None:
     assert absent.components["languages"].score == 0
     assert absent.components["languages"].status == "mismatch"
     assert absent.components["languages"].missing == ["English B2"]
-    assert any(reason.code == "languages_missing" for reason in absent.gaps)
+    assert any(reason.code == "language_not_listed" for reason in absent.gaps)
 
 
 def test_unparseable_language_requirement_is_unknown() -> None:
@@ -227,7 +227,7 @@ def test_workplace_any_matches_every_known_format(workplace: str) -> None:
     assert result.components["workplace"].score == 100
     assert result.components["workplace"].status == "matched"
     assert result.components["workplace"].matched == [workplace]
-    assert any(reason.code == "workplace_matched" for reason in result.strengths)
+    assert any(reason.code == "workplace_matches" for reason in result.strengths)
     assert not any(reason.component == "workplace" for reason in result.gaps)
 
 
@@ -333,3 +333,68 @@ def test_unknown_core_components_override_sufficient_noncore_coverage() -> None:
     assert result.components["required_skills"].score is None
     assert result.score is None
     assert result.verdict == "insufficient_data"
+
+
+def test_v2_explanation_keeps_scoring_and_adds_structured_evidence() -> None:
+    result = match(job=job(required_skills=["Python", "Kubernetes"], nice_to_have_skills=["Docker", "Redis"]))
+
+    assert result.algorithm_version == "job-match-v2"
+    assert result.score == 80
+    assert result.coverage == 95
+    assert result.verdict == "high"
+    assert [(reason.code, reason.value) for reason in result.strengths if reason.component == "required_skills"] == [
+        ("required_skill_listed", "Python")
+    ]
+    assert [(reason.code, reason.value) for reason in result.gaps if reason.component == "required_skills"] == [
+        ("required_skill_not_listed", "Kubernetes")
+    ]
+    assert [(reason.code, reason.value) for reason in result.gaps if reason.component == "nice_to_have_skills"] == [
+        ("nice_to_have_skill_not_listed", "Redis")
+    ]
+    assert result.recommendation.code == "apply"
+
+
+def test_v2_language_gap_distinguishes_absent_language_from_low_level() -> None:
+    absent = match(profile=profile(languages=[]))
+    low = match(profile=profile(languages=[{"language": "English", "level": "B1"}]))
+
+    assert [reason.code for reason in absent.gaps if reason.component == "languages"] == ["language_not_listed"]
+    assert [reason.code for reason in low.gaps if reason.component == "languages"] == ["language_level_below_requirement"]
+
+
+def test_v2_unknowns_are_actionable_and_remote_location_is_not_noise() -> None:
+    result = match(
+        profile=profile(skills=[], salary_min=None, salary_currency=None, salary_period="unknown"),
+        job=job(workplace_type="remote", salary_min=None, salary_max=None),
+    )
+
+    codes = [reason.code for reason in result.unknowns]
+    assert "profile_skills_missing" in codes
+    assert "vacancy_salary_missing" in codes
+    assert "vacancy_location_missing" not in codes
+    assert "profile_locations_missing" not in codes
+
+
+def test_v2_salary_evidence_conflict_and_recommendation_matrix() -> None:
+    matched = match()
+    conflict = match(job=job(salary_min=Decimal("1000"), salary_max=Decimal("2999")))
+    medium = match(
+        profile=profile(experience="junior", languages=[{"language": "English", "level": "B1"}]),
+        job=job(required_skills=["Go"]),
+    )
+    low = match(
+        profile=profile(experience="intern", languages=[{"language": "Russian", "level": "native"}]),
+        job=job(title="Product Manager", required_skills=["Go"], seniority="senior"),
+    )
+    insufficient = match(job=job(ai_enrichment_status="failed", title=None, required_skills=[]))
+
+    assert any(reason.code == "salary_meets_expectations" for reason in matched.strengths)
+    assert conflict.recommendation.code == "apply_with_risks"
+    assert conflict.recommendation.primary_reason is not None
+    assert conflict.recommendation.primary_reason.code == "salary_below_minimum"
+    assert medium.verdict == "medium"
+    assert medium.recommendation.code == "apply_with_risks"
+    assert low.verdict == "low"
+    assert low.recommendation.code == "unlikely_fit"
+    assert insufficient.verdict == "insufficient_data"
+    assert insufficient.recommendation.code == "insufficient_data"

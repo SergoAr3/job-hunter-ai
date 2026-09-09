@@ -80,8 +80,10 @@ class Api:
             "score": 80,
             "verdict": "high",
             "strengths": [{"component": "role", "code": "role_matched", "value": "Python"}],
-            "gaps": [{"component": "languages", "code": "languages_missing", "value": "English B2"}],
+            "gaps": [{"component": "languages", "code": "language_not_listed", "value": "English B2"}],
+            "unknowns": [{"component": "salary", "code": "vacancy_salary_missing", "value": None}],
             "conflicts": [],
+            "recommendation": {"code": "apply"},
             "components": {"workplace": {"status": "matched"}},
         }
 
@@ -289,7 +291,7 @@ def test_dispatcher_detail_match_list_invalidates_old_detail_context(
         assert text_edits[-1][0].startswith("🎯 Совпадение: 80%")
         assert "Сильные стороны:" in text_edits[-1][0]
         assert "Что проверить:" in text_edits[-1][0]
-        assert "Другие критерии:" in text_edits[-1][0]
+        assert "Неизвестно:" in text_edits[-1][0]
         match_markup = text_edits[-1][1]
         assert [button.text for row in match_markup.inline_keyboard for button in row] == [
             "⬅️ К вакансии", "📋 К списку"
@@ -471,6 +473,43 @@ def test_application_match_edit_failure_replaces_canonical_message_and_stales_ol
         assert explanation.reply_markup.inline_keyboard[0][0].text == "⬅️ К вакансии"
         await handle_applications_callback(Callback("applications:match:7:0", message), state, api)
         assert api.match_calls == [(1, 7)]
+        await storage.close()
+
+    asyncio.run(scenario())
+
+
+def test_application_match_insufficient_data_keeps_unknowns_and_recommendation() -> None:
+    async def scenario() -> None:
+        storage, state = _state()
+        message = Message()
+        api = Api()
+        api.match = {
+            "score": None,
+            "verdict": "insufficient_data",
+            "strengths": [],
+            "gaps": [],
+            "conflicts": [],
+            "unknowns": [{"code": "vacancy_salary_missing", "component": "salary", "value": None}],
+            "recommendation": {
+                "code": "insufficient_data",
+                "primary_reason": {"code": "vacancy_salary_missing", "component": "salary", "value": None},
+            },
+        }
+        await state.set_data(
+            {
+                APPLICATIONS_MESSAGE_ID: message.message_id,
+                APPLICATIONS_OFFSET: 0,
+                APPLICATIONS_VIEW: APPLICATIONS_DETAIL_VIEW,
+                APPLICATIONS_APPLICATION_ID: 7,
+            }
+        )
+
+        await handle_applications_callback(Callback("applications:match:7:0", message), state, api)
+
+        rendered = message.text
+        assert "Зарплата в вакансии не указана" in rendered
+        assert "В вакансии недостаточно данных для надёжной оценки." in rendered
+        assert (await state.get_data())[APPLICATIONS_VIEW] == APPLICATIONS_MATCH_VIEW
         await storage.close()
 
     asyncio.run(scenario())

@@ -364,6 +364,11 @@ class MatchInputStateOut(BaseModel):
     ai_enrichment_status: str
 
 
+class MatchRecommendationOut(BaseModel):
+    code: str
+    primary_reason: MatchReasonOut | None = None
+
+
 class MatchResultOut(BaseModel):
     algorithm_version: str
     application_id: int
@@ -375,4 +380,6 @@ class MatchResultOut(BaseModel):
     components: dict[str, MatchComponentOut]
     strengths: list[MatchReasonOut]
     gaps: list[MatchReasonOut]
+    unknowns: list[MatchReasonOut]
     conflicts: list[MatchReasonOut]
+    recommendation: MatchRecommendationOut
