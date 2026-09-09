@@ -15,7 +15,7 @@ from app.services.match_aliases import (
     SKILL_ALIASES,
 )
 
-ALGORITHM_VERSION = "job-match-v2"
+ALGORITHM_VERSION = "job-match-v2.1"
 WEIGHTS = {
     "role": 20,
     "required_skills": 30,
@@ -63,10 +63,12 @@ def calculate_match(profile: UserProfile, job: Job, application: Application) ->
     if coverage < 40 or core_unavailable:
         score: int | None = None
         verdict = "insufficient_data"
+        confidence: str | None = None
     else:
         weighted = sum(component.weight * component.score / 100 for component in components.values() if component.score is not None)
         score = _round_to_five(weighted * 100 / evaluated_weight)
         verdict = "high" if score >= 75 else "medium" if score >= 50 else "low"
+        confidence = _confidence(coverage)
 
     strengths, gaps, unknowns = _explanation_reasons(profile, job, components, skills_available)
     recommendation = _recommendation(verdict, conflicts, gaps, unknowns)
@@ -78,6 +80,7 @@ def calculate_match(profile: UserProfile, job: Job, application: Application) ->
         score=score,
         verdict=verdict,
         coverage=coverage,
+        confidence=confidence,
         input_state=MatchInputStateOut(
             profile_updated_at=profile.updated_at,
             job_updated_at=job.updated_at,
@@ -91,6 +94,14 @@ def calculate_match(profile: UserProfile, job: Job, application: Application) ->
         conflicts=conflicts,
         recommendation=recommendation,
     )
+
+
+def _confidence(coverage: int) -> str:
+    if coverage >= 80:
+        return "high"
+    if coverage >= 60:
+        return "medium"
+    return "low"
 
 
 def _component(name: str, score: int | None, status: str, matched: list[str] | None = None, missing: list[str] | None = None) -> MatchComponentOut:

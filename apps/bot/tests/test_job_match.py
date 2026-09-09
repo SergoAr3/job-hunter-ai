@@ -24,6 +24,7 @@ from app.jobs import (
     handle_add_job,
     handle_match_callback,
     format_match_details,
+    format_match_heading,
     format_match_message,
     remove_active_match_inline_keyboard,
 )
@@ -466,6 +467,25 @@ def test_v2_match_message_caps_utf16_and_keeps_plain_text_characters() -> None:
     assert len(rendered.encode("utf-16-le")) // 2 <= 3800
     assert rendered.endswith("…")
     assert "<skill>&" in rendered
+
+
+def test_match_heading_shows_deterministic_coverage_confidence() -> None:
+    rendered = format_match_heading(
+        {"score": 100, "verdict": "high", "coverage": 45, "confidence": "low"}
+    )
+
+    assert rendered == "🎯 Совпадение: 100% · Хорошее совпадение\n📊 Покрытие данных: 45% · Низкая уверенность"
+
+
+def test_low_confidence_apply_recommendation_is_cautious_without_changing_code() -> None:
+    rendered = format_match_details(
+        {
+            "strengths": [], "gaps": [], "conflicts": [], "unknowns": [],
+            "confidence": "low", "recommendation": {"code": "apply"},
+        }
+    )
+
+    assert rendered == "💡 Стоит откликнуться, но сначала проверьте неизвестные условия."
 
 
 def test_workplace_match_explanation_is_neutral_for_any_preference() -> None:

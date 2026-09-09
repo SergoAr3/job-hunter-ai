@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-from dataclasses import replace
 from decimal import Decimal, InvalidOperation
 from html import unescape
 from html.parser import HTMLParser
@@ -27,12 +26,8 @@ class JobPostingExtractor:
         data = ExtractedJobData()
         for record in records:
             data = _merge(data, _from_json_ld(record))
-        if normalize_workplace(data.workplace_raw) == "unknown":
-            workplace_raw = _embedded_workplace(parser.scripts)
-            if workplace_raw is None:
-                workplace_raw = _hh_initial_state_workplace(parser.templates.get("HH-Lux-InitialState"))
-            if workplace_raw is not None:
-                data = replace(data, workplace_raw=workplace_raw)
+        data = _merge(data, _embedded_job_data(parser.scripts))
+        data = _merge(data, _embedded_job_data([parser.templates.get("HH-Lux-InitialState", "")]))
         fallback = ExtractedJobData(title=parser.meta.get("og:title") or parser.meta.get("title") or parser.title, description=parser.meta.get("og:description") or parser.meta.get("description"))
         return _merge(data, fallback)
 
@@ -70,31 +65,77 @@ def _from_json_ld(item: JsonObject) -> ExtractedJobData:
     return ExtractedJobData(title=_string(item.get("title")), company=_string(organization.get("name") if isinstance(organization, dict) else None), description=_strip_html(_string(item.get("description"))), requirements_text=_strip_html(_string(item.get("qualifications"))), salary_min=_decimal(value.get("minValue") or value.get("value")), salary_max=_decimal(value.get("maxValue") or value.get("value")), salary_currency=_string(salary.get("currency") if isinstance(salary, dict) else None), salary_period=_string(value.get("unitText")), location=_string(location), workplace_raw=_string(item.get("jobLocationType")), employment_raw=_string(employment))
 
 
-def _embedded_workplace(scripts: list[str]) -> str | None:
+def _embedded_job_data(scripts: list[str]) -> ExtractedJobData:
     for script in scripts:
         payload = _parse_json_script(script)
-        workplace = _workplace_from_payload(payload)
-        if workplace is not None:
-            return workplace
-    return None
+        for value, parent_key in _walk_json(payload):
+            if not _is_embedded_vacancy(value, parent_key):
+                continue
+            return _from_embedded_vacancy(value)
+    return ExtractedJobData()
 
 
-def _hh_initial_state_workplace(value: str | None) -> str | None:
-    return _workplace_from_payload(_parse_json_script(value or ""))
+def _from_embedded_vacancy(value: dict[str, object]) -> ExtractedJobData:
+    workplace = _first_workplace(value.get("workFormats"))
+    return ExtractedJobData(
+        title=_first_string(value, "title", "name", "vacancyName"),
+        company=_company(value.get("employer") or value.get("hiringOrganization") or value.get("company")),
+        description=_first_string(value, "description", "descriptionHtml", "text"),
+        requirements_text=_text_value(value.get("requirements") or value.get("requirementsText") or value.get("qualifications")),
+        location=_location_value(value.get("location") or value.get("jobLocation") or value.get("area")),
+        workplace_raw=workplace,
+        employment_raw=_text_value(value.get("employmentType") or value.get("employment_type")),
+    )
 
 
-def _workplace_from_payload(payload: object | None) -> str | None:
-    if payload is None:
+def _first_workplace(value: object) -> str | None:
+    if isinstance(value, str):
+        return value if normalize_workplace(value) != "unknown" else None
+    if not isinstance(value, list):
         return None
-    for value in _walk_json(payload):
-        if not _is_vacancy_with_work_formats(value):
-            continue
-        formats = value["workFormats"]
-        assert isinstance(formats, list)
-        for item in formats:
-            if isinstance(item, str) and normalize_workplace(item) != "unknown":
-                return item
+    for item in value:
+        if isinstance(item, str) and normalize_workplace(item) != "unknown":
+            return item
     return None
+
+
+def _first_string(value: dict[str, object], *keys: str) -> str | None:
+    for key in keys:
+        candidate = _text_value(value.get(key))
+        if candidate is not None:
+            return candidate
+    return None
+
+
+def _text_value(value: object) -> str | None:
+    if isinstance(value, str):
+        return value
+    if isinstance(value, list):
+        values = [item for item in value if isinstance(item, str) and item.strip()]
+        return "\n".join(values) if values else None
+    return None
+
+
+def _company(value: object) -> str | None:
+    if isinstance(value, dict):
+        return _first_string(value, "name", "title")
+    return _text_value(value)
+
+
+def _location_value(value: object) -> str | None:
+    if isinstance(value, dict):
+        return _first_string(value, "name", "title", "city")
+    return _text_value(value)
+
+
+def _is_embedded_vacancy(value: dict[str, object], parent_key: str | None) -> bool:
+    has_title = _first_string(value, "title", "name", "vacancyName") is not None
+    has_vacancy_text = any(
+        value.get(key) not in (None, "", [], {})
+        for key in ("description", "descriptionHtml", "requirements", "requirementsText", "qualifications")
+    )
+    has_vacancy_context = parent_key == "vacancy" or "vacancyName" in value
+    return has_title and has_vacancy_text and has_vacancy_context
 
 
 def _parse_json_script(value: str) -> object | None:
@@ -108,30 +149,15 @@ def _parse_json_script(value: str) -> object | None:
     return None
 
 
-def _walk_json(value: object):
+def _walk_json(value: object, parent_key: str | None = None):
     if isinstance(value, dict) and all(isinstance(key, str) for key in value):
         record = cast(dict[str, object], value)
-        yield record
-        for child in record.values():
-            yield from _walk_json(child)
+        yield record, parent_key
+        for key, child in record.items():
+            yield from _walk_json(child, key)
     elif isinstance(value, list):
         for child in value:
-            yield from _walk_json(child)
-
-
-def _is_vacancy_with_work_formats(value: dict[str, object]) -> bool:
-    formats = value.get("workFormats")
-    if not isinstance(formats, list):
-        return False
-    has_title = any(
-        isinstance(candidate := value.get(key), str) and candidate.strip()
-        for key in ("title", "name", "vacancyName")
-    )
-    has_details = any(
-        value.get(key) not in (None, "", [], {})
-        for key in ("description", "employer", "hiringOrganization", "location", "jobLocation", "area")
-    )
-    return has_title and has_details
+            yield from _walk_json(child, parent_key)
 
 
 def _merge(primary: ExtractedJobData, secondary: ExtractedJobData) -> ExtractedJobData:

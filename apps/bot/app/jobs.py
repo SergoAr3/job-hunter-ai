@@ -367,7 +367,7 @@ def format_match_details(match: dict[str, object]) -> str:
         if lines:
             lines.append("")
         lines.extend(["❓ Неизвестно:", *[f"• {value}" for _, value in unknowns[:2]]])
-    recommendation = _recommendation_text(match.get("recommendation"))
+    recommendation = _recommendation_text(match.get("recommendation"), match.get("confidence"))
     if recommendation:
         if lines:
             lines.append("")
@@ -397,11 +397,21 @@ def format_match_heading(match: dict[str, object]) -> str:
         "insufficient_data": "Недостаточно данных",
     }
     if isinstance(score, int) and not isinstance(score, bool):
-        return f"🎯 Совпадение: {score}% · {labels.get(verdict, 'Оценка')}"
+        lines = [f"🎯 Совпадение: {score}% · {labels.get(verdict, 'Оценка')}"]
+        coverage = match.get("coverage")
+        confidence = match.get("confidence")
+        confidence_labels = {
+            "high": "Высокая уверенность",
+            "medium": "Средняя уверенность",
+            "low": "Низкая уверенность",
+        }
+        if isinstance(coverage, int) and not isinstance(coverage, bool) and confidence in confidence_labels:
+            lines.append(f"📊 Покрытие данных: {coverage}% · {confidence_labels[confidence]}")
+        return "\n".join(lines)
     return f"🎯 {labels.get(verdict, 'Недостаточно данных для надёжной оценки.')}"
 
 
-def _recommendation_text(value: object) -> str | None:
+def _recommendation_text(value: object, confidence: object = None) -> str | None:
     if not isinstance(value, dict):
         return None
     code = value.get("code")
@@ -414,7 +424,8 @@ def _recommendation_text(value: object) -> str | None:
             return "В вакансии недостаточно данных для надёжной оценки."
         return "Недостаточно данных для надёжной оценки."
     texts = {
-        "apply": "Стоит откликнуться.",
+        "apply": "Стоит откликнуться, но сначала проверьте неизвестные условия."
+        if confidence == "low" else "Стоит откликнуться.",
         "apply_with_risks": "Можно откликнуться, но сначала проверьте риски.",
         "unlikely_fit": "Скорее не стоит откликаться без дополнительной причины.",
     }
