@@ -14,6 +14,11 @@ VACANCY_AI_MAX_OUTPUT_TOKENS = int(os.getenv("VACANCY_AI_MAX_OUTPUT_TOKENS", "15
 # CV-specific adjustment never changes the vacancy flow.
 CV_AI_MAX_OUTPUT_TOKENS = int(os.getenv("CV_AI_MAX_OUTPUT_TOKENS", "1536"))
 CV_AI_TIMEOUT_SECONDS = float(os.getenv("CV_AI_TIMEOUT_SECONDS", "30"))
+COVER_LETTER_MODEL = os.getenv("COVER_LETTER_MODEL", OPENAI_MODEL)
+COVER_LETTER_TIMEOUT_SECONDS = float(os.getenv("COVER_LETTER_TIMEOUT_SECONDS", "20"))
+COVER_LETTER_MAX_OUTPUT_TOKENS = int(os.getenv("COVER_LETTER_MAX_OUTPUT_TOKENS", "1536"))
+if not 1 <= COVER_LETTER_TIMEOUT_SECONDS <= 30 or COVER_LETTER_MAX_OUTPUT_TOKENS <= 0:
+    raise ValueError("Invalid cover letter timeout or output budget")
 
 if not 10 <= OPENAI_TIMEOUT_SECONDS <= 15:
     raise ValueError("OPENAI_TIMEOUT_SECONDS must be between 10 and 15 seconds")

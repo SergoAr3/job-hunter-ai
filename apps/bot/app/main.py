@@ -14,6 +14,7 @@ from app.applications import ApplicationsStates, handle_applications_callback, h
 from app.applications import handle_next_action_cancel, handle_next_action_non_text, handle_next_action_text
 from app.applications import APPLICATIONS_SORT_VIEW, APPLICATIONS_VIEW, handle_sort_cancel
 from app.applications import handle_search_cancel, handle_search_non_text, handle_search_text
+from app.applications import handle_letter_cancel, handle_letter_language_text
 from app.menu import register_main_menu_handlers
 from app.profile import (
     ProfileSetupStates,
@@ -55,7 +56,9 @@ async def profile_setup(message: Message, state: FSMContext) -> None:
 
 @dp.message(Command("cancel"), StateFilter("*"))
 async def cancel(message: Message, state: FSMContext) -> None:
-    if (await state.get_data()).get(APPLICATIONS_VIEW) == APPLICATIONS_SORT_VIEW:
+    if str((await state.get_data()).get(APPLICATIONS_VIEW)).startswith("letter"):
+        await handle_letter_cancel(message, state, api_client)
+    elif (await state.get_data()).get(APPLICATIONS_VIEW) == APPLICATIONS_SORT_VIEW:
         await handle_sort_cancel(message, state, api_client)
     elif await state.get_state() == ApplicationsStates.waiting_for_search.state:
         await handle_search_cancel(message, state, api_client)
@@ -71,6 +74,11 @@ async def cancel(message: Message, state: FSMContext) -> None:
 
 
 register_main_menu_handlers(dp, lambda: api_client)
+
+
+@dp.message(ApplicationsStates.waiting_for_letter_language)
+async def receive_letter_language(message: Message, state: FSMContext) -> None:
+    await handle_letter_language_text(message, state, api_client)
 
 
 @dp.message(ApplicationsStates.waiting_for_search, F.text)

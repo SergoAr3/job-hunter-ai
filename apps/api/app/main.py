@@ -5,6 +5,8 @@ from starlette.concurrency import run_in_threadpool
 from sqlalchemy.orm import Session
 
 from app.database import get_session
+from app.services.cover_letter import CoverLetterGenerationService, CoverLetterOut, CoverLetterError, build_context
+from app.services.letter_languages import CoverLetterRequest, LanguageInput, normalize_language
 from app.models import ApplicationStatus, Job
 from app.schemas import (
     ApplicationCreateIn,
@@ -70,6 +72,32 @@ from app.services.vacancy_enrichment import VacancyEnrichmentService
 from app.services.job_ai_enrichment import JobAIEnrichmentService
 
 app = FastAPI(title="Job Hunter AI API")
+cover_letter_service = CoverLetterGenerationService()
+
+
+@app.post("/users/{user_id}/applications/{application_id}/cover-letter", response_model=CoverLetterOut)
+def generate_cover_letter(user_id: int, application_id: int, payload: CoverLetterRequest, session: Session = Depends(get_session)) -> CoverLetterOut:
+    try:
+        context = build_context(session, user_id, application_id, payload.language)
+        # Release the read transaction before the external writing request.
+        session.rollback()
+        return cover_letter_service.generate(context)
+    except CoverLetterError as error:
+        code = str(error)
+        codes = {"APPLICATION_NOT_FOUND": 404, "PROFILE_REQUIRED": 409,
+                 "INSUFFICIENT_JOB_INFORMATION": 422, "cover_letter_ai_unavailable": 503,
+                 "cover_letter_ai_timeout": 504}
+        raise HTTPException(status_code=codes.get(code, 502), detail={"code": code}) from None
+
+
+@app.post("/cover-letter/language", response_model=CoverLetterRequest)
+def resolve_cover_letter_language(payload: LanguageInput) -> CoverLetterRequest:
+    try:
+        return CoverLetterRequest(language=normalize_language(payload.text))
+    except ValueError:
+        raise HTTPException(status_code=422, detail={"code": "INVALID_LANGUAGE"}) from None
+
+
 app.add_middleware(CVUploadBodyLimitMiddleware)
 enrichment_service = VacancyEnrichmentService()
 ai_enrichment_service = JobAIEnrichmentService()
