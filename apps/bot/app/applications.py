@@ -1,5 +1,6 @@
 """Saved applications and status controls with one active inline message."""
 
+import asyncio
 import logging
 import re
 import secrets
@@ -12,6 +13,7 @@ from aiogram.exceptions import TelegramAPIError, TelegramBadRequest
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message, User
+from aiogram.utils.chat_action import ChatActionSender
 
 from app.api_client import BotApiClient
 from app.jobs import (
@@ -65,9 +67,11 @@ APPLICATIONS_NOTE_TOKEN = "applications_note_token"
 APPLICATIONS_NOTE_VIEW = "note_input"
 APPLICATIONS_NEXT_ACTION_TOKEN = "applications_next_action_token"
 APPLICATIONS_NEXT_ACTION_DRAFT = "applications_next_action_draft"
+_letter_generation_tasks: set[asyncio.Task[None]] = set()
 
 
 class ApplicationsStates(StatesGroup):
+    waiting_for_letter_language = State()
     waiting_for_search = State()
     waiting_for_note = State()
     waiting_for_next_action = State()
@@ -162,6 +166,7 @@ def application_detail_keyboard(application_id: int, offset: int, *, has_note: b
         *([[InlineKeyboardButton(text="🗑 Удалить заметку", callback_data=f"applications:note_delete:{application_id}:{offset}")]] if has_note else []),
         [InlineKeyboardButton(text="🕘 История статусов", callback_data=f"applications:history:{application_id}:{offset}")],
         [InlineKeyboardButton(text="🔎 Почему подходит?", callback_data=f"applications:match:{application_id}:{offset}")],
+        [InlineKeyboardButton(text="✍️ Сопроводительное письмо", callback_data=f"applications:letter:{application_id}:{offset}")],
         [InlineKeyboardButton(text="⬅️ К списку", callback_data=f"applications:page:{offset}")],
     ])
 
@@ -372,6 +377,14 @@ async def handle_applications_callback(callback: CallbackQuery, state: FSMContex
         return
     view = state_data.get(APPLICATIONS_VIEW)
     data = callback.data or ""
+    if data.startswith("applications:letter:"):
+        await _handle_cover_letter(callback, message, state, api_client, state_data)
+        return
+    if data.startswith("applications:letter_action:"):
+        await _handle_letter_action(callback, message, state, api_client, state_data)
+        return
+    if view == "letter_loading":
+        return
     if data.startswith("applications:search_cancel:"):
         await _handle_search_cancel_callback(message, state, api_client, callback.from_user, state_data, data)
         return
@@ -407,7 +420,7 @@ async def handle_applications_callback(callback: CallbackQuery, state: FSMContex
     if data.startswith("applications:match:") and view not in (None, APPLICATIONS_DETAIL_VIEW):
         return
     if data.startswith("applications:detail:") and view not in (
-        APPLICATIONS_MATCH_VIEW, APPLICATIONS_HISTORY_VIEW
+        APPLICATIONS_MATCH_VIEW, APPLICATIONS_HISTORY_VIEW, "letter", "letter_error"
     ):
         return
     try:
@@ -446,6 +459,196 @@ async def handle_applications_callback(callback: CallbackQuery, state: FSMContex
         await _show_application_detail(
             message, state, api_client, user_id, int(parts[2]), int(parts[3])
         )
+
+
+async def _handle_cover_letter(
+    callback: CallbackQuery, message: Message, state: FSMContext,
+    api_client: BotApiClient, context: dict[str, Any],
+) -> None:
+    parts = (callback.data or "").split(":")
+    view = context.get(APPLICATIONS_VIEW)
+    if view != APPLICATIONS_DETAIL_VIEW:
+        return
+    if len(parts) != 4 or not parts[2].isdecimal() or not parts[3].isdecimal():
+        return
+    application_id, offset = int(parts[2]), int(parts[3])
+    if context.get(APPLICATIONS_APPLICATION_ID) != application_id:
+        return
+    await state.update_data({APPLICATIONS_OFFSET: offset})
+    await _show_letter_languages(message, state)
+
+
+def _letter_button(text: str, token: str, action: str) -> list[InlineKeyboardButton]:
+    return [InlineKeyboardButton(text=text, callback_data=f"applications:letter_action:{token}:{action}")]
+
+
+async def _show_letter_languages(message: Message, state: FSMContext) -> None:
+    token = secrets.token_hex(6)
+    await state.set_state(None)
+    await state.update_data({APPLICATIONS_VIEW: "letter_language", "letter_token": token, "letter_language": None})
+    rows = [_letter_button(label, token, code) for label, code in (
+        ("🇬🇧 English", "en"), ("🇷🇺 Русский", "ru"), ("🇩🇪 Deutsch", "de"),
+        ("🇫🇷 Français", "fr"), ("🇪🇸 Español", "es"), ("🌐 Другой язык", "custom"),
+        ("⬅️ К вакансии", "back"),
+    )]
+    await _replace_or_send(message, state, "На каком языке написать сопроводительное письмо?",
+                           InlineKeyboardMarkup(inline_keyboard=rows), canonical_target=True)
+
+
+async def _handle_letter_action(callback: CallbackQuery, message: Message, state: FSMContext,
+                                api_client: BotApiClient, context: dict[str, Any]) -> None:
+    parts = (callback.data or "").split(":")
+    if len(parts) != 4 or parts[2] != context.get("letter_token"):
+        return
+    view, action = context.get(APPLICATIONS_VIEW), parts[3]
+    if view not in ("letter_language", "letter_language_input", "letter", "letter_error", "letter_loading"):
+        return
+    if action == "back":
+        await handle_letter_cancel(message, state, api_client, actor=callback.from_user)
+    elif action == "change" and view in ("letter", "letter_error", "letter_loading", "letter_language_input"):
+        await _show_letter_languages(message, state)
+    elif action == "custom" and view == "letter_language":
+        token = secrets.token_hex(6)
+        await state.set_state(ApplicationsStates.waiting_for_letter_language)
+        await state.update_data({APPLICATIONS_VIEW: "letter_language_input", "letter_token": token})
+        await _replace_or_send(message, state,
+            "Введите язык, на котором подготовить письмо.\n\nНапример: Italiano, Português, Հայերեն, Polski.\nМожно указать английское название или двухбуквенный код языка.",
+            InlineKeyboardMarkup(inline_keyboard=[_letter_button("🌐 Сменить язык", token, "change"), _letter_button("⬅️ К вакансии", token, "back")]), canonical_target=True)
+    elif action in ("en", "ru", "de", "fr", "es") and view == "letter_language":
+        await _generate_letter(message, state, api_client, callback.from_user, action)
+    elif action == "again" and view in ("letter", "letter_error") and isinstance(context.get("letter_language"), str):
+        await _generate_letter(message, state, api_client, callback.from_user, context["letter_language"])
+
+
+async def handle_letter_cancel(message: Message, state: FSMContext, api_client: BotApiClient, *, actor: User | None = None) -> None:
+    context = await state.get_data()
+    await state.set_state(None)
+    await state.update_data({APPLICATIONS_VIEW: "letter_error", "letter_token": secrets.token_hex(6), "letter_language": None})
+    try:
+        user_id = await api_client.create_or_get_user(actor or message.from_user)
+        detail = await api_client.get_application(user_id, context[APPLICATIONS_APPLICATION_ID])
+        await _render_application_detail(message, state, detail,
+                                         context[APPLICATIONS_APPLICATION_ID], context.get(APPLICATIONS_OFFSET, 0))
+    except httpx.HTTPError:
+        await _show_letter_languages(message, state)
+
+
+async def handle_letter_language_text(message: Message, state: FSMContext, api_client: BotApiClient) -> None:
+    context = await state.get_data()
+    if context.get(APPLICATIONS_VIEW) != "letter_language_input" or message.from_user is None:
+        return
+    token = context.get("letter_token")
+    try:
+        if not message.text or len(message.text) > 64:
+            raise ValueError("Invalid language input")
+        language = await api_client.normalize_cover_letter_language(message.text)
+    except (ValueError, httpx.HTTPError):
+        current = await state.get_data()
+        if current.get("letter_token") != token or current.get(APPLICATIONS_VIEW) != "letter_language_input":
+            return
+        await _replace_or_send(message, state,
+            "Не удалось определить язык. Введите название ещё раз, например Italiano, или двухбуквенный код, например it.",
+            InlineKeyboardMarkup(inline_keyboard=[_letter_button("🌐 Сменить язык", token, "change"), _letter_button("⬅️ К вакансии", token, "back")]), canonical_target=True)
+        return
+    current = await state.get_data()
+    if current.get("letter_token") != token or current.get(APPLICATIONS_VIEW) != "letter_language_input":
+        return
+    await _generate_letter(message, state, api_client, message.from_user, language)
+
+
+async def _request_letter(message: Message, state: FSMContext, api_client: BotApiClient,
+                          user_id: int, application_id: int, language: str, token: str) -> dict[str, object] | None:
+    # Keep the sender scoped to this request; stop and cancel local HTTP waiting
+    # when another interaction invalidates it. No detached generation jobs.
+    async with ChatActionSender.typing(bot=message.bot, chat_id=message.chat.id, interval=4):
+        request = asyncio.create_task(api_client.generate_cover_letter(user_id, application_id, language))
+        try:
+            while True:
+                done, _ = await asyncio.wait({request}, timeout=0.25)
+                current = await state.get_data()
+                if current.get("letter_token") != token or current.get(APPLICATIONS_VIEW) != "letter_loading":
+                    return None
+                if done:
+                    return request.result()
+        finally:
+            request.cancel()
+            # Retrieve even a completed failure when the context became stale.
+            await asyncio.gather(request, return_exceptions=True)
+
+
+async def _is_current_letter_generation(
+    state: FSMContext, application_id: int, language: str, token: str,
+) -> bool:
+    context = await state.get_data()
+    return (
+        context.get(APPLICATIONS_VIEW) == "letter_loading"
+        and context.get("letter_token") == token
+        and context.get(APPLICATIONS_APPLICATION_ID) == application_id
+        and context.get("letter_language") == language
+    )
+
+
+async def _generate_letter(message: Message, state: FSMContext, api_client: BotApiClient,
+                            actor: User, language: str) -> None:
+    context = await state.get_data()
+    application_id = context[APPLICATIONS_APPLICATION_ID]
+    token = secrets.token_hex(6)
+    await state.set_state(None)
+    await state.update_data({APPLICATIONS_VIEW: "letter_loading", "letter_token": token, "letter_language": language})
+    back_markup = InlineKeyboardMarkup(inline_keyboard=[_letter_button("⬅️ К вакансии", token, "back")])
+    try:
+        await _replace_or_send(message, state, "✍️ Готовлю сопроводительное письмо…", back_markup, canonical_target=True)
+    except TelegramAPIError:
+        await state.update_data({APPLICATIONS_VIEW: "letter_error"})
+        return
+    task = asyncio.create_task(
+        _complete_letter_generation(message, state, api_client, actor, application_id, language, token)
+    )
+    _letter_generation_tasks.add(task)
+    task.add_done_callback(_letter_generation_tasks.discard)
+
+
+async def _complete_letter_generation(
+    message: Message, state: FSMContext, api_client: BotApiClient, actor: User,
+    application_id: int, language: str, token: str,
+) -> None:
+    try:
+        if not await _is_current_letter_generation(state, application_id, language, token):
+            return
+        user_id = await api_client.create_or_get_user(actor)
+        # User resolution can wait on the API. Do not start a stale provider
+        # request after Back or Change language has moved this interaction on.
+        if not await _is_current_letter_generation(state, application_id, language, token):
+            return
+        result = await _request_letter(message, state, api_client, user_id, application_id, language, token)
+        if result is None:
+            return
+        text = str(result["letter"])
+        text = text.encode("utf-16-le")[:3500 * 2].decode("utf-16-le", errors="ignore")
+        next_view = "letter"
+    except httpx.HTTPError as error:
+        text = "Не удалось подготовить письмо. Попробуй ещё раз или вернись к вакансии."
+        if isinstance(error, httpx.HTTPStatusError) and error.response.status_code == 409:
+            text = "Сначала сохрани профиль в разделе «Профиль», затем вернись к вакансии."
+        next_view = "letter_error"
+    except TelegramAPIError:
+        await state.update_data({APPLICATIONS_VIEW: "letter_error"})
+        return
+    current = await state.get_data()
+    if current.get(APPLICATIONS_VIEW) != "letter_loading" or current.get("letter_token") != token:
+        return
+    markup = InlineKeyboardMarkup(inline_keyboard=[
+        _letter_button("🔄 Другой вариант" if next_view == "letter" else "🔄 Повторить", token, "again"),
+        _letter_button("🌐 Сменить язык", token, "change"),
+        _letter_button("⬅️ К вакансии", token, "back"),
+    ])
+    try:
+        await _replace_or_send(message, state, text, markup, canonical_target=True)
+    except TelegramAPIError:
+        # Keep a retryable context even when Telegram cannot deliver the result.
+        await state.update_data({APPLICATIONS_VIEW: "letter_error"})
+        return
+    await state.update_data({APPLICATIONS_VIEW: next_view})
 
 
 async def _handle_list_callback(

@@ -36,6 +36,9 @@ def _is_aware_iso_datetime(value: object) -> bool:
 
 
 class BotApiClient(Protocol):
+    async def generate_cover_letter(self, user_id: int, application_id: int, language: str) -> dict[str, object]: ...
+
+    async def normalize_cover_letter_language(self, text: str) -> str: ...
     async def create_or_get_user(self, telegram_user: User) -> int: ...
 
     async def save_application(self, user_id: int, source_url: str) -> dict[str, object]: ...
@@ -79,6 +82,22 @@ class BotApiClient(Protocol):
 
 
 class JobHunterApiClient:
+    async def normalize_cover_letter_language(self, text: str) -> str:
+        response = await self._client.post("/cover-letter/language", json={"text": text})
+        response.raise_for_status()
+        language = _json_object(response).get("language")
+        if not isinstance(language, str) or len(language) != 2 or not language.isascii() or not language.islower() or not language.isalpha():
+            raise httpx.DecodingError("Invalid language response", request=response.request)
+        return language
+
+    async def generate_cover_letter(self, user_id: int, application_id: int, language: str) -> dict[str, object]:
+        response = await self._client.post(f"/users/{user_id}/applications/{application_id}/cover-letter", json={"language": language})
+        response.raise_for_status()
+        payload = _json_object(response)
+        if not isinstance(payload.get("letter"), str) or not payload["letter"].strip():
+            raise httpx.DecodingError("Invalid cover letter response", request=response.request)
+        return payload
+
     def __init__(self, base_url: str) -> None:
         self._client = httpx.AsyncClient(base_url=base_url, timeout=40.0)
 

@@ -415,7 +415,7 @@ def test_dispatcher_match_back_to_vacancy_restores_detail_as_canonical_view(
         assert answers == []
         assert [button.text for row in edits[-1][1].inline_keyboard for button in row] == [
             "Изменить статус", "📅 Следующее действие", "📝 Заметка", "🕘 История статусов",
-            "🔎 Почему подходит?", "⬅️ К списку"
+            "🔎 Почему подходит?", "✍️ Сопроводительное письмо", "⬅️ К списку"
         ]
 
         await main_module.dp.feed_update(bot, _applications_callback_update("applications:match:18:5", update_id=22, message_id=10))
