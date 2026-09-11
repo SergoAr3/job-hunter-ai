@@ -215,6 +215,32 @@ def test_vacancies_change_emphasis_context_not_candidate_facts():
     assert first.matching["strengths"] != second.matching["strengths"]
 
 
+def test_context_includes_stable_user_confirmed_experience_evidence():
+    owner, app_id, _ = setup_context()
+    response = client.post(
+        f"/users/{owner}/profile/experience-facts",
+        json={"text": "Немного работал с Docker"},
+    )
+    assert response.status_code == 201
+    fact = response.json()
+    with TestSessionLocal() as session:
+        context = build_context(session, owner, app_id, "ru")
+    evidence = next(item for item in context.candidate_facts if item.kind == "experience_evidence")
+    assert evidence.id == f"experience_fact:{fact['id']}"
+    assert evidence.value == "Немного работал с Docker"
+
+    edited = client.put(
+        f"/users/{owner}/profile/experience-facts/{fact['id']}",
+        json={"text": "Настраивал Docker для локального запуска сервисов"},
+    )
+    assert edited.status_code == 200
+    with TestSessionLocal() as session:
+        edited_context = build_context(session, owner, app_id, "ru")
+    edited_evidence = next(item for item in edited_context.candidate_facts if item.kind == "experience_evidence")
+    assert edited_evidence.id == evidence.id
+    assert edited_evidence.value == "Настраивал Docker для локального запуска сервисов"
+
+
 def test_provider_runs_without_open_transaction(monkeypatch):
     owner, app_id, _ = setup_context()
     with TestSessionLocal() as session:

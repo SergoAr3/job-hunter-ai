@@ -20,8 +20,12 @@ from app.schemas import (
     ApplicationStatusHistoryOut,
     ApplicationSort,
     ApplicationsPageOut,
+    CVProfileDraftOut,
     JobOut,
     ProfileLanguagesNormalizeIn,
+    ProfileExperienceFactIn,
+    ProfileExperienceFactOut,
+    ProfileExperienceFactsOut,
     MatchResultOut,
     ProfileSkillsNormalizeIn,
     SavedApplicationOut,
@@ -67,6 +71,16 @@ from app.services.user_profiles import (
     UserProfileNotFoundError,
     get_user_profile,
     put_user_profile,
+)
+from app.services.profile_experience_facts import (
+    DuplicateProfileExperienceFactError,
+    ProfileExperienceFactLimitError,
+    ProfileExperienceFactNotFoundError,
+    ProfileNotFoundError,
+    create_profile_experience_fact,
+    delete_profile_experience_fact,
+    list_user_profile_experience_facts,
+    update_profile_experience_fact,
 )
 from app.services.vacancy_enrichment import VacancyEnrichmentService
 from app.services.job_ai_enrichment import JobAIEnrichmentService
@@ -164,12 +178,70 @@ def replace_user_profile(
     return UserProfileOut.model_validate(profile)
 
 
-@app.post("/users/{user_id}/profile/draft-from-cv", response_model=UserProfilePutIn)
+@app.get("/users/{user_id}/profile/experience-facts", response_model=ProfileExperienceFactsOut)
+def read_profile_experience_facts(
+    user_id: int, session: Session = Depends(get_session),
+) -> ProfileExperienceFactsOut:
+    try:
+        facts = list_user_profile_experience_facts(session, user_id)
+    except ProfileNotFoundError as error:
+        raise HTTPException(status_code=404, detail={"code": "PROFILE_NOT_FOUND"}) from error
+    return ProfileExperienceFactsOut(items=[ProfileExperienceFactOut.model_validate(fact) for fact in facts])
+
+
+@app.post(
+    "/users/{user_id}/profile/experience-facts",
+    response_model=ProfileExperienceFactOut,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_experience_fact(
+    user_id: int, payload: ProfileExperienceFactIn, session: Session = Depends(get_session),
+) -> ProfileExperienceFactOut:
+    try:
+        fact = create_profile_experience_fact(session, user_id, payload)
+    except ProfileNotFoundError as error:
+        raise HTTPException(status_code=404, detail={"code": "PROFILE_NOT_FOUND"}) from error
+    except DuplicateProfileExperienceFactError as error:
+        raise HTTPException(status_code=422, detail={"code": "DUPLICATE_EXPERIENCE_FACT"}) from error
+    except ProfileExperienceFactLimitError as error:
+        raise HTTPException(status_code=422, detail={"code": "EXPERIENCE_FACT_LIMIT_REACHED"}) from error
+    return ProfileExperienceFactOut.model_validate(fact)
+
+
+@app.put("/users/{user_id}/profile/experience-facts/{fact_id}", response_model=ProfileExperienceFactOut)
+def replace_experience_fact(
+    user_id: int, fact_id: int, payload: ProfileExperienceFactIn,
+    session: Session = Depends(get_session),
+) -> ProfileExperienceFactOut:
+    try:
+        fact = update_profile_experience_fact(session, user_id, fact_id, payload)
+    except ProfileNotFoundError as error:
+        raise HTTPException(status_code=404, detail={"code": "PROFILE_NOT_FOUND"}) from error
+    except ProfileExperienceFactNotFoundError as error:
+        raise HTTPException(status_code=404, detail={"code": "EXPERIENCE_FACT_NOT_FOUND"}) from error
+    except DuplicateProfileExperienceFactError as error:
+        raise HTTPException(status_code=422, detail={"code": "DUPLICATE_EXPERIENCE_FACT"}) from error
+    return ProfileExperienceFactOut.model_validate(fact)
+
+
+@app.delete("/users/{user_id}/profile/experience-facts/{fact_id}", status_code=status.HTTP_204_NO_CONTENT)
+def remove_experience_fact(
+    user_id: int, fact_id: int, session: Session = Depends(get_session),
+) -> None:
+    try:
+        delete_profile_experience_fact(session, user_id, fact_id)
+    except ProfileNotFoundError as error:
+        raise HTTPException(status_code=404, detail={"code": "PROFILE_NOT_FOUND"}) from error
+    except ProfileExperienceFactNotFoundError as error:
+        raise HTTPException(status_code=404, detail={"code": "EXPERIENCE_FACT_NOT_FOUND"}) from error
+
+
+@app.post("/users/{user_id}/profile/draft-from-cv", response_model=CVProfileDraftOut)
 async def draft_user_profile_from_cv(
     user_id: int,
     file: UploadFile = File(...),
     session: Session = Depends(get_session),
-) -> UserProfilePutIn:
+) -> CVProfileDraftOut:
     try:
         content = await file.read(MAX_UPLOAD_BYTES + 1)
         if len(content) > MAX_UPLOAD_BYTES:

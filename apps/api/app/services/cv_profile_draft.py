@@ -18,11 +18,12 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from pypdf import PageObject, PdfReader
 from pypdf.errors import LimitReachedError, PdfReadError
 from pypdf.generic import ArrayObject, DictionaryObject, NullObject, PdfObject, StreamObject
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.config import CV_AI_MAX_OUTPUT_TOKENS, CV_AI_TIMEOUT_SECONDS, OPENAI_API_KEY, OPENAI_MODEL
-from app.models import ExperienceLevel, ProfileSalaryPeriod, User, WorkplacePreference
-from app.schemas import MAX_PROFILE_ITEMS, UserProfilePutIn
+from app.models import ExperienceLevel, ProfileExperienceFact, ProfileSalaryPeriod, User, UserProfile, WorkplacePreference
+from app.schemas import CVProfileDraftOut, MAX_PROFILE_ITEMS, normalize_experience_fact_text
 
 logger = logging.getLogger(__name__)
 timing_logger = logging.getLogger("uvicorn.error")
@@ -37,6 +38,7 @@ MAX_DOCX_UNCOMPRESSED_BYTES = 20 * 1024 * 1024
 MAX_DOCX_COMPRESSION_RATIO = 100
 MAX_EXTRACTED_CHARS = 30_000
 MAX_OUTPUT_TOKENS = CV_AI_MAX_OUTPUT_TOKENS
+MAX_SUGGESTED_EXPERIENCE_FACTS = 8
 REASONING_EFFORT = "minimal"
 _CANONICAL_SALARY_AMOUNT = re.compile(r"\d+(?:\.\d+)?\Z")
 
@@ -112,6 +114,7 @@ class _AIProfileDraftFields(BaseModel):
     salary_currency: str | None = Field(default=None, min_length=3, max_length=3)
     salary_period: ProfileSalaryPeriod = ProfileSalaryPeriod.UNKNOWN
     languages: list[AIProfileLanguage] = Field(default_factory=list, max_length=MAX_PROFILE_ITEMS)
+    suggested_experience_facts: list[str] = Field(default_factory=list, max_length=MAX_SUGGESTED_EXPERIENCE_FACTS)
 
 
 class AIProfileDraftTransport(_AIProfileDraftFields):
@@ -144,7 +147,7 @@ class CVProfileDraftAIService:
     def configured(self) -> bool:
         return self._client is not None
 
-    def create_draft(self, cv_text: str) -> UserProfilePutIn:
+    def create_draft(self, cv_text: str) -> CVProfileDraftOut:
         if self._client is None:
             raise CVProfileDraftError(ERROR_AI_UNAVAILABLE)
         ai_started_at = time.monotonic()
@@ -231,7 +234,7 @@ class CVProfileDraftAIService:
             guarded = _apply_evidence_guards(convert_transport_cv_profile_draft(parsed), cv_text)
             if not guarded.target_roles:
                 raise CVProfileDraftError(ERROR_INSUFFICIENT_JOB_INFORMATION)
-            result = UserProfilePutIn.model_validate(guarded.model_dump())
+            result = CVProfileDraftOut.model_validate(guarded.model_dump())
             validation_succeeded = True
             return result
         except CVProfileDraftError as error:
@@ -270,7 +273,7 @@ def create_profile_draft_from_cv(
     content_type: str | None,
     content: bytes,
     ai_service: CVProfileDraftAIService,
-) -> UserProfilePutIn:
+) -> CVProfileDraftOut:
     total_started_at = time.monotonic()
     try:
         if session.get(User, user_id) is None:
@@ -283,12 +286,34 @@ def create_profile_draft_from_cv(
         _log_duration(
             "extraction", extraction_started_at, extracted_char_count=len(cv_text)
         )
-        result = ai_service.create_draft(cv_text)
+        result = _exclude_existing_experience_facts(session, user_id, ai_service.create_draft(cv_text))
         _log_duration("total", total_started_at, result="success")
         return result
     except CVProfileDraftError as error:
         _log_duration("total", total_started_at, result="error", error_code=error.code)
         raise
+
+
+def _exclude_existing_experience_facts(
+    session: Session, user_id: int, draft: CVProfileDraftOut,
+) -> CVProfileDraftOut:
+    profile = session.scalar(select(UserProfile).where(UserProfile.user_id == user_id))
+    if profile is None:
+        return draft
+    existing = {
+        normalize_experience_fact_text(text).casefold()
+        for text in session.scalars(
+            select(ProfileExperienceFact.text).where(ProfileExperienceFact.user_profile_id == profile.id)
+        )
+    }
+    suggestions: list[str] = []
+    seen: set[str] = set()
+    for text in draft.suggested_experience_facts:
+        normalized = normalize_experience_fact_text(text).casefold()
+        if normalized not in existing and normalized not in seen:
+            suggestions.append(text)
+            seen.add(normalized)
+    return draft.model_copy(update={"suggested_experience_facts": suggestions})
 
 
 def _log_duration(
@@ -820,6 +845,7 @@ Return only fields from the provided structured schema. Do not write explanation
 Do not invent facts or preferences. Empty arrays, null, any, and unknown are correct when evidence is absent.
 Target roles may be inferred conservatively from a CV headline, current role, or recent relevant experience. Return an empty target_roles array when no job-related role can be identified.
 Include skills only when evidenced by the CV; normalize names only when unambiguous.
+Suggested experience facts are short, standalone statements directly supported by the CV. Suggest at most 8. Do not infer an experience claim from a skill alone. Preserve limiting wording such as 'a little'. Never add years, achievements, companies, projects, responsibilities, production/commercial context, seniority, proficiency, or measurable results unless the CV explicitly states them.
 Experience must be one of intern, junior, middle, senior, lead, unknown. Use a non-unknown level only when it is explicitly stated in a title or level marker in the CV; do not infer it from years, responsibilities, number of roles, age, or career progression. It reflects the overall demonstrated professional level across relevant career history, not one position. An internship must not determine the profile when non-intern relevant professional roles are present; otherwise return unknown when the level is ambiguous. Staff, principal, head, director, management titles, ambiguous levels, and levels outside this taxonomy are unknown.
 Locations must be explicitly stated geographic candidate locations, not employer locations, and not remote, hybrid, onsite, any, or localized equivalents. Put workplace information only in workplace_preference.
 Workplace preference is remote, hybrid, or onsite only when explicitly stated as the candidate's preference; otherwise use any.

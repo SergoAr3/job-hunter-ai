@@ -107,6 +107,22 @@ class UserProfile(Base):
     )
 
 
+class ProfileExperienceFact(Base):
+    __tablename__ = "profile_experience_facts"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_profile_id: Mapped[int] = mapped_column(
+        ForeignKey("user_profiles.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    text: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+
+
 class ApplicationStatus(str, Enum):
     SAVED = "saved"
     APPLIED = "applied"

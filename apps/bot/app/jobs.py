@@ -437,7 +437,7 @@ def _other_component_values(match: dict[str, object], visible_components: set[st
     if not isinstance(components, dict):
         return []
     labels = {
-        "seniority": "📈 Опыт",
+        "seniority": "📈 Уровень опыта",
         "languages": "🌍 Языки",
         "workplace": "🏠 Формат работы",
         "location": "📍 Локация",

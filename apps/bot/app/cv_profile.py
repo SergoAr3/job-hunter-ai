@@ -15,6 +15,7 @@ from app.api_client import BotApiClient
 from app.profile import (
     ACTIVE_PROFILE_PROMPT_MESSAGE_ID,
     CV_REPLACEMENT_DRAFT_SOURCE,
+    CV_SUGGESTED_FACTS,
     PERSISTED_PROFILE_SNAPSHOT,
     PROFILE_DRAFT_SOURCE,
     PROFILE_SECTION_MESSAGE_ID,
@@ -124,7 +125,12 @@ async def handle_cv_document(
         for key in (PERSISTED_PROFILE_SNAPSHOT, PROFILE_SECTION_MESSAGE_ID):
             if key in state_data:
                 replacement_context[key] = state_data[key]
-    await state.set_data({**profile_payload(draft), **replacement_context, PROFILE_DRAFT_SOURCE: replacement_context.get(PROFILE_DRAFT_SOURCE, "cv")})
+    suggestions = draft.get("suggested_experience_facts", [])
+    await state.set_data({
+        **profile_payload(draft), **replacement_context,
+        PROFILE_DRAFT_SOURCE: replacement_context.get(PROFILE_DRAFT_SOURCE, "cv"),
+        CV_SUGGESTED_FACTS: suggestions if isinstance(suggestions, list) else [],
+    })
     await show_summary(message, state)
 
 
