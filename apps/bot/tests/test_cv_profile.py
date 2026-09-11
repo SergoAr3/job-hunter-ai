@@ -46,6 +46,7 @@ from app.menu import (
 from app.profile import (
     ACTIVE_PROFILE_PROMPT_MESSAGE_ID,
     CV_REPLACEMENT_DRAFT_SOURCE,
+    CV_SUGGESTED_FACTS,
     PERSISTED_PROFILE_SNAPSHOT,
     PROFILE_EDITING_FIELD,
     PROFILE_CANCELLED_MESSAGE,
@@ -252,6 +253,71 @@ def test_valid_document_shows_processing_and_draft_summary() -> None:
     asyncio.run(scenario())
 
 
+def test_cv_suggestions_are_not_saved_until_confirmed() -> None:
+    async def scenario() -> None:
+        class SuggestedFactsApi(FakeApiClient):
+            def __init__(self) -> None:
+                super().__init__()
+                self.fact_calls: list[str] = []
+
+            async def create_profile_draft_from_cv(self, user_id: int, **kwargs: object) -> dict[str, object]:
+                return {**draft(), "suggested_experience_facts": ["Разрабатывал REST API на FastAPI"]}
+
+            async def create_profile_experience_fact(self, user_id: int, text: str) -> dict[str, object]:
+                self.fact_calls.append(text)
+                return {"id": 1, "text": text}
+
+        storage, state = make_state()
+        message, api = FakeMessage(document=pdf_document()), SuggestedFactsApi()
+        await state.set_state(ProfileSetupStates.cv_waiting_document)
+        await handle_cv_document(message, state, api)
+        summary_id = (await state.get_data())[ACTIVE_PROFILE_PROMPT_MESSAGE_ID]
+        summary = FakeMessage(message_id=summary_id, bot=message.bot)
+        await handle_profile_callback(FakeCallback("profile:save", summary), state, api)
+        assert api.fact_calls == []
+        token = (await state.get_data())["cv_suggested_experience_token"]
+        suggestion_id = (await state.get_data())[ACTIVE_PROFILE_PROMPT_MESSAGE_ID]
+        suggestion = FakeMessage(message_id=suggestion_id, bot=message.bot)
+        await handle_profile_callback(FakeCallback(f"profile:cv_suggestions:{token}:confirm", suggestion), state, api)
+        assert api.fact_calls == ["Разрабатывал REST API на FastAPI"]
+        assert (await state.get_data())[PERSISTED_PROFILE_SNAPSHOT]["skills"] == ["Python", "FastAPI"]
+        await storage.close()
+
+    asyncio.run(scenario())
+
+
+def test_cancel_after_replacement_profile_save_keeps_new_canonical_profile() -> None:
+    async def scenario() -> None:
+        storage, state = make_state()
+        old = {**draft(), "skills": ["Old skill"]}
+        new = {**draft(), "skills": ["New skill"]}
+        api = FakeApiClient()
+        summary = FakeMessage(message_id=50)
+        await state.set_state(ProfileSetupStates.summary)
+        await state.set_data({
+            **new,
+            PROFILE_DRAFT_SOURCE: CV_REPLACEMENT_DRAFT_SOURCE,
+            PERSISTED_PROFILE_SNAPSHOT: old,
+            CV_SUGGESTED_FACTS: ["Разрабатывал REST API на FastAPI"],
+            ACTIVE_PROFILE_PROMPT_MESSAGE_ID: 50,
+        })
+
+        await handle_profile_callback(FakeCallback("profile:save", summary), state, api)
+
+        data = await state.get_data()
+        assert data[PROFILE_DRAFT_SOURCE] == "persisted"
+        assert data[PERSISTED_PROFILE_SNAPSHOT]["skills"] == ["New skill"]
+        suggestion = FakeMessage(message_id=data[ACTIVE_PROFILE_PROMPT_MESSAGE_ID], bot=summary.bot)
+        await handle_profile_cancel(suggestion, state)
+
+        assert await state.get_state() is None
+        assert (await state.get_data())[PERSISTED_PROFILE_SNAPSHOT]["skills"] == ["New skill"]
+        assert "🧩 Навыки: New skill" in suggestion.answers[-1][0]
+        await storage.close()
+
+    asyncio.run(scenario())
+
+
 def test_replacement_cv_draft_fully_replaces_persisted_snapshot_only_on_save() -> None:
     async def scenario() -> None:
         class ReplacementApi(FakeApiClient):
@@ -386,7 +452,7 @@ def test_edit_manual_selects_field_without_starting_sequential_wizard() -> None:
         assert [row[0].text for row in message.answers[-1][1].inline_keyboard] == [
             "🎯 Роли",
             "🧩 Навыки",
-            "📈 Опыт",
+            "📈 Уровень опыта",
             "📍 Локации",
             "🏠 Формат работы",
             "💰 Зарплата",

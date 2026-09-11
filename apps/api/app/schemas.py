@@ -184,6 +184,49 @@ class UserProfileOut(BaseModel):
     updated_at: datetime
 
 
+def normalize_experience_fact_text(value: str) -> str:
+    if "\x00" in value or any(ord(char) < 32 and char not in "\t\n\r" for char in value):
+        raise ValueError("experience fact must not contain control characters")
+    return " ".join(value.split())
+
+
+class CVProfileDraftOut(UserProfilePutIn):
+    suggested_experience_facts: list[str] = Field(default_factory=list, max_length=8)
+
+    @field_validator("suggested_experience_facts", mode="before")
+    @classmethod
+    def normalize_suggested_experience_facts(cls, value: object) -> object:
+        if not isinstance(value, list):
+            return value
+        return [ProfileExperienceFactIn(text=item).text if isinstance(item, str) else item for item in value]
+
+
+class ProfileExperienceFactIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    text: str = Field(strict=True, min_length=1, max_length=500)
+
+    @field_validator("text", mode="before")
+    @classmethod
+    def normalize_text(cls, value: object) -> object:
+        if isinstance(value, str):
+            return normalize_experience_fact_text(value)
+        return value
+
+
+class ProfileExperienceFactOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    text: str
+    created_at: datetime
+    updated_at: datetime
+
+
+class ProfileExperienceFactsOut(BaseModel):
+    items: list[ProfileExperienceFactOut]
+
+
 class ApplicationCreateIn(BaseModel):
     source_url: str = Field(min_length=1, max_length=2048)
 

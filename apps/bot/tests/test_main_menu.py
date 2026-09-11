@@ -39,6 +39,7 @@ from app.profile import (
     PROFILE_DRAFT_SOURCE,
     PROFILE_EDITING_FIELD,
     PROFILE_SECTION_EDIT_CALLBACK,
+    PROFILE_SECTION_EXPERIENCE_CALLBACK,
     PROFILE_CANCELLED_MESSAGE,
     ProfileSetupStates,
     ROLE_PROMPT,
@@ -233,6 +234,51 @@ def test_dispatcher_routes_active_field_edit_back_to_picker(monkeypatch) -> None
 
         assert answers == ["Какое поле изменить?"]
         assert removed_message_ids == [17]
+        await bot.session.close()
+
+    asyncio.run(scenario())
+
+
+def test_dispatcher_routes_profile_experience_section_to_api(monkeypatch) -> None:
+    async def scenario() -> None:
+        class ExperienceFactsApi(FakeApiClient):
+            def __init__(self) -> None:
+                super().__init__()
+                self.fact_list_calls: list[int] = []
+
+            async def list_profile_experience_facts(self, user_id: int) -> list[dict[str, object]]:
+                self.fact_list_calls.append(user_id)
+                return [{"id": 42, "text": "Делал REST API на FastAPI"}]
+
+        bot = Bot("123456:menu-test-token")
+        rendered: list[tuple[str, object | None]] = []
+
+        async def callback_answer(callback: CallbackQuery, **kwargs: object) -> None:
+            return None
+
+        async def edit_text(message: Message, text: str, **kwargs: object) -> None:
+            rendered.append((text, kwargs.get("reply_markup")))
+
+        api = ExperienceFactsApi()
+        monkeypatch.setattr(main_module, "api_client", api)
+        monkeypatch.setattr(CallbackQuery, "answer", callback_answer)
+        monkeypatch.setattr(Message, "edit_text", edit_text)
+        state = await set_dispatcher_state(
+            bot, None, {PROFILE_SECTION_MESSAGE_ID: 10, PERSISTED_PROFILE_SNAPSHOT: saved_profile()}
+        )
+
+        await dp.feed_update(
+            bot,
+            make_profile_callback_update(
+                PROFILE_SECTION_EXPERIENCE_CALLBACK, update_id=718, message_id=10
+            ),
+        )
+
+        data = await state.get_data()
+        assert api.fact_list_calls == [7]
+        assert data["profile_experience_facts"] == [{"id": 42, "text": "Делал REST API на FastAPI"}]
+        assert "🧾 Практический опыт" in rendered[0][0]
+        assert rendered[0][1] is not None
         await bot.session.close()
 
     asyncio.run(scenario())
@@ -447,7 +493,7 @@ def test_saved_profile_card_renders_optional_empty_values_neutrally() -> None:
 
         card = message.answers[0][0]
         assert "🧩 Навыки: Не указаны" in card
-        assert "📈 Опыт: Не указано" in card
+        assert "📈 Уровень опыта: Не указано" in card
         assert "📍 Локация: Не указаны" in card
         assert "🏠 Формат работы: Любой" in card
         assert "💰 Зарплата: Не указана" in card

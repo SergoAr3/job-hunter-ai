@@ -21,6 +21,7 @@ from app.profile import (
     PROFILE_INVALID_CURRENCY_MESSAGE,
     PROFILE_LANGUAGES_VALIDATION_ERROR_MESSAGE,
     PROFILE_SECTION_EDIT_CALLBACK,
+    PROFILE_SECTION_EXPERIENCE_CALLBACK,
     PROFILE_SECTION_MESSAGE_ID,
     PROFILE_SAVED_MESSAGE,
     ProfileSetupStates,
@@ -29,6 +30,8 @@ from app.profile import (
     handle_profile_callback,
     handle_profile_cancel,
     handle_profile_draft_field_input,
+    handle_profile_experience_section,
+    handle_profile_experience_text,
     handle_profile_setup,
     handle_salary,
     handle_skills,
@@ -64,6 +67,7 @@ class FakeMessage:
         self.inline_keyboard_removed_message_ids: list[int] = []
         self.deleted_message_ids: list[int] = []
         self.edited_texts: list[str] = []
+        self.last_reply_markup: object | None = None
         self.next_message_id = 1
         self.fail_edit = False
         self.fail_delete = False
@@ -92,8 +96,8 @@ class FakeMessage:
     async def edit_text(self, text: str, reply_markup: object | None = None) -> None:
         if self.fail_edit:
             raise TelegramBadRequest(method=EditMessageReplyMarkup(), message="edit failed")
-        assert reply_markup is None
         self.edited_texts.append(text)
+        self.last_reply_markup = reply_markup
 
 
 class FakeBot:
@@ -162,6 +166,8 @@ class FakeApiClient:
         self.profile_calls: list[tuple[int, dict[str, object]]] = []
         self.telegram_users: list[object] = []
         self.returned_profile = returned_profile
+        self.experience_facts: list[dict[str, object]] = []
+        self.experience_calls: list[tuple[str, object]] = []
 
     async def create_or_get_user(self, telegram_user: object) -> int:
         self.telegram_users.append(telegram_user)
@@ -174,6 +180,26 @@ class FakeApiClient:
         if self.profile_error is not None:
             raise self.profile_error
         return self.returned_profile or profile
+
+    async def list_profile_experience_facts(self, user_id: int) -> list[dict[str, object]]:
+        self.experience_calls.append(("list", user_id))
+        return [dict(fact) for fact in self.experience_facts]
+
+    async def create_profile_experience_fact(self, user_id: int, text: str) -> dict[str, object]:
+        self.experience_calls.append(("create", text))
+        fact = {"id": len(self.experience_facts) + 1, "text": text}
+        self.experience_facts.append(fact)
+        return fact
+
+    async def update_profile_experience_fact(self, user_id: int, fact_id: int, text: str) -> dict[str, object]:
+        self.experience_calls.append(("update", (fact_id, text)))
+        fact = next(item for item in self.experience_facts if item["id"] == fact_id)
+        fact["text"] = text
+        return dict(fact)
+
+    async def delete_profile_experience_fact(self, user_id: int, fact_id: int) -> None:
+        self.experience_calls.append(("delete", fact_id))
+        self.experience_facts = [item for item in self.experience_facts if item["id"] != fact_id]
 
     async def normalize_profile_skills(self, skills: list[str]) -> list[str]:
         return skills
@@ -228,6 +254,94 @@ def test_complete_profile_flow_saves_only_after_confirmation_and_clears_state() 
         assert api_client.profile_calls[0][1]["target_roles"] == ["Python Backend Developer", "ML Engineer"]
         assert api_client.profile_calls[0][1]["salary_currency"] == "USD"
         await storage.close()
+    asyncio.run(scenario())
+
+
+def test_profile_experience_add_edit_delete_require_confirmation() -> None:
+    async def scenario() -> None:
+        storage, state = make_state()
+        message, api = FakeMessage(), FakeApiClient()
+        snapshot = {"target_roles": ["Backend Developer"], "skills": [], "experience": "unknown",
+                    "location": [], "workplace_preference": "any", "salary_min": None,
+                    "salary_currency": None, "salary_period": "unknown", "languages": []}
+        await state.set_data({PROFILE_SECTION_MESSAGE_ID: message.message_id, PERSISTED_PROFILE_SNAPSHOT: snapshot})
+        await handle_profile_experience_section(
+            FakeCallback(PROFILE_SECTION_EXPERIENCE_CALLBACK, message), state, api
+        )
+        token = (await state.get_data())["profile_experience_token"]
+        await handle_profile_callback(FakeCallback(f"profile:experience_facts:{token}:add", message), state, api)
+        message.text = "  Делал REST API на FastAPI  "
+        await handle_profile_experience_text(message, state)
+        assert not any(action == "create" for action, _ in api.experience_calls)
+        await handle_profile_callback(FakeCallback(f"profile:experience_facts:{token}:confirm", message), state, api)
+        assert api.experience_facts == [{"id": 1, "text": "Делал REST API на FastAPI"}]
+
+        token = (await state.get_data())["profile_experience_token"]
+        await handle_profile_callback(FakeCallback(f"profile:experience_facts:{token}:select:0", message), state, api)
+        await handle_profile_callback(FakeCallback(f"profile:experience_facts:{token}:edit", message), state, api)
+        message.text = "Интегрировал сторонние API"
+        await handle_profile_experience_text(message, state)
+        await handle_profile_callback(FakeCallback(f"profile:experience_facts:{token}:confirm", message), state, api)
+        assert api.experience_facts == [{"id": 1, "text": "Интегрировал сторонние API"}]
+
+        token = (await state.get_data())["profile_experience_token"]
+        await handle_profile_callback(FakeCallback(f"profile:experience_facts:{token}:select:0", message), state, api)
+        await handle_profile_callback(FakeCallback(f"profile:experience_facts:{token}:delete", message), state, api)
+        assert not any(action == "delete" for action, _ in api.experience_calls)
+        await handle_profile_callback(FakeCallback(f"profile:experience_facts:{token}:delete_confirm", message), state, api)
+        assert api.experience_facts == []
+        await storage.close()
+    asyncio.run(scenario())
+
+
+def test_profile_experience_list_uses_utf16_safe_previews_and_keeps_all_fact_callbacks() -> None:
+    async def scenario() -> None:
+        storage, state = make_state()
+        message, api = FakeMessage(), FakeApiClient()
+        long_text = ("🚀<>&_*" * 80) + ("x" * 20)
+        assert len(long_text) == 500
+        facts = [{"id": index + 1, "text": long_text} for index in range(20)]
+        api.experience_facts = facts
+        await state.set_data({PROFILE_SECTION_MESSAGE_ID: message.message_id})
+
+        await handle_profile_experience_section(
+            FakeCallback(PROFILE_SECTION_EXPERIENCE_CALLBACK, message),
+            state,
+            api,
+        )
+
+        rendered = message.edited_texts[-1]
+        keyboard = message.last_reply_markup
+        assert len(rendered.encode("utf-16-le")) // 2 <= 4096
+        assert "…" in rendered
+        assert "🚀<>&_*" in rendered
+        assert keyboard is not None
+        token = (await state.get_data())["profile_experience_token"]
+        callbacks = [row[0].callback_data for row in keyboard.inline_keyboard[:20]]
+        assert callbacks == [f"profile:experience_facts:{token}:select:{index}" for index in range(20)]
+
+        await handle_profile_callback(FakeCallback(callbacks[0], message), state, api)
+        assert long_text in message.edited_texts[-1]
+        await storage.close()
+
+    asyncio.run(scenario())
+
+
+def test_profile_experience_short_fact_preview_is_not_ellipsized() -> None:
+    async def scenario() -> None:
+        storage, state = make_state()
+        message, api = FakeMessage(), FakeApiClient()
+        api.experience_facts = [{"id": 1, "text": "Работал с PostgreSQL"}]
+        await state.set_data({PROFILE_SECTION_MESSAGE_ID: message.message_id})
+
+        await handle_profile_experience_section(
+            FakeCallback(PROFILE_SECTION_EXPERIENCE_CALLBACK, message), state, api
+        )
+
+        assert message.edited_texts[-1] == "🧾 Практический опыт\n\n1. Работал с PostgreSQL"
+        assert "…" not in message.edited_texts[-1]
+        await storage.close()
+
     asyncio.run(scenario())
 
 
@@ -887,7 +1001,8 @@ def test_persisted_save_sends_new_authoritative_card_and_deactivates_old_context
         text, keyboard = message.answers[0]
         assert "🧩 Навыки: Python, FastAPI, SQL" in text
         assert keyboard.inline_keyboard[0][0].callback_data == "profile_section:edit"
-        assert keyboard.inline_keyboard[1][0].callback_data == PROFILE_SECTION_REPLACE_CV_CALLBACK
+        assert keyboard.inline_keyboard[1][0].callback_data == PROFILE_SECTION_EXPERIENCE_CALLBACK
+        assert keyboard.inline_keyboard[2][0].callback_data == PROFILE_SECTION_REPLACE_CV_CALLBACK
 
         old_card = FakeMessage()
         old_card.message_id = 10

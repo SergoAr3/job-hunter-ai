@@ -70,6 +70,14 @@ class BotApiClient(Protocol):
 
     async def put_user_profile(self, user_id: int, profile: dict[str, object]) -> dict[str, object]: ...
 
+    async def list_profile_experience_facts(self, user_id: int) -> list[dict[str, object]]: ...
+
+    async def create_profile_experience_fact(self, user_id: int, text: str) -> dict[str, object]: ...
+
+    async def update_profile_experience_fact(self, user_id: int, fact_id: int, text: str) -> dict[str, object]: ...
+
+    async def delete_profile_experience_fact(self, user_id: int, fact_id: int) -> None: ...
+
     async def normalize_profile_skills(self, skills: list[str]) -> list[str]: ...
 
     async def normalize_profile_languages(
@@ -82,6 +90,12 @@ class BotApiClient(Protocol):
 
 
 class JobHunterApiClient:
+    @staticmethod
+    def _experience_fact(payload: object, response: httpx.Response) -> dict[str, object]:
+        if not isinstance(payload, dict) or type(payload.get("id")) is not int or not isinstance(payload.get("text"), str):
+            raise httpx.DecodingError("API response has invalid experience fact shape", request=response.request)
+        return payload
+
     async def normalize_cover_letter_language(self, text: str) -> str:
         response = await self._client.post("/cover-letter/language", json={"text": text})
         response.raise_for_status()
@@ -279,6 +293,30 @@ class JobHunterApiClient:
         response = await self._client.put(f"/users/{user_id}/profile", json=profile)
         response.raise_for_status()
         return _json_object(response)
+
+    async def list_profile_experience_facts(self, user_id: int) -> list[dict[str, object]]:
+        response = await self._client.get(f"/users/{user_id}/profile/experience-facts")
+        response.raise_for_status()
+        items = _json_object(response).get("items")
+        if not isinstance(items, list):
+            raise httpx.DecodingError("API response has invalid experience facts shape", request=response.request)
+        return [self._experience_fact(item, response) for item in items]
+
+    async def create_profile_experience_fact(self, user_id: int, text: str) -> dict[str, object]:
+        response = await self._client.post(f"/users/{user_id}/profile/experience-facts", json={"text": text})
+        response.raise_for_status()
+        return self._experience_fact(_json_object(response), response)
+
+    async def update_profile_experience_fact(self, user_id: int, fact_id: int, text: str) -> dict[str, object]:
+        response = await self._client.put(
+            f"/users/{user_id}/profile/experience-facts/{fact_id}", json={"text": text}
+        )
+        response.raise_for_status()
+        return self._experience_fact(_json_object(response), response)
+
+    async def delete_profile_experience_fact(self, user_id: int, fact_id: int) -> None:
+        response = await self._client.delete(f"/users/{user_id}/profile/experience-facts/{fact_id}")
+        response.raise_for_status()
 
     async def normalize_profile_skills(self, skills: list[str]) -> list[str]:
         response = await self._client.post("/profile/skills/normalize", json={"skills": skills})

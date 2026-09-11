@@ -17,7 +17,11 @@ from app.applications import handle_search_cancel, handle_search_non_text, handl
 from app.applications import handle_letter_cancel, handle_letter_language_text
 from app.menu import register_main_menu_handlers
 from app.profile import (
+    PROFILE_SECTION_EXPERIENCE_CALLBACK,
     ProfileSetupStates,
+    handle_profile_experience_section,
+    handle_profile_experience_text,
+    handle_cv_suggested_fact_text,
     handle_languages,
     handle_profile_draft_field_input,
     handle_location,
@@ -146,6 +150,16 @@ async def receive_profile_draft_field_input(message: Message, state: FSMContext)
     await handle_profile_draft_field_input(message, state, api_client)
 
 
+@dp.message(ProfileSetupStates.experience_fact_input, F.text)
+async def receive_profile_experience_text(message: Message, state: FSMContext) -> None:
+    await handle_profile_experience_text(message, state)
+
+
+@dp.message(ProfileSetupStates.cv_suggested_fact_edit, F.text)
+async def receive_cv_suggested_fact_text(message: Message, state: FSMContext) -> None:
+    await handle_cv_suggested_fact_text(message, state)
+
+
 @dp.message(ProfileSetupStates.cv_waiting_document, F.document)
 async def receive_cv_document(message: Message, state: FSMContext) -> None:
     await handle_cv_document(message, state, api_client)
@@ -159,6 +173,11 @@ async def receive_unsupported_cv_message(message: Message, state: FSMContext) ->
 @dp.callback_query(F.data.startswith("profile:"))
 async def profile_callback(callback: CallbackQuery, state: FSMContext) -> None:
     await handle_profile_callback(callback, state, api_client)
+
+
+@dp.callback_query(F.data == PROFILE_SECTION_EXPERIENCE_CALLBACK)
+async def profile_experience_section(callback: CallbackQuery, state: FSMContext) -> None:
+    await handle_profile_experience_section(callback, state, api_client)
 
 
 @dp.callback_query(F.data.startswith("match:"))

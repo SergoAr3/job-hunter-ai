@@ -1,5 +1,6 @@
 import logging
 import re
+import secrets
 from decimal import Decimal, InvalidOperation
 from typing import Any, cast
 
@@ -71,6 +72,18 @@ PERSISTED_PROFILE_SNAPSHOT = "persisted_profile_snapshot"
 PROFILE_SECTION_MESSAGE_ID = "profile_section_message_id"
 PROFILE_SECTION_EDIT_CALLBACK = "profile_section:edit"
 PROFILE_SECTION_REPLACE_CV_CALLBACK = "profile_section:replace_cv"
+PROFILE_SECTION_EXPERIENCE_CALLBACK = "profile_section:experience"
+PROFILE_EXPERIENCE_TOKEN = "profile_experience_token"
+PROFILE_EXPERIENCE_FACTS = "profile_experience_facts"
+PROFILE_EXPERIENCE_FACT_ID = "profile_experience_fact_id"
+PROFILE_EXPERIENCE_MODE = "profile_experience_mode"
+PROFILE_EXPERIENCE_DRAFT = "profile_experience_draft"
+CV_SUGGESTED_FACTS = "cv_suggested_experience_facts"
+CV_SUGGESTED_TOKEN = "cv_suggested_experience_token"
+CV_SUGGESTED_EDIT_INDEX = "cv_suggested_experience_edit_index"
+CV_SUGGESTED_SAVED_PROFILE = "cv_suggested_experience_saved_profile"
+EXPERIENCE_FACT_LIST_MAX_UTF16_UNITS = 4096
+EXPERIENCE_FACT_PREVIEW_MAX_UTF16_UNITS = 150
 PROFILE_EDITABLE_FIELDS = {
     "target_roles",
     "skills",
@@ -96,6 +109,10 @@ class ProfileSetupStates(StatesGroup):
     languages = State()
     summary = State()
     edit_field = State()
+    experience_fact_input = State()
+    experience_fact_confirm = State()
+    cv_suggested_facts = State()
+    cv_suggested_fact_edit = State()
 
 
 def is_profile_state(state_name: str | None) -> bool:
@@ -211,6 +228,13 @@ async def handle_profile_callback(
     current_state = await state.get_state()
 
     if not await _is_active_profile_callback(message, state):
+        return
+
+    if action == "experience_facts":
+        await _handle_experience_facts_callback(message, state, api_client, callback.from_user, parts)
+        return
+    if action == "cv_suggestions":
+        await _handle_cv_suggestions_callback(message, state, api_client, callback.from_user, parts)
         return
 
     if action == "cancel":
@@ -399,7 +423,14 @@ async def save_profile(
         await _remove_inline_keyboard(message)
         await state.update_data(active_profile_prompt_message_id=retry_message.message_id)
         return False
-    if source in PERSISTED_BACKED_DRAFT_SOURCES:
+    suggestions = state_data.get(CV_SUGGESTED_FACTS)
+    if isinstance(suggestions, list) and suggestions:
+        await state.update_data({
+            PERSISTED_PROFILE_SNAPSHOT: profile_payload(saved_profile),
+            PROFILE_DRAFT_SOURCE: "persisted",
+        })
+        await _show_cv_suggestions(message, state, saved_profile, [item for item in suggestions if isinstance(item, str)])
+    elif source in PERSISTED_BACKED_DRAFT_SOURCES:
         await show_saved_profile_card(message, state, saved_profile, replace_summary=True)
     else:
         await state.clear()
@@ -407,8 +438,124 @@ async def save_profile(
     return True
 
 
+def _cv_suggestion_callback(token: str, action: str, value: int | None = None) -> str:
+    return f"profile:cv_suggestions:{token}:{action}" + (f":{value}" if value is not None else "")
+
+
+async def _show_cv_suggestions(
+    message: Message, state: FSMContext, saved_profile: dict[str, object], suggestions: list[str],
+) -> None:
+    token = secrets.token_hex(4)
+    facts = [{"id": index, "text": text} for index, text in enumerate(suggestions)]
+    rows = [
+        [InlineKeyboardButton(text=f"✏️ {index + 1}. {text[:42]}", callback_data=_cv_suggestion_callback(token, "select", index))]
+        for index, text in enumerate(suggestions)
+    ]
+    rows.extend([
+        [InlineKeyboardButton(text="✅ Добавить выбранные", callback_data=_cv_suggestion_callback(token, "confirm"))],
+        [InlineKeyboardButton(text="⏭ Пропустить", callback_data=_cv_suggestion_callback(token, "skip"))],
+    ])
+    await state.set_state(ProfileSetupStates.cv_suggested_facts)
+    await state.update_data({
+        CV_SUGGESTED_FACTS: suggestions, CV_SUGGESTED_TOKEN: token,
+        CV_SUGGESTED_EDIT_INDEX: None, CV_SUGGESTED_SAVED_PROFILE: saved_profile,
+    })
+    await _remove_inline_keyboard(message)
+    prompt_message = await message.answer(
+        "Из резюме удалось выделить факты практического опыта. Добавить их в раздел 🧾 Практический опыт?\n\n"
+        + _format_experience_fact_list(facts),
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
+    )
+    await state.update_data({ACTIVE_PROFILE_PROMPT_MESSAGE_ID: prompt_message.message_id})
+
+
+async def _finish_cv_suggestions(message: Message, state: FSMContext) -> None:
+    data = await state.get_data()
+    saved_profile = data.get(CV_SUGGESTED_SAVED_PROFILE)
+    if isinstance(saved_profile, dict):
+        await show_saved_profile_card(message, state, saved_profile, replace_summary=True)
+    else:
+        await state.clear()
+        await message.answer(PROFILE_SAVED_MESSAGE)
+
+
+async def _handle_cv_suggestions_callback(
+    message: Message, state: FSMContext, api_client: BotApiClient, actor: User, parts: list[str],
+) -> None:
+    if len(parts) not in (4, 5) or await state.get_state() not in {
+        ProfileSetupStates.cv_suggested_facts.state, ProfileSetupStates.cv_suggested_fact_edit.state,
+    }:
+        return
+    data = await state.get_data()
+    token, suggestions = data.get(CV_SUGGESTED_TOKEN), data.get(CV_SUGGESTED_FACTS)
+    if not isinstance(token, str) or parts[2] != token or not isinstance(suggestions, list):
+        return
+    action = parts[3]
+    if action == "skip" and len(parts) == 4:
+        await _finish_cv_suggestions(message, state)
+        return
+    if action == "select" and len(parts) == 5 and parts[4].isdecimal() and int(parts[4]) < len(suggestions):
+        index = int(parts[4])
+        await state.set_state(ProfileSetupStates.cv_suggested_fact_edit)
+        await state.update_data({CV_SUGGESTED_EDIT_INDEX: index})
+        await _remove_inline_keyboard(message)
+        detail_message = await message.answer(
+            f"Предложенный факт:\n\n{suggestions[index]}",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="✏️ Изменить", callback_data=_cv_suggestion_callback(token, "edit"))],
+                [InlineKeyboardButton(text="↩️ К списку", callback_data=_cv_suggestion_callback(token, "list"))],
+            ]),
+        )
+        await state.update_data({ACTIVE_PROFILE_PROMPT_MESSAGE_ID: detail_message.message_id})
+        return
+    if action == "list" and len(parts) == 4:
+        saved = data.get(CV_SUGGESTED_SAVED_PROFILE)
+        if isinstance(saved, dict):
+            await _show_cv_suggestions(message, state, saved, [item for item in suggestions if isinstance(item, str)])
+        return
+    if action == "edit" and len(parts) == 4:
+        await message.answer("Отправь точный текст факта, который нужно сохранить.")
+        return
+    if action != "confirm" or len(parts) != 4:
+        return
+    try:
+        user_id = await api_client.create_or_get_user(actor)
+        for text in suggestions:
+            if isinstance(text, str):
+                try:
+                    await api_client.create_profile_experience_fact(user_id, text)
+                except httpx.HTTPStatusError as error:
+                    detail = error.response.json().get("detail")
+                    if not isinstance(detail, dict) or detail.get("code") != "DUPLICATE_EXPERIENCE_FACT":
+                        raise
+    except httpx.HTTPError:
+        await message.answer("Профиль уже сохранён, но не удалось добавить все факты. Попробуй ещё раз.")
+        return
+    await _finish_cv_suggestions(message, state)
+
+
+async def handle_cv_suggested_fact_text(message: Message, state: FSMContext) -> None:
+    if await state.get_state() != ProfileSetupStates.cv_suggested_fact_edit.state:
+        return
+    data = await state.get_data()
+    index, suggestions = data.get(CV_SUGGESTED_EDIT_INDEX), data.get(CV_SUGGESTED_FACTS)
+    text = " ".join((message.text or "").split())
+    if type(index) is not int or not isinstance(suggestions, list) or not text or len(text) > 500:
+        await message.answer("Укажи факт от 1 до 500 символов.")
+        return
+    updated = list(suggestions)
+    updated[index] = text
+    saved = data.get(CV_SUGGESTED_SAVED_PROFILE)
+    if isinstance(saved, dict):
+        await _show_cv_suggestions(message, state, saved, updated)
+
+
 async def handle_profile_cancel(message: Message, state: FSMContext) -> None:
     state_data = await state.get_data()
+    saved_suggestions_profile = state_data.get(CV_SUGGESTED_SAVED_PROFILE)
+    if isinstance(saved_suggestions_profile, dict):
+        await show_saved_profile_card(message, state, saved_suggestions_profile, replace_summary=True)
+        return
     if state_data.get(PROFILE_DRAFT_SOURCE) == CV_REPLACEMENT_DRAFT_SOURCE:
         snapshot = state_data.get(PERSISTED_PROFILE_SNAPSHOT)
         if isinstance(snapshot, dict):
@@ -720,7 +867,7 @@ def format_profile_summary(data: dict[str, object]) -> str:
         (
             f"🎯 Целевые роли: {_render_list(data.get('target_roles'))}",
             f"🧩 Навыки: {_render_skills(data.get('skills'))}",
-            f"📈 Опыт: {EXPERIENCE_LABELS.get(str(data.get('experience')), 'Не указано')}",
+            f"📈 Уровень опыта: {EXPERIENCE_LABELS.get(str(data.get('experience')), 'Не указано')}",
             f"📍 Локация: {_render_list(data.get('location'))}",
             f"🏠 Формат работы: {WORKPLACE_LABELS.get(str(data.get('workplace_preference')), 'Не указано')}",
             f"💰 Зарплата: {salary}",
@@ -781,7 +928,7 @@ def profile_edit_field_keyboard(*, include_cancel: bool = False) -> InlineKeyboa
     labels = (
         ("target_roles", "🎯 Роли"),
         ("skills", "🧩 Навыки"),
-        ("experience", "📈 Опыт"),
+        ("experience", "📈 Уровень опыта"),
         ("location", "📍 Локации"),
         ("workplace_preference", "🏠 Формат работы"),
         ("salary", "💰 Зарплата"),
@@ -837,6 +984,7 @@ def saved_profile_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [InlineKeyboardButton(text="✏️ Изменить", callback_data=PROFILE_SECTION_EDIT_CALLBACK)],
+            [InlineKeyboardButton(text="🧾 Практический опыт", callback_data=PROFILE_SECTION_EXPERIENCE_CALLBACK)],
             [
                 InlineKeyboardButton(
                     text="📄 Загрузить новое CV",
@@ -845,6 +993,227 @@ def saved_profile_keyboard() -> InlineKeyboardMarkup:
             ],
         ]
     )
+
+
+async def handle_profile_experience_section(
+    callback: CallbackQuery, state: FSMContext, api_client: BotApiClient,
+) -> None:
+    await callback.answer()
+    if callback.message is None or callback.from_user is None:
+        return
+    message = cast(Message, callback.message)
+    if (await state.get_data()).get(PROFILE_SECTION_MESSAGE_ID) != message.message_id:
+        return
+    try:
+        user_id = await api_client.create_or_get_user(callback.from_user)
+        facts = await api_client.list_profile_experience_facts(user_id)
+    except httpx.HTTPError:
+        await message.answer("Не удалось загрузить практический опыт. Попробуй ещё раз.")
+        return
+    await _show_experience_facts(message, state, facts)
+
+
+def _experience_callback(token: str, action: str, value: int | None = None) -> str:
+    return f"profile:experience_facts:{token}:{action}" + (f":{value}" if value is not None else "")
+
+
+def _experience_facts_keyboard(token: str, facts: list[dict[str, object]]) -> InlineKeyboardMarkup:
+    rows: list[list[InlineKeyboardButton]] = []
+    for index, fact in enumerate(facts):
+        text = str(fact.get("text", ""))
+        rows.append([InlineKeyboardButton(
+            text=f"✏️ {index + 1}. {text[:42]}", callback_data=_experience_callback(token, "select", index)
+        )])
+    rows.extend([
+        [InlineKeyboardButton(text="➕ Добавить", callback_data=_experience_callback(token, "add"))],
+        [InlineKeyboardButton(text="↩️ К профилю", callback_data=_experience_callback(token, "back"))],
+    ])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+async def _show_experience_facts(message: Message, state: FSMContext, facts: list[dict[str, object]]) -> None:
+    token = secrets.token_hex(4)
+    rendered = _format_experience_fact_list(facts)
+    await state.set_state(None)
+    await state.update_data({
+        PROFILE_EXPERIENCE_TOKEN: token,
+        PROFILE_EXPERIENCE_FACTS: facts,
+        PROFILE_EXPERIENCE_FACT_ID: None,
+        PROFILE_EXPERIENCE_MODE: None,
+        PROFILE_EXPERIENCE_DRAFT: None,
+        ACTIVE_PROFILE_PROMPT_MESSAGE_ID: message.message_id,
+    })
+    try:
+        await message.edit_text(
+            rendered,
+            reply_markup=_experience_facts_keyboard(token, facts),
+        )
+    except TelegramAPIError:
+        logger.warning("Could not render profile experience facts", exc_info=True)
+
+
+def _format_experience_fact_list(facts: list[dict[str, object]]) -> str:
+    header = "🧾 Практический опыт"
+    if not facts:
+        return f"{header}\n\nПока нет подтверждённых фактов."
+    rendered = f"{header}\n\n"
+    for index, fact in enumerate(facts):
+        separator = "" if index == 0 else "\n"
+        prefix = f"{index + 1}. "
+        remaining = EXPERIENCE_FACT_LIST_MAX_UTF16_UNITS - _utf16_units(rendered + separator + prefix)
+        preview = _truncate_utf16(str(fact.get("text", "")), min(EXPERIENCE_FACT_PREVIEW_MAX_UTF16_UNITS, remaining))
+        rendered += f"{separator}{prefix}{preview}"
+    return rendered
+
+
+def _truncate_utf16(value: str, limit: int) -> str:
+    if limit <= 0:
+        return ""
+    if _utf16_units(value) <= limit:
+        return value
+    ellipsis = "…"
+    body_units = max(0, limit - _utf16_units(ellipsis))
+    return value.encode("utf-16-le")[:body_units * 2].decode("utf-16-le", errors="ignore") + ellipsis
+
+
+def _utf16_units(value: str) -> int:
+    return len(value.encode("utf-16-le")) // 2
+
+
+async def _handle_experience_facts_callback(
+    message: Message, state: FSMContext, api_client: BotApiClient, actor: User, parts: list[str],
+) -> None:
+    if len(parts) not in (4, 5):
+        return
+    data = await state.get_data()
+    token, facts = data.get(PROFILE_EXPERIENCE_TOKEN), data.get(PROFILE_EXPERIENCE_FACTS)
+    if not isinstance(token, str) or parts[2] != token or not isinstance(facts, list):
+        return
+    action = parts[3]
+    if action == "back" and len(parts) == 4:
+        snapshot = data.get(PERSISTED_PROFILE_SNAPSHOT)
+        if isinstance(snapshot, dict):
+            await show_saved_profile_card(message, state, snapshot, replace_summary=True)
+        return
+    if action == "add" and len(parts) == 4:
+        await state.set_state(ProfileSetupStates.experience_fact_input)
+        await state.update_data({PROFILE_EXPERIENCE_MODE: "create", PROFILE_EXPERIENCE_FACT_ID: None})
+        await message.edit_text(
+            "Напиши один конкретный факт практического опыта. Текст сохранится без AI-переписывания.",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+                InlineKeyboardButton(text="Отмена", callback_data=_experience_callback(token, "cancel"))
+            ]]),
+        )
+        return
+    if action == "select" and len(parts) == 5 and parts[4].isdecimal():
+        index = int(parts[4])
+        if index >= len(facts) or not isinstance(facts[index], dict) or type(facts[index].get("id")) is not int:
+            return
+        fact = facts[index]
+        await state.update_data({PROFILE_EXPERIENCE_FACT_ID: fact["id"]})
+        await message.edit_text(
+            f"🧾 Практический опыт\n\n{fact.get('text', '')}",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="✏️ Изменить", callback_data=_experience_callback(token, "edit"))],
+                [InlineKeyboardButton(text="🗑 Удалить", callback_data=_experience_callback(token, "delete"))],
+                [InlineKeyboardButton(text="↩️ К списку", callback_data=_experience_callback(token, "list"))],
+            ]),
+        )
+        return
+    if action == "list" and len(parts) == 4:
+        await _show_experience_facts(message, state, facts)
+        return
+    if action == "cancel" and len(parts) == 4:
+        await _show_experience_facts(message, state, facts)
+        return
+    if action == "confirm" and len(parts) == 4 and data.get(PROFILE_EXPERIENCE_MODE) == "create":
+        try:
+            user_id = await api_client.create_or_get_user(actor)
+            await api_client.create_profile_experience_fact(user_id, str(data.get(PROFILE_EXPERIENCE_DRAFT, "")))
+            updated = await api_client.list_profile_experience_facts(user_id)
+        except httpx.HTTPError:
+            await message.answer("Не удалось сохранить факт практического опыта. Попробуй ещё раз.")
+            return
+        await _show_experience_facts(message, state, updated)
+        return
+    fact_id = data.get(PROFILE_EXPERIENCE_FACT_ID)
+    if type(fact_id) is not int:
+        return
+    selected = next((fact for fact in facts if isinstance(fact, dict) and fact.get("id") == fact_id), None)
+    if selected is None:
+        return
+    if action == "edit" and len(parts) == 4:
+        await state.set_state(ProfileSetupStates.experience_fact_input)
+        await state.update_data({PROFILE_EXPERIENCE_MODE: "edit"})
+        await message.edit_text(
+            f"Текущий факт:\n{selected.get('text', '')}\n\nОтправь новый текст.",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+                InlineKeyboardButton(text="Отмена", callback_data=_experience_callback(token, "cancel"))
+            ]]),
+        )
+        return
+    if action == "delete" and len(parts) == 4:
+        await message.edit_text(
+            f"Удалить факт?\n\n{selected.get('text', '')}",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="🗑 Удалить", callback_data=_experience_callback(token, "delete_confirm"))],
+                [InlineKeyboardButton(text="Отмена", callback_data=_experience_callback(token, "cancel"))],
+            ]),
+        )
+        return
+    if action not in {"confirm", "delete_confirm"} or len(parts) != 4:
+        return
+    try:
+        user_id = await api_client.create_or_get_user(actor)
+        if action == "delete_confirm":
+            await api_client.delete_profile_experience_fact(user_id, fact_id)
+        elif data.get(PROFILE_EXPERIENCE_MODE) == "create":
+            await api_client.create_profile_experience_fact(user_id, str(data.get(PROFILE_EXPERIENCE_DRAFT, "")))
+        else:
+            await api_client.update_profile_experience_fact(user_id, fact_id, str(data.get(PROFILE_EXPERIENCE_DRAFT, "")))
+        updated = await api_client.list_profile_experience_facts(user_id)
+    except httpx.HTTPError:
+        await message.answer("Не удалось сохранить факт практического опыта. Попробуй ещё раз.")
+        return
+    await _show_experience_facts(message, state, updated)
+
+
+async def handle_profile_experience_text(message: Message, state: FSMContext) -> None:
+    if await state.get_state() != ProfileSetupStates.experience_fact_input.state:
+        return
+    text = " ".join((message.text or "").split())
+    if not text or len(text) > 500 or "\x00" in text or any(ord(char) < 32 for char in text):
+        await message.answer("Укажи один факт от 1 до 500 символов без служебных символов.")
+        return
+    data = await state.get_data()
+    token = data.get(PROFILE_EXPERIENCE_TOKEN)
+    if not isinstance(token, str):
+        return
+    previous_prompt_id = data.get(ACTIVE_PROFILE_PROMPT_MESSAGE_ID)
+    await state.set_state(ProfileSetupStates.experience_fact_confirm)
+    await state.update_data({PROFILE_EXPERIENCE_DRAFT: text})
+    preview = await message.answer(
+        f"Сохранить этот факт?\n\n{text}",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="✅ Сохранить", callback_data=_experience_callback(token, "confirm"))],
+            [InlineKeyboardButton(text="Отмена", callback_data=_experience_callback(token, "cancel"))],
+        ]),
+    )
+    if (
+        isinstance(previous_prompt_id, int)
+        and previous_prompt_id != preview.message_id
+        and message.bot is not None
+    ):
+        try:
+            await message.bot.edit_message_reply_markup(
+                chat_id=message.chat.id, message_id=previous_prompt_id, reply_markup=None
+            )
+        except TelegramAPIError:
+            logger.warning("Could not remove profile experience input keyboard", exc_info=True)
+    await state.update_data({
+        ACTIVE_PROFILE_PROMPT_MESSAGE_ID: preview.message_id,
+        PROFILE_SECTION_MESSAGE_ID: preview.message_id,
+    })
 
 
 async def show_saved_profile_card(
