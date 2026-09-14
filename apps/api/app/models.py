@@ -123,6 +123,32 @@ class ProfileExperienceFact(Base):
     )
 
 
+class WorkExperience(Base):
+    __tablename__ = "work_experiences"
+    __table_args__ = (
+        CheckConstraint("company IS NOT NULL OR position IS NOT NULL", name="ck_work_identity"),
+        CheckConstraint("engagement_kind IN ('employment','internship','freelance','unknown')", name="ck_work_kind"),
+        CheckConstraint("start_year IS NULL OR start_year BETWEEN 1900 AND 9999", name="ck_work_start_year"),
+        CheckConstraint("end_year IS NULL OR end_year BETWEEN 1900 AND 9999", name="ck_work_end_year"),
+        CheckConstraint("start_month IS NULL OR (start_year IS NOT NULL AND start_month BETWEEN 1 AND 12)", name="ck_work_start_month"),
+        CheckConstraint("end_month IS NULL OR (end_year IS NOT NULL AND end_month BETWEEN 1 AND 12)", name="ck_work_end_month"),
+        CheckConstraint("end_year IS NULL OR is_current IS FALSE", name="ck_work_current"),
+        CheckConstraint("start_year IS NULL OR end_year IS NULL OR start_year < end_year OR (start_year = end_year AND coalesce(start_month,1) <= coalesce(end_month,12))", name="ck_work_order"),
+    )
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_profile_id: Mapped[int] = mapped_column(ForeignKey("user_profiles.id", ondelete="CASCADE"), index=True)
+    company: Mapped[str | None] = mapped_column(String(200))
+    position: Mapped[str | None] = mapped_column(String(200))
+    engagement_kind: Mapped[str] = mapped_column(String(16), default="unknown", server_default="unknown")
+    start_year: Mapped[int | None]
+    start_month: Mapped[int | None]
+    end_year: Mapped[int | None]
+    end_month: Mapped[int | None]
+    is_current: Mapped[bool | None]
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
 class ApplicationStatus(str, Enum):
     SAVED = "saved"
     APPLIED = "applied"

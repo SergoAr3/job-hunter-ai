@@ -86,6 +86,8 @@ from app.services.vacancy_enrichment import VacancyEnrichmentService
 from app.services.job_ai_enrichment import JobAIEnrichmentService
 
 app = FastAPI(title="Job Hunter AI API")
+from app.work_experience_routes import router as work_experience_router
+app.include_router(work_experience_router)
 cover_letter_service = CoverLetterGenerationService()
 
 

@@ -12,7 +12,7 @@ VACANCY_AI_MAX_OUTPUT_TOKENS = int(os.getenv("VACANCY_AI_MAX_OUTPUT_TOKENS", "15
 # CV drafts can include substantially more source text and a larger structured
 # response than vacancy enrichment.  Keep their latency budget isolated so a
 # CV-specific adjustment never changes the vacancy flow.
-CV_AI_MAX_OUTPUT_TOKENS = int(os.getenv("CV_AI_MAX_OUTPUT_TOKENS", "1536"))
+CV_AI_MAX_OUTPUT_TOKENS = int(os.getenv("CV_AI_MAX_OUTPUT_TOKENS", "4096"))
 CV_AI_TIMEOUT_SECONDS = float(os.getenv("CV_AI_TIMEOUT_SECONDS", "30"))
 COVER_LETTER_MODEL = os.getenv("COVER_LETTER_MODEL", OPENAI_MODEL)
 COVER_LETTER_TIMEOUT_SECONDS = float(os.getenv("COVER_LETTER_TIMEOUT_SECONDS", "20"))

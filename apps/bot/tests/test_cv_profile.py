@@ -82,6 +82,10 @@ class FakeBot:
         self.actions: list[tuple[int, object]] = []
         self.removed_keyboards: list[tuple[int, int]] = []
         self.deleted_messages: list[tuple[int, int]] = []
+        self.edited_messages: list[tuple[int, str]] = []
+
+    async def edit_message_text(self, text, *, chat_id, message_id, reply_markup=None, parse_mode=None):
+        self.edited_messages.append((message_id, text))
 
     async def send_chat_action(self, *, chat_id: int, action: object) -> None:
         self.actions.append((chat_id, action))
@@ -124,7 +128,7 @@ class FakeMessage:
         self.deleted = 0
         self.delete_fails = False
 
-    async def answer(self, text: str, reply_markup: object | None = None) -> SimpleNamespace:
+    async def answer(self, text: str, reply_markup: object | None = None, parse_mode=None) -> SimpleNamespace:
         response_id = 100 + len(self.answers)
         self.answers.append((text, reply_markup, response_id))
         return SimpleNamespace(message_id=response_id)
@@ -275,10 +279,11 @@ def test_cv_suggestions_are_not_saved_until_confirmed() -> None:
         summary = FakeMessage(message_id=summary_id, bot=message.bot)
         await handle_profile_callback(FakeCallback("profile:save", summary), state, api)
         assert api.fact_calls == []
-        token = (await state.get_data())["cv_suggested_experience_token"]
-        suggestion_id = (await state.get_data())[ACTIVE_PROFILE_PROMPT_MESSAGE_ID]
-        suggestion = FakeMessage(message_id=suggestion_id, bot=message.bot)
-        await handle_profile_callback(FakeCallback(f"profile:cv_suggestions:{token}:confirm", suggestion), state, api)
+        from app.work_history import entry_callback
+        for action in ("category:fact", "select:0", "save"):
+            data = await state.get_data()
+            suggestion = FakeMessage(message_id=data[ACTIVE_PROFILE_PROMPT_MESSAGE_ID], bot=message.bot)
+            await entry_callback(FakeCallback(f"history:{data['history_token']}:{action}", suggestion), state, api)
         assert api.fact_calls == ["Разрабатывал REST API на FastAPI"]
         assert (await state.get_data())[PERSISTED_PROFILE_SNAPSHOT]["skills"] == ["Python", "FastAPI"]
         await storage.close()
@@ -312,7 +317,7 @@ def test_cancel_after_replacement_profile_save_keeps_new_canonical_profile() -> 
 
         assert await state.get_state() is None
         assert (await state.get_data())[PERSISTED_PROFILE_SNAPSHOT]["skills"] == ["New skill"]
-        assert "🧩 Навыки: New skill" in suggestion.answers[-1][0]
+        assert "🧩 Навыки: New skill" in summary.bot.edited_messages[-1][1]
         await storage.close()
 
     asyncio.run(scenario())

@@ -190,7 +190,11 @@ def normalize_experience_fact_text(value: str) -> str:
     return " ".join(value.split())
 
 
+from app.work_experience_schema import WorkExperienceIn
+
+
 class CVProfileDraftOut(UserProfilePutIn):
+    suggested_work_experience: list[WorkExperienceIn] = Field(default_factory=list, max_length=5)
     suggested_experience_facts: list[str] = Field(default_factory=list, max_length=8)
 
     @field_validator("suggested_experience_facts", mode="before")
