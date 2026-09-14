@@ -36,6 +36,9 @@ def _is_aware_iso_datetime(value: object) -> bool:
 
 
 class BotApiClient(Protocol):
+    async def list_work_experiences(self, user_id: int) -> list[dict[str, object]]: ...
+    async def save_work_experience(self, user_id: int, payload: dict, entry_id: int | None = None) -> dict: ...
+    async def delete_work_experience(self, user_id: int, entry_id: int) -> None: ...
     async def generate_cover_letter(self, user_id: int, application_id: int, language: str) -> dict[str, object]: ...
 
     async def normalize_cover_letter_language(self, text: str) -> str: ...
@@ -90,6 +93,24 @@ class BotApiClient(Protocol):
 
 
 class JobHunterApiClient:
+    async def list_work_experiences(self, user_id: int) -> list[dict[str, object]]:
+        response = await self._client.get(f"/users/{user_id}/profile/work-experiences")
+        response.raise_for_status()
+        items = _json_object(response).get("items")
+        if not isinstance(items, list) or any(not isinstance(item, dict) or type(item.get("id")) is not int for item in items):
+            raise httpx.DecodingError("Invalid work history response", request=response.request)
+        return items
+
+    async def save_work_experience(self, user_id: int, payload: dict, entry_id: int | None = None) -> dict:
+        path = f"/users/{user_id}/profile/work-experiences"
+        response = await self._client.post(path, json=payload) if entry_id is None else await self._client.put(f"{path}/{entry_id}", json=payload)
+        response.raise_for_status()
+        return _json_object(response)
+
+    async def delete_work_experience(self, user_id: int, entry_id: int) -> None:
+        response = await self._client.delete(f"/users/{user_id}/profile/work-experiences/{entry_id}")
+        response.raise_for_status()
+
     @staticmethod
     def _experience_fact(payload: object, response: httpx.Response) -> dict[str, object]:
         if not isinstance(payload, dict) or type(payload.get("id")) is not int or not isinstance(payload.get("text"), str):

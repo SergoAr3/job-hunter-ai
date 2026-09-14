@@ -80,6 +80,18 @@ async def cancel(message: Message, state: FSMContext) -> None:
 register_main_menu_handlers(dp, lambda: api_client)
 
 
+@dp.callback_query(F.data.startswith("history:") | (F.data == "profile_section:work_history"))
+async def work_history_callback(callback: CallbackQuery, state: FSMContext):
+    from app.work_history import entry_callback
+    await entry_callback(callback, state, api_client)
+
+
+@dp.message(ProfileSetupStates.work_history)
+async def work_history_text(message: Message, state: FSMContext):
+    from app.work_history import receive_text
+    await receive_text(message, state, api_client)
+
+
 @dp.message(ApplicationsStates.waiting_for_letter_language)
 async def receive_letter_language(message: Message, state: FSMContext) -> None:
     await handle_letter_language_text(message, state, api_client)

@@ -1001,8 +1001,10 @@ def test_persisted_save_sends_new_authoritative_card_and_deactivates_old_context
         text, keyboard = message.answers[0]
         assert "🧩 Навыки: Python, FastAPI, SQL" in text
         assert keyboard.inline_keyboard[0][0].callback_data == "profile_section:edit"
-        assert keyboard.inline_keyboard[1][0].callback_data == PROFILE_SECTION_EXPERIENCE_CALLBACK
-        assert keyboard.inline_keyboard[2][0].callback_data == PROFILE_SECTION_REPLACE_CV_CALLBACK
+        assert keyboard.inline_keyboard[1][0].callback_data == "profile_section:work_history"
+        assert keyboard.inline_keyboard[1][0].text == "💼 Места работы"
+        assert keyboard.inline_keyboard[2][0].callback_data == PROFILE_SECTION_EXPERIENCE_CALLBACK
+        assert keyboard.inline_keyboard[3][0].callback_data == PROFILE_SECTION_REPLACE_CV_CALLBACK
 
         old_card = FakeMessage()
         old_card.message_id = 10

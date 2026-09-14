@@ -97,6 +97,7 @@ PROFILE_CLEARABLE_FIELDS = {"skills", "location", "salary", "languages"}
 
 
 class ProfileSetupStates(StatesGroup):
+    work_history = State()
     cv_replace_warning = State()
     cv_waiting_document = State()
     cv_processing = State()
@@ -424,12 +425,13 @@ async def save_profile(
         await state.update_data(active_profile_prompt_message_id=retry_message.message_id)
         return False
     suggestions = state_data.get(CV_SUGGESTED_FACTS)
-    if isinstance(suggestions, list) and suggestions:
+    if suggestions or state_data.get("cv_suggested_work_experience"):
         await state.update_data({
             PERSISTED_PROFILE_SNAPSHOT: profile_payload(saved_profile),
             PROFILE_DRAFT_SOURCE: "persisted",
         })
-        await _show_cv_suggestions(message, state, saved_profile, [item for item in suggestions if isinstance(item, str)])
+        from app.work_history import additions
+        await additions(message, state, saved_profile)
     elif source in PERSISTED_BACKED_DRAFT_SOURCES:
         await show_saved_profile_card(message, state, saved_profile, replace_summary=True)
     else:
@@ -552,6 +554,12 @@ async def handle_cv_suggested_fact_text(message: Message, state: FSMContext) -> 
 
 async def handle_profile_cancel(message: Message, state: FSMContext) -> None:
     state_data = await state.get_data()
+    if await state.get_state() == ProfileSetupStates.work_history.state:
+        snapshot = state_data.get(PERSISTED_PROFILE_SNAPSHOT)
+        if isinstance(snapshot, dict):
+            from app.work_history import return_to_profile
+            await return_to_profile(message, state)
+            return
     saved_suggestions_profile = state_data.get(CV_SUGGESTED_SAVED_PROFILE)
     if isinstance(saved_suggestions_profile, dict):
         await show_saved_profile_card(message, state, saved_suggestions_profile, replace_summary=True)
@@ -984,6 +992,7 @@ def saved_profile_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [InlineKeyboardButton(text="✏️ Изменить", callback_data=PROFILE_SECTION_EDIT_CALLBACK)],
+            [InlineKeyboardButton(text="💼 Места работы", callback_data="profile_section:work_history")],
             [InlineKeyboardButton(text="🧾 Практический опыт", callback_data=PROFILE_SECTION_EXPERIENCE_CALLBACK)],
             [
                 InlineKeyboardButton(

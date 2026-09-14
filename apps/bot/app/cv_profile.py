@@ -130,6 +130,7 @@ async def handle_cv_document(
         **profile_payload(draft), **replacement_context,
         PROFILE_DRAFT_SOURCE: replacement_context.get(PROFILE_DRAFT_SOURCE, "cv"),
         CV_SUGGESTED_FACTS: suggestions if isinstance(suggestions, list) else [],
+        "cv_suggested_work_experience": draft.get("suggested_work_experience", []),
     })
     await show_summary(message, state)
 

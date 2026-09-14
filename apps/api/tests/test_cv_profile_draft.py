@@ -804,11 +804,11 @@ def test_cv_ai_uses_its_own_default_timeout(monkeypatch) -> None:
     assert captured["max_retries"] == 0
 
 
-def test_cv_ai_output_budget_defaults_to_1536_tokens() -> None:
+def test_cv_ai_output_budget_defaults_to_4096_tokens() -> None:
     result = _load_cv_output_budget()
 
     assert result.returncode == 0
-    assert result.stdout.strip() == "1536"
+    assert result.stdout.strip() == "4096"
 
 
 def test_cv_ai_output_budget_reads_explicit_environment_override() -> None:
