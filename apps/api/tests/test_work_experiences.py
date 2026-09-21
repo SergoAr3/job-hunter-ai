@@ -8,7 +8,7 @@ from sqlalchemy import select
 from app.models import UserProfile, WorkExperience
 from app.work_experience_schema import WorkExperienceIn
 from app.services.work_experiences import duration_months
-from app.services.cover_letter import build_context, CoverLetterGenerationService, CoverLetterDraft
+from app.services.cover_letter import build_context, CoverLetterGenerationService
 from app.services.job_matching import calculate_match
 from app.services.cv_profile_draft import CVProfileDraftAIService, CVProfileDraftError
 from conftest import client, TestSessionLocal
@@ -92,17 +92,22 @@ def test_context_only_persisted_stable_ids_and_matching_unchanged():
         after = build_context(session, user, app_id, "ru")
         app = session.get(Application, app_id)
         assert match_before == calculate_match(session.scalar(select(UserProfile).where(UserProfile.user_id == user)), session.get(Job, app.job_id), app).model_dump()
-    assert not any(f.kind == "work_history" for f in before.candidate_facts)
-    fact = next(f for f in after.candidate_facts if f.kind == "work_history")
-    assert fact.id == f"work_experience:{created['id']}" and "Python Intern" in fact.value
+    assert not any(f.kind == "work_history" for f in before.candidate_evidence)
+    fact = next(f for f in after.candidate_evidence if f.kind == "work_history")
+    assert fact.id == f"work_experience:{created['id']}" and fact.position == "Python Intern"
     class Responses:
         def parse(self, **kwargs):
-            assert "Never attribute an independent experience_evidence" in kwargs["input"][0]["content"]
-            return SimpleNamespace(output_parsed=CoverLetterDraft(letter="Test", used_profile_fact_ids=[fact.id]))
+            prompt = kwargs["input"][0]["content"]
+            assert "Do not write or rewrite the letter" in prompt
+            return SimpleNamespace(output_parsed=kwargs["text_format"].model_validate({
+                "vacancy_anchor_ids": ["vacancy:title"],
+                "selected_evidence": [{"selection_kind": "candidate_fact", "fact_id": fact.id}],
+                "composition_style": "direct", "closing": "none",
+            }))
     assert CoverLetterGenerationService(client=SimpleNamespace(responses=Responses())).generate(after).used_profile_fact_ids == [fact.id]
     client.delete(url + f"/{created['id']}")
     with TestSessionLocal() as session:
-        assert not any(f.kind == "work_history" for f in build_context(session, user, app_id, "ru").candidate_facts)
+        assert not any(f.kind == "work_history" for f in build_context(session, user, app_id, "ru").candidate_evidence)
 
 
 def test_cv_transport_preserves_precision_and_injection_boundary():

@@ -71,7 +71,6 @@ _letter_generation_tasks: set[asyncio.Task[None]] = set()
 
 
 class ApplicationsStates(StatesGroup):
-    waiting_for_letter_language = State()
     waiting_for_search = State()
     waiting_for_note = State()
     waiting_for_next_action = State()
@@ -487,8 +486,8 @@ async def _show_letter_languages(message: Message, state: FSMContext) -> None:
     await state.set_state(None)
     await state.update_data({APPLICATIONS_VIEW: "letter_language", "letter_token": token, "letter_language": None})
     rows = [_letter_button(label, token, code) for label, code in (
-        ("🇬🇧 English", "en"), ("🇷🇺 Русский", "ru"), ("🇩🇪 Deutsch", "de"),
-        ("🇫🇷 Français", "fr"), ("🇪🇸 Español", "es"), ("🌐 Другой язык", "custom"),
+        ("🇷🇺 Русский", "ru"), ("🇬🇧 English", "en"), ("🇩🇪 Deutsch", "de"),
+        ("🇫🇷 Français", "fr"), ("🇪🇸 Español", "es"),
         ("⬅️ К вакансии", "back"),
     )]
     await _replace_or_send(message, state, "На каком языке написать сопроводительное письмо?",
@@ -501,19 +500,12 @@ async def _handle_letter_action(callback: CallbackQuery, message: Message, state
     if len(parts) != 4 or parts[2] != context.get("letter_token"):
         return
     view, action = context.get(APPLICATIONS_VIEW), parts[3]
-    if view not in ("letter_language", "letter_language_input", "letter", "letter_error", "letter_loading"):
+    if view not in ("letter_language", "letter", "letter_error", "letter_loading"):
         return
     if action == "back":
         await handle_letter_cancel(message, state, api_client, actor=callback.from_user)
-    elif action == "change" and view in ("letter", "letter_error", "letter_loading", "letter_language_input"):
+    elif action == "change" and view in ("letter", "letter_error", "letter_loading"):
         await _show_letter_languages(message, state)
-    elif action == "custom" and view == "letter_language":
-        token = secrets.token_hex(6)
-        await state.set_state(ApplicationsStates.waiting_for_letter_language)
-        await state.update_data({APPLICATIONS_VIEW: "letter_language_input", "letter_token": token})
-        await _replace_or_send(message, state,
-            "Введите язык, на котором подготовить письмо.\n\nНапример: Italiano, Português, Հայերեն, Polski.\nМожно указать английское название или двухбуквенный код языка.",
-            InlineKeyboardMarkup(inline_keyboard=[_letter_button("🌐 Сменить язык", token, "change"), _letter_button("⬅️ К вакансии", token, "back")]), canonical_target=True)
     elif action in ("en", "ru", "de", "fr", "es") and view == "letter_language":
         await _generate_letter(message, state, api_client, callback.from_user, action)
     elif action == "again" and view in ("letter", "letter_error") and isinstance(context.get("letter_language"), str):
@@ -531,29 +523,6 @@ async def handle_letter_cancel(message: Message, state: FSMContext, api_client: 
                                          context[APPLICATIONS_APPLICATION_ID], context.get(APPLICATIONS_OFFSET, 0))
     except httpx.HTTPError:
         await _show_letter_languages(message, state)
-
-
-async def handle_letter_language_text(message: Message, state: FSMContext, api_client: BotApiClient) -> None:
-    context = await state.get_data()
-    if context.get(APPLICATIONS_VIEW) != "letter_language_input" or message.from_user is None:
-        return
-    token = context.get("letter_token")
-    try:
-        if not message.text or len(message.text) > 64:
-            raise ValueError("Invalid language input")
-        language = await api_client.normalize_cover_letter_language(message.text)
-    except (ValueError, httpx.HTTPError):
-        current = await state.get_data()
-        if current.get("letter_token") != token or current.get(APPLICATIONS_VIEW) != "letter_language_input":
-            return
-        await _replace_or_send(message, state,
-            "Не удалось определить язык. Введите название ещё раз, например Italiano, или двухбуквенный код, например it.",
-            InlineKeyboardMarkup(inline_keyboard=[_letter_button("🌐 Сменить язык", token, "change"), _letter_button("⬅️ К вакансии", token, "back")]), canonical_target=True)
-        return
-    current = await state.get_data()
-    if current.get("letter_token") != token or current.get(APPLICATIONS_VIEW) != "letter_language_input":
-        return
-    await _generate_letter(message, state, api_client, message.from_user, language)
 
 
 async def _request_letter(message: Message, state: FSMContext, api_client: BotApiClient,
