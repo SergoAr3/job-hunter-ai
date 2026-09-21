@@ -212,8 +212,11 @@ for code, names in {
     _ALIASES.update({_key(name): code for name in names})
 
 
+SUPPORTED_COVER_LETTER_LANGUAGES = frozenset({"ru", "en", "de", "fr", "es"})
+
+
 def validate_language_code(value: str) -> str:
-    if value not in LANGUAGES:
+    if value not in SUPPORTED_COVER_LETTER_LANGUAGES:
         raise ValueError("Unknown language code")
     return value
 
@@ -233,6 +236,6 @@ class LanguageInput(BaseModel):
 
 def normalize_language(value: str) -> str:
     code = _ALIASES.get(_key(value)) if 0 < len(value) <= 64 else None
-    if code is None:
+    if code not in SUPPORTED_COVER_LETTER_LANGUAGES:
         raise ValueError("Unknown language")
     return code

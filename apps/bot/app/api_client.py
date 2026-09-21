@@ -41,7 +41,6 @@ class BotApiClient(Protocol):
     async def delete_work_experience(self, user_id: int, entry_id: int) -> None: ...
     async def generate_cover_letter(self, user_id: int, application_id: int, language: str) -> dict[str, object]: ...
 
-    async def normalize_cover_letter_language(self, text: str) -> str: ...
     async def create_or_get_user(self, telegram_user: User) -> int: ...
 
     async def save_application(self, user_id: int, source_url: str) -> dict[str, object]: ...
@@ -116,14 +115,6 @@ class JobHunterApiClient:
         if not isinstance(payload, dict) or type(payload.get("id")) is not int or not isinstance(payload.get("text"), str):
             raise httpx.DecodingError("API response has invalid experience fact shape", request=response.request)
         return payload
-
-    async def normalize_cover_letter_language(self, text: str) -> str:
-        response = await self._client.post("/cover-letter/language", json={"text": text})
-        response.raise_for_status()
-        language = _json_object(response).get("language")
-        if not isinstance(language, str) or len(language) != 2 or not language.isascii() or not language.islower() or not language.isalpha():
-            raise httpx.DecodingError("Invalid language response", request=response.request)
-        return language
 
     async def generate_cover_letter(self, user_id: int, application_id: int, language: str) -> dict[str, object]:
         response = await self._client.post(f"/users/{user_id}/applications/{application_id}/cover-letter", json={"language": language})

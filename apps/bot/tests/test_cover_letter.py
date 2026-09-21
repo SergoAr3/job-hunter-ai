@@ -1,20 +1,18 @@
 import asyncio
 import json
 import os
-from datetime import datetime
 
 import httpx
 import pytest
 from aiogram import Bot
-from aiogram.types import Message as TelegramMessage, CallbackQuery, Update, Chat, User
+from aiogram.types import Message as TelegramMessage, CallbackQuery
 from aiogram.utils.chat_action import ChatActionSender
 
 os.environ.setdefault("TELEGRAM_BOT_TOKEN", "123456:applications-test-token")
 import app.main as main_module
 from app.applications import (
     APPLICATIONS_MESSAGE_ID, APPLICATIONS_APPLICATION_ID, APPLICATIONS_VIEW,
-    APPLICATIONS_DETAIL_VIEW, ApplicationsStates, handle_applications_callback,
-    handle_letter_language_text,
+    APPLICATIONS_DETAIL_VIEW, handle_applications_callback,
 )
 from test_applications import Message, Callback, Api, _state, _dispatcher_state, _applications_callback_update
 from app.api_client import JobHunterApiClient
@@ -35,11 +33,6 @@ class LetterApi(Api):
         super().__init__()
         self.languages = []
         self.fail = None
-
-    async def normalize_cover_letter_language(self, text):
-        if text == "Italiano":
-            return "it"
-        raise httpx.HTTPStatusError("invalid", request=httpx.Request("POST", "https://example.com"), response=httpx.Response(422))
 
     async def generate_cover_letter(self, user_id, app_id, language):
         self.languages.append(language)
@@ -80,7 +73,7 @@ def test_picker_generation_regeneration_change_and_back(language):
         storage, state = _state()
         message, api = Message(), LetterApi()
         await open_picker(state, message, api)
-        assert len(message.reply_markup.inline_keyboard) == 7
+        assert len(message.reply_markup.inline_keyboard) == 6
         selected = await click(state, message, api, language)
         await wait_for_view(state, "letter")
         assert api.languages == [language]
@@ -99,30 +92,6 @@ def test_picker_generation_regeneration_change_and_back(language):
         await click(state, message, api, "back")
         assert (await state.get_data())[APPLICATIONS_VIEW] == APPLICATIONS_DETAIL_VIEW
         assert await state.get_state() is None
-        await storage.close()
-    asyncio.run(scenario())
-
-
-def test_custom_invalid_retry_then_valid():
-    async def scenario():
-        storage, state = _state()
-        message, api = Message(), LetterApi()
-        await open_picker(state, message, api)
-        await click(state, message, api, "custom")
-        assert await state.get_state() == ApplicationsStates.waiting_for_letter_language.state
-        for invalid in ("invent a project", None, "x" * 65):
-            message.text = invalid
-            await handle_letter_language_text(message, state, api)
-            assert "Введите название ещё раз" in message.text
-            assert not api.languages
-        message.text = "Italiano"
-        await handle_letter_language_text(message, state, api)
-        await wait_for_view(state, "letter")
-        assert api.languages == ["it"]
-        assert await state.get_state() is None
-        await click(state, message, api, "again")
-        await wait_for_view(state, "letter")
-        assert api.languages == ["it", "it"]
         await storage.close()
     asyncio.run(scenario())
 
@@ -204,35 +173,32 @@ def test_cancel_loading_returns_detail_and_ignores_late_result():
     asyncio.run(scenario())
 
 
-def test_dispatcher_picker_custom_input_generation(monkeypatch):
+def test_dispatcher_picker_has_exactly_five_languages_and_stale_custom_is_inert(monkeypatch):
     async def scenario():
         bot, api = Bot("123456:applications-test-token"), LetterApi()
-        edits, actions = [], []
+        edits = []
         async def edit(message, text, **kwargs):
             edits.append((text, kwargs))
         async def bot_edit(bot, **kwargs):
             edits.append((kwargs["text"], kwargs))
         async def answer(callback, **kwargs):
             return True
-        async def typing(bot, **kwargs):
-            actions.append(kwargs["action"])
         monkeypatch.setattr(main_module, "api_client", api)
         monkeypatch.setattr(TelegramMessage, "edit_text", edit)
         monkeypatch.setattr(Bot, "edit_message_text", bot_edit)
-        monkeypatch.setattr(Bot, "send_chat_action", typing)
         monkeypatch.setattr(CallbackQuery, "answer", answer)
         state = await _dispatcher_state(bot, {APPLICATIONS_MESSAGE_ID: 10, APPLICATIONS_APPLICATION_ID: 7, APPLICATIONS_VIEW: APPLICATIONS_DETAIL_VIEW})
         await main_module.dp.feed_update(bot, _applications_callback_update("applications:letter:7:0", update_id=99, message_id=10))
         assert not api.languages
-        custom = edits[-1][1]["reply_markup"].inline_keyboard[5][0].callback_data
-        await main_module.dp.feed_update(bot, _applications_callback_update(custom, update_id=100, message_id=10))
-        update = Update(update_id=101, message=TelegramMessage(message_id=11, date=datetime.now(), chat=Chat(id=state.key.chat_id, type="private"), from_user=User(id=state.key.user_id, is_bot=False, first_name="Test"), text="Italiano"))
-        await main_module.dp.feed_update(bot, update)
-        await wait_for_view(state, "letter")
-        assert api.languages == ["it"]
-        assert edits[-1][1]["parse_mode"] is None
-        assert edits[-1][1]["message_id"] == 10
-        assert actions == ["typing"]
+        rows = edits[-1][1]["reply_markup"].inline_keyboard
+        labels = [row[0].text for row in rows]
+        assert labels == ["🇷🇺 Русский", "🇬🇧 English", "🇩🇪 Deutsch", "🇫🇷 Français", "🇪🇸 Español", "⬅️ К вакансии"]
+        token = (await state.get_data())["letter_token"]
+        await main_module.dp.feed_update(bot, _applications_callback_update(
+            f"applications:letter_action:{token}:custom", update_id=100, message_id=10
+        ))
+        assert (await state.get_data())[APPLICATIONS_VIEW] == "letter_language"
+        assert not api.languages and len(edits) == 1
         await bot.session.close()
     asyncio.run(scenario())
 
@@ -362,16 +328,12 @@ def test_client_sends_only_language_and_validates_responses():
         api = JobHunterApiClient("https://example.com")
         def transport(request):
             assert request.method == "POST"
-            if request.url.path == "/cover-letter/language":
-                assert json.loads(request.content) == {"text": "Italiano"}
-                return httpx.Response(200, json={"language": "it"})
             assert request.url.path == "/users/1/applications/7/cover-letter"
-            assert json.loads(request.content) == {"language": "it"}
+            assert json.loads(request.content) == {"language": "en"}
             return httpx.Response(200, json={"letter": None})
         await api._client.aclose()
         api._client = httpx.AsyncClient(base_url="https://example.com", transport=httpx.MockTransport(transport))
-        assert await api.normalize_cover_letter_language("Italiano") == "it"
         with pytest.raises(httpx.DecodingError):
-            await api.generate_cover_letter(1, 7, "it")
+            await api.generate_cover_letter(1, 7, "en")
         await api.close()
     asyncio.run(scenario())
