@@ -30,6 +30,42 @@ _SENIORITY_ORDER = {"intern": 0, "junior": 1, "middle": 2, "senior": 3, "lead": 
 _LEVEL_ORDER = {"a1": 1, "a2": 2, "b1": 3, "b2": 4, "c1": 5, "c2": 6, "fluent": 6, "native": 7}
 
 
+def serialize_match_inputs(profile: UserProfile, job: Job) -> dict[str, object]:
+    """Serialize only the factual Profile and Job fields consumed by Matching v2.1."""
+    return {
+        "profile": {
+            "target_roles": list(profile.target_roles),
+            "skills": list(profile.skills),
+            "experience": profile.experience,
+            "languages": [dict(item) for item in profile.languages],
+            "location": list(profile.location),
+            "workplace_preference": profile.workplace_preference,
+            "salary_min": _decimal_text(profile.salary_min),
+            "salary_currency": profile.salary_currency,
+            "salary_period": profile.salary_period,
+        },
+        "job": {
+            "title": job.title,
+            "required_skills": list(job.required_skills),
+            "nice_to_have_skills": list(job.nice_to_have_skills),
+            "seniority": job.seniority,
+            "language_requirements": list(job.language_requirements),
+            "location": job.location,
+            "workplace_type": job.workplace_type,
+            "salary_min": _decimal_text(job.salary_min),
+            "salary_max": _decimal_text(job.salary_max),
+            "salary_currency": job.salary_currency,
+            "salary_period": job.salary_period,
+            "salary_period_inferred": job.salary_period_inferred,
+            "ai_enrichment_status": job.ai_enrichment_status,
+        },
+    }
+
+
+def _decimal_text(value: Decimal | None) -> str | None:
+    return format(value, "f") if value is not None else None
+
+
 def normalize_text(value: str) -> str:
     return " ".join(unicodedata.normalize("NFKC", value).strip().casefold().split())
 

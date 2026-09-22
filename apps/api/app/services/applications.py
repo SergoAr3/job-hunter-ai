@@ -10,13 +10,16 @@ from sqlalchemy.orm import Session
 from app.models import (
     AIEnrichmentStatus,
     Application,
+    ApplicationMatchSnapshot,
     ApplicationStatus,
     ApplicationStatusHistory,
     Job,
     User,
+    UserProfile,
 )
 from app.models import IngestionMethod, ParsingStatus
 from app.schemas import ApplicationSort, FollowUpDueState
+from app.services.application_match_snapshots import prepare_match_snapshot
 from app.services.job_ai_enrichment import (
     AIEnrichmentResult,
     JobAIEnrichmentService,
@@ -569,20 +572,55 @@ def set_application_status(
     session: Session, user_id: int, application_id: int, status: ApplicationStatus
 ) -> tuple[Application, Job] | None:
     try:
-        application = get_application_for_user(session, user_id, application_id)
+        application = session.scalar(
+            _application_for_status_update_statement(user_id, application_id)
+        )
         if application is None:
             return None
         job = session.get(Job, application.job_id)
         if job is None:
             return None
         if application.status != status.value:
+            snapshot_values: dict[str, object] | None = None
+            if status == ApplicationStatus.APPLIED:
+                previous_applied_id = session.scalar(
+                    select(ApplicationStatusHistory.id)
+                    .where(
+                        ApplicationStatusHistory.application_id == application.id,
+                        ApplicationStatusHistory.status == ApplicationStatus.APPLIED.value,
+                    )
+                    .limit(1)
+                )
+                if previous_applied_id is None:
+                    profile = session.scalar(
+                        select(UserProfile).where(UserProfile.user_id == user_id)
+                    )
+                    snapshot_values = prepare_match_snapshot(profile, job, application)
+
             application.status = status.value
-            session.add(ApplicationStatusHistory(
+            history = ApplicationStatusHistory(
                 application_id=application.id, status=status.value
-            ))
+            )
+            session.add(history)
+            if snapshot_values is not None:
+                session.flush()
+                session.add(ApplicationMatchSnapshot(
+                    application_id=application.id,
+                    trigger_status_history_id=history.id,
+                    **snapshot_values,
+                ))
             session.commit()
             session.refresh(application)
         return application, job
     except Exception:
         session.rollback()
         raise
+
+
+def _application_for_status_update_statement(user_id: int, application_id: int):
+    """Serialize all PostgreSQL status mutations for one owned Application row."""
+    return (
+        select(Application)
+        .where(Application.id == application_id, Application.user_id == user_id)
+        .with_for_update()
+    )
