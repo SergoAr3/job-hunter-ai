@@ -11,6 +11,7 @@ from app.models import ApplicationStatus, Job
 from app.schemas import (
     ApplicationCreateIn,
     ApplicationDetailOut,
+    ApplicationLearningSummaryOut,
     ApplicationListItemOut,
     ApplicationOut,
     ApplicationNotePutIn,
@@ -47,6 +48,7 @@ from app.services.applications import (
     set_application_note,
     set_application_next_action,
 )
+from app.services.application_learning import build_application_learning_summary
 from app.services.job_matching import calculate_match
 from app.services.cv_profile_draft import (
     ERROR_AI_PROVIDER,
@@ -320,6 +322,18 @@ def read_applications(
             for application, job in rows[:limit]
         ],
         has_next=len(rows) > limit,
+    )
+
+
+@app.get(
+    "/users/{user_id}/applications/learning-summary",
+    response_model=ApplicationLearningSummaryOut,
+)
+def read_application_learning_summary(
+    user_id: int, session: Session = Depends(get_session),
+) -> ApplicationLearningSummaryOut:
+    return ApplicationLearningSummaryOut.model_validate(
+        build_application_learning_summary(session, user_id)
     )
 
 

@@ -44,6 +44,7 @@ APPLICATIONS_LIST_TOKEN = "applications_list_token"
 APPLICATIONS_FILTER_VIEW = "filter_picker"
 APPLICATIONS_SORT = "applications_sort"
 APPLICATIONS_SORT_VIEW = "sort_picker"
+APPLICATIONS_SUMMARY_VIEW = "learning_summary"
 STATUS_LABELS = {
     "saved": "Сохранена", "applied": "Откликнулся", "interview": "Собеседование",
     "rejected": "Отказ", "offer": "Оффер",
@@ -115,6 +116,9 @@ def applications_list_keyboard(
     )])
     rows.append([InlineKeyboardButton(
         text="🔎 Поиск", callback_data=f"applications:list:{token}:search",
+    )])
+    rows.append([InlineKeyboardButton(
+        text="📊 Статистика", callback_data=f"applications:list:{token}:summary",
     )])
     if q is not None:
         rows.append([InlineKeyboardButton(
@@ -636,10 +640,10 @@ async def _handle_list_callback(
         return
     status = cast(str | None, context.get(APPLICATIONS_FILTER_STATUS))
     q = cast(str | None, context.get(APPLICATIONS_SEARCH_QUERY))
-    if action in ("filter", "sort", "add", "open", "page", "search", "reset_search"):
+    if action in ("filter", "sort", "add", "open", "page", "search", "reset_search", "summary"):
         if view != APPLICATIONS_LIST_VIEW:
             return
-        if action in ("filter", "sort", "add", "search", "reset_search"):
+        if action in ("filter", "sort", "add", "search", "reset_search", "summary"):
             if len(parts) != 4 or (action == "add" and (status is not None or q is not None)):
                 return
             if action == "reset_search" and q is None:
@@ -726,6 +730,9 @@ async def _handle_list_callback(
         logger.warning("Could not resolve user for applications list callback", exc_info=True)
         await _replace_or_send(message, state, APPLICATIONS_LOAD_ERROR_MESSAGE, None)
         return
+    if action == "summary":
+        await _show_application_learning_summary(message, state, api_client, user_id, offset)
+        return
     if action == "open":
         await _show_application_detail(message, state, api_client, user_id, int(parts[4]), offset)
     else:
@@ -734,6 +741,66 @@ async def _handle_list_callback(
             q=None if action == "reset_search" else None,
             commit_search_query=action == "reset_search",
         )
+
+
+def _format_percentage(conversion: object) -> str:
+    if not isinstance(conversion, dict):
+        return "нет данных"
+    numerator, denominator, percentage = (
+        conversion.get("numerator"), conversion.get("denominator"), conversion.get("percentage")
+    )
+    if denominator == 0 or percentage is None:
+        return "нет данных"
+    if isinstance(percentage, float) and percentage.is_integer():
+        percentage_text = str(int(percentage))
+    else:
+        percentage_text = str(percentage).replace(".", ",")
+    return f"{numerator} / {denominator} ({percentage_text}%)"
+
+
+def _application_learning_summary_keyboard(offset: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text="⬅️ К списку", callback_data=f"applications:page:{offset}")
+    ]])
+
+
+def _format_application_learning_summary(summary: dict[str, object]) -> str:
+    incomplete = summary["history_missing_count"] + summary["funnel_incomplete_count"]
+    text = (
+        "📊 Статистика поиска\n\n"
+        f"Сохранено вакансий: {summary['total_applications']}\n"
+        f"Откликов отмечено: {summary['applied_count']}\n"
+        f"До интервью дошло: {summary['interview_count']}\n"
+        f"Офферов отмечено: {summary['offer_count']}\n\n"
+        f"Отклик → интервью: {_format_percentage(summary['applied_to_interview'])}\n"
+        f"Отклик → оффер: {_format_percentage(summary['applied_to_offer'])}"
+    )
+    if incomplete:
+        text += f"\n\n⚠️ Неполная история: {incomplete}"
+    return text + "\n\nСтатистика рассчитана по вашим отметкам."
+
+
+async def _show_application_learning_summary(
+    message: Message, state: FSMContext, api_client: BotApiClient, user_id: int, offset: int,
+) -> None:
+    await state.update_data({APPLICATIONS_VIEW: "learning_summary_loading"})
+    try:
+        summary = await api_client.get_application_learning_summary(user_id)
+    except httpx.HTTPError:
+        logger.warning("Could not load application learning summary", exc_info=True)
+        await state.update_data({APPLICATIONS_VIEW: "learning_summary_error"})
+        await _replace_or_send(
+            message, state, "Не удалось загрузить статистику. Попробуй ещё раз.",
+            _application_learning_summary_keyboard(offset), canonical_target=True,
+        )
+        return
+    if (await state.get_data()).get(APPLICATIONS_MESSAGE_ID) != message.message_id:
+        return
+    await _replace_or_send(
+        message, state, _format_application_learning_summary(summary),
+        _application_learning_summary_keyboard(offset), canonical_target=True,
+    )
+    await state.update_data({APPLICATIONS_VIEW: APPLICATIONS_SUMMARY_VIEW, APPLICATIONS_LIST_TOKEN: None})
 
 
 async def handle_sort_cancel(
