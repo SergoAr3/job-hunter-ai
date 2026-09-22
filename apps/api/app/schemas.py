@@ -25,6 +25,12 @@ class ApplicationSort(str, Enum):
     NEXT_ACTION = "next_action"
 
 
+class FollowUpDueState(str, Enum):
+    OVERDUE = "overdue"
+    TODAY = "today"
+    UPCOMING = "upcoming"
+
+
 class TelegramUserIn(BaseModel):
     telegram_id: int = Field(gt=0)
     username: str | None = Field(default=None, max_length=255)
@@ -382,6 +388,21 @@ class ApplicationListItemOut(BaseModel):
 
 class ApplicationsPageOut(BaseModel):
     items: list[ApplicationListItemOut]
+    has_next: bool
+
+
+class ApplicationFollowUpOut(BaseModel):
+    application_id: int
+    title: str | None
+    company: str | None
+    status: ApplicationStatus
+    next_action: str
+    next_action_due_on: date
+    due_state: FollowUpDueState
+
+
+class ApplicationFollowUpsPageOut(BaseModel):
+    items: list[ApplicationFollowUpOut]
     has_next: bool
 
 

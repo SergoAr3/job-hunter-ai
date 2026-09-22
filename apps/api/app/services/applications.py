@@ -1,6 +1,6 @@
 import logging
 import re
-from datetime import date
+from datetime import date, datetime, timezone
 from urllib.parse import urlsplit, urlunsplit
 
 from sqlalchemy import case, or_, select
@@ -16,7 +16,7 @@ from app.models import (
     User,
 )
 from app.models import IngestionMethod, ParsingStatus
-from app.schemas import ApplicationSort
+from app.schemas import ApplicationSort, FollowUpDueState
 from app.services.job_ai_enrichment import (
     AIEnrichmentResult,
     JobAIEnrichmentService,
@@ -474,6 +474,53 @@ def list_applications_for_user(
             .limit(limit + 1)
         ).tuples().all()
     )
+
+
+def current_utc_date() -> date:
+    return datetime.now(timezone.utc).date()
+
+
+def list_application_follow_ups(
+    session: Session,
+    user_id: int,
+    *,
+    limit: int,
+    offset: int,
+    today_utc: date | None = None,
+) -> list[tuple[Application, Job, FollowUpDueState]]:
+    """Return user-authored next actions grouped by their UTC calendar due state."""
+    today = today_utc or current_utc_date()
+    due_state = case(
+        (Application.next_action_due_on < today, FollowUpDueState.OVERDUE.value),
+        (Application.next_action_due_on == today, FollowUpDueState.TODAY.value),
+        else_=FollowUpDueState.UPCOMING.value,
+    )
+    bucket = case(
+        (Application.next_action_due_on < today, 0),
+        (Application.next_action_due_on == today, 1),
+        else_=2,
+    )
+    rows = session.execute(
+        select(Application, Job, due_state.label("due_state"))
+        .join(Job, Job.id == Application.job_id)
+        .where(
+            Application.user_id == user_id,
+            Application.next_action.is_not(None),
+            Application.next_action_due_on.is_not(None),
+        )
+        .order_by(
+            bucket.asc(),
+            Application.next_action_due_on.asc(),
+            Application.created_at.desc(),
+            Application.id.desc(),
+        )
+        .offset(offset)
+        .limit(limit + 1)
+    ).all()
+    return [
+        (application, job, FollowUpDueState(state))
+        for application, job, state in rows
+    ]
 
 
 def set_application_note(

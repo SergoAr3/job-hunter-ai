@@ -26,6 +26,7 @@ _APPLICATION_LIST_ITEM_FIELDS = {
 _APPLICATION_STATUS_VALUES = {
     "saved", "applied", "recruiter_response", "interview", "offer", "hired", "withdrawn", "rejected",
 }
+_FOLLOW_UP_DUE_STATES = {"overdue", "today", "upcoming"}
 
 
 def _is_aware_iso_datetime(value: object) -> bool:
@@ -56,6 +57,10 @@ class BotApiClient(Protocol):
     ) -> dict[str, object]: ...
 
     async def get_application_learning_summary(self, user_id: int) -> dict[str, object]: ...
+
+    async def list_application_follow_ups(
+        self, user_id: int, *, limit: int, offset: int,
+    ) -> dict[str, object]: ...
 
     async def get_application(self, user_id: int, application_id: int) -> dict[str, object]: ...
 
@@ -214,6 +219,43 @@ class JobHunterApiClient:
             )
         ):
             raise httpx.DecodingError("API response has invalid learning summary shape", request=response.request)
+        return payload
+
+    async def list_application_follow_ups(
+        self, user_id: int, *, limit: int, offset: int,
+    ) -> dict[str, object]:
+        response = await self._client.get(
+            f"/users/{user_id}/applications/follow-ups",
+            params={"limit": limit, "offset": offset},
+        )
+        response.raise_for_status()
+        payload = _json_object(response)
+        items = payload.get("items")
+        if (
+            not isinstance(items, list)
+            or not isinstance(payload.get("has_next"), bool)
+            or not all(
+                isinstance(item, dict)
+                and type(item.get("application_id")) is int
+                and (item.get("title") is None or isinstance(item.get("title"), str))
+                and (item.get("company") is None or isinstance(item.get("company"), str))
+                and item.get("status") in _APPLICATION_STATUS_VALUES
+                and isinstance(item.get("next_action"), str)
+                and 1 <= len(item["next_action"]) <= 500
+                and isinstance(item.get("next_action_due_on"), str)
+                and re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}", item["next_action_due_on"]) is not None
+                and item.get("due_state") in _FOLLOW_UP_DUE_STATES
+                for item in items
+            )
+        ):
+            raise httpx.DecodingError("API response has invalid follow-up queue shape", request=response.request)
+        for item in items:
+            try:
+                date.fromisoformat(str(item["next_action_due_on"]))
+            except ValueError as error:
+                raise httpx.DecodingError(
+                    "API response has invalid follow-up due date", request=response.request
+                ) from error
         return payload
 
     async def get_application(self, user_id: int, application_id: int) -> dict[str, object]:
