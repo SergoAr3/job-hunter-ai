@@ -31,10 +31,15 @@ def test_dispatcher_summary_renders_null_denominator_incomplete_warning_and_back
         api.learning_summary = {
             "total_applications": 3,
             "applied_count": 0,
+            "recruiter_response_count": 0,
             "interview_count": 0,
             "offer_count": 0,
+            "hired_count": 0,
+            "withdrawn_count": 0,
+            "applied_to_recruiter_response": {"numerator": 0, "denominator": 0, "percentage": None},
             "applied_to_interview": {"numerator": 0, "denominator": 0, "percentage": None},
             "applied_to_offer": {"numerator": 0, "denominator": 0, "percentage": None},
+            "applied_to_hired": {"numerator": 0, "denominator": 0, "percentage": None},
             "history_missing_count": 1,
             "funnel_incomplete_count": 2,
             "as_of": "2026-09-21T00:00:00+00:00",
@@ -63,6 +68,8 @@ def test_dispatcher_summary_renders_null_denominator_incomplete_warning_and_back
         assert (await state.get_data())[APPLICATIONS_VIEW] == APPLICATIONS_SUMMARY_VIEW
         assert "Отклик → интервью: нет данных" in edits[-1][0]
         assert "Отклик → оффер: нет данных" in edits[-1][0]
+        assert "Отклик → ответ HR: нет данных" in edits[-1][0]
+        assert "Отклик → выход на работу: нет данных" in edits[-1][0]
         assert "⚠️ Неполная история: 3" in edits[-1][0]
         back = edits[-1][1].inline_keyboard[0][0]
         assert (back.text, back.callback_data) == ("⬅️ К списку", "applications:page:0")
@@ -124,6 +131,33 @@ def test_dispatcher_summary_api_error_keeps_a_back_navigation_control(
         await bot.session.close()
 
     asyncio.run(scenario())
+
+
+def test_learning_summary_formatter_displays_new_explicit_counts_and_conversions() -> None:
+    from app.applications import _format_application_learning_summary
+
+    text = _format_application_learning_summary({
+        "total_applications": 10,
+        "applied_count": 5,
+        "recruiter_response_count": 3,
+        "interview_count": 2,
+        "offer_count": 1,
+        "hired_count": 1,
+        "withdrawn_count": 2,
+        "applied_to_recruiter_response": {"numerator": 3, "denominator": 5, "percentage": 60.0},
+        "applied_to_interview": {"numerator": 2, "denominator": 5, "percentage": 40.0},
+        "applied_to_offer": {"numerator": 1, "denominator": 5, "percentage": 20.0},
+        "applied_to_hired": {"numerator": 1, "denominator": 5, "percentage": 20.0},
+        "history_missing_count": 0,
+        "funnel_incomplete_count": 0,
+        "as_of": "2026-09-21T00:00:00+00:00",
+    })
+
+    assert "Ответов HR: 3" in text
+    assert "Выходов на работу: 1" in text
+    assert "Процессов прекращено мной: 2" in text
+    assert "Отклик → ответ HR: 3 / 5 (60%)" in text
+    assert "Отклик → выход на работу: 1 / 5 (20%)" in text
 
 
 def test_menu_navigation_away_cleans_summary_keyboard() -> None:

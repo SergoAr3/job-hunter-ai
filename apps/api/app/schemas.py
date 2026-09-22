@@ -394,10 +394,15 @@ class ApplicationLearningConversionOut(BaseModel):
 class ApplicationLearningSummaryOut(BaseModel):
     total_applications: int
     applied_count: int
+    recruiter_response_count: int
     interview_count: int
     offer_count: int
+    hired_count: int
+    withdrawn_count: int
+    applied_to_recruiter_response: ApplicationLearningConversionOut
     applied_to_interview: ApplicationLearningConversionOut
     applied_to_offer: ApplicationLearningConversionOut
+    applied_to_hired: ApplicationLearningConversionOut
     history_missing_count: int
     funnel_incomplete_count: int
     as_of: datetime

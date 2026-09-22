@@ -94,9 +94,9 @@ def test_dispatcher_history_lifecycle_order_localization_utc_and_stale_callbacks
         assert edits[-1][0].splitlines() == [
             "🕘 История статусов",
             "",
-            "07.09.2026 17:14 UTC — Собеседование",
-            "05.09.2026 14:40 UTC — Откликнулся",
             "02.09.2026 08:05 UTC — Сохранена",
+            "05.09.2026 14:40 UTC — Откликнулся",
+            "07.09.2026 17:14 UTC — Собеседование",
         ]
         back = edits[-1][1].inline_keyboard[0][0]
         assert (back.text, back.callback_data) == (
@@ -373,7 +373,7 @@ def test_dispatcher_status_update_then_history_contains_new_event(
             ),
         )
         assert "07.09.2026 17:14 UTC — Оффер" in edits[-1]
-        assert edits[-1].index("Оффер") < edits[-1].index("Сохранена")
+        assert edits[-1].index("Сохранена") < edits[-1].index("Оффер")
         await state.clear()
         await bot.session.close()
 

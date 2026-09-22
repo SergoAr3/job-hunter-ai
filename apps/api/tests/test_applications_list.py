@@ -205,11 +205,18 @@ def test_no_status_returns_all_statuses_in_existing_order():
     now = datetime.now(timezone.utc)
     ids = [_application(owner, status.value, now + timedelta(seconds=index), status.value)
            for index, status in enumerate(ApplicationStatus)]
-    response = client.get(f"/users/{owner}/applications")
-    assert response.status_code == 200
-    assert [item["app_id"] for item in response.json()["items"]] == list(reversed(ids))
-    assert {item["status"] for item in response.json()["items"]} == {s.value for s in ApplicationStatus}
-    assert response.json()["has_next"] is False
+    first = client.get(f"/users/{owner}/applications", params={"limit": 5, "offset": 0})
+    assert first.status_code == 200
+    assert [item["app_id"] for item in first.json()["items"]] == list(reversed(ids))[:5]
+    assert first.json()["has_next"] is True
+
+    second = client.get(f"/users/{owner}/applications", params={"limit": 5, "offset": 5})
+    assert second.status_code == 200
+    assert [item["app_id"] for item in second.json()["items"]] == list(reversed(ids))[5:]
+    assert second.json()["has_next"] is False
+    assert {
+        item["status"] for page in (first.json(), second.json()) for item in page["items"]
+    } == {status.value for status in ApplicationStatus}
 
 
 @pytest.mark.parametrize("status", ["all", "unknown", "", "SAVED", "saved,applied"])

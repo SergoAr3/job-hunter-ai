@@ -155,7 +155,10 @@ def test_dispatcher_status_lifecycle(monkeypatch, failure):
         await feed("applications:status:18:5")
         old_token = (await state.get_data())[APPLICATIONS_STATUS_TOKEN]
         labels = [b.text for row in edits[-1][2].inline_keyboard for b in row]
-        assert labels == ["✓ Сохранена", "Откликнулся", "Собеседование", "Отказ", "Оффер", "⬅️ Назад"]
+        assert labels == [
+            "✓ Сохранена", "Откликнулся", "HR ответил", "Собеседование", "Отказ",
+            "Оффер", "Вышел на работу", "Я прекратил процесс", "⬅️ Назад",
+        ]
         await feed(f"applications:status_back:{old_token}")
         assert puts == []
         assert (await state.get_data())[APPLICATIONS_STATUS_TOKEN] is None

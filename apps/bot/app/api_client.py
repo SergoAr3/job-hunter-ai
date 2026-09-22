@@ -23,6 +23,9 @@ _APPLICATION_LIST_ITEM_FIELDS = {
     "app_id", "job_id", "created_at", "title", "company", "location",
     "workplace_type", "parsing_status", "ai_enrichment_status",
 }
+_APPLICATION_STATUS_VALUES = {
+    "saved", "applied", "recruiter_response", "interview", "offer", "hired", "withdrawn", "rejected",
+}
 
 
 def _is_aware_iso_datetime(value: object) -> bool:
@@ -190,10 +193,14 @@ class JobHunterApiClient:
         response.raise_for_status()
         payload = _json_object(response)
         conversion_keys = {"numerator", "denominator", "percentage"}
-        conversions = (payload.get("applied_to_interview"), payload.get("applied_to_offer"))
+        conversions = (
+            payload.get("applied_to_recruiter_response"), payload.get("applied_to_interview"),
+            payload.get("applied_to_offer"), payload.get("applied_to_hired"),
+        )
         if (
             not all(type(payload.get(key)) is int and payload[key] >= 0 for key in (
-                "total_applications", "applied_count", "interview_count", "offer_count",
+                "total_applications", "applied_count", "recruiter_response_count", "interview_count",
+                "offer_count", "hired_count", "withdrawn_count",
                 "history_missing_count", "funnel_incomplete_count",
             ))
             or not _is_aware_iso_datetime(payload.get("as_of"))
@@ -237,7 +244,7 @@ class JobHunterApiClient:
             or application.get("user_id") != user_id
             or type(application.get("job_id")) is not int
             or type(job.get("id")) is not int or application.get("job_id") != job["id"]
-            or application.get("status") not in ("saved", "applied", "interview", "rejected", "offer")
+            or application.get("status") not in _APPLICATION_STATUS_VALUES
         ):
             raise httpx.DecodingError("API response has invalid status detail shape", request=response.request)
         return payload
@@ -253,7 +260,7 @@ class JobHunterApiClient:
         items = payload.get("items")
         if not isinstance(items, list) or not all(
             isinstance(item, dict)
-            and item.get("status") in ("saved", "applied", "interview", "rejected", "offer")
+            and item.get("status") in _APPLICATION_STATUS_VALUES
             and _is_aware_iso_datetime(item.get("occurred_at"))
             for item in items
         ):
@@ -283,7 +290,7 @@ class JobHunterApiClient:
             or type(application.get("id")) is not int or application["id"] != application_id
             or type(application.get("user_id")) is not int or application["user_id"] != user_id
             or type(job.get("id")) is not int or application.get("job_id") != job["id"]
-            or application.get("status") not in ("saved", "applied", "interview", "rejected", "offer")
+            or application.get("status") not in _APPLICATION_STATUS_VALUES
             or "note" not in application
             or (application["note"] is not None and not isinstance(application["note"], str))
         ):
