@@ -48,13 +48,17 @@ def test_empty_user_summary_has_null_percentages_and_literal_route() -> None:
     payload = _summary(_user(700))
 
     assert set(payload) == {
-        "total_applications", "applied_count", "interview_count", "offer_count",
-        "applied_to_interview", "applied_to_offer", "history_missing_count",
+        "total_applications", "applied_count", "recruiter_response_count", "interview_count",
+        "offer_count", "hired_count", "withdrawn_count", "applied_to_recruiter_response",
+        "applied_to_interview", "applied_to_offer", "applied_to_hired", "history_missing_count",
         "funnel_incomplete_count", "as_of",
     }
     assert payload["total_applications"] == 0
+    assert payload["recruiter_response_count"] == payload["hired_count"] == payload["withdrawn_count"] == 0
+    assert payload["applied_to_recruiter_response"] == {"numerator": 0, "denominator": 0, "percentage": None}
     assert payload["applied_to_interview"] == {"numerator": 0, "denominator": 0, "percentage": None}
     assert payload["applied_to_offer"] == {"numerator": 0, "denominator": 0, "percentage": None}
+    assert payload["applied_to_hired"] == {"numerator": 0, "denominator": 0, "percentage": None}
     assert datetime.fromisoformat(payload["as_of"]).utcoffset() is not None
 
 
@@ -129,3 +133,46 @@ def test_users_are_scoped_and_percentage_rounds_half_up_to_one_decimal() -> None
     assert payload["interview_count"] == 1
     assert payload["offer_count"] == 0
     assert payload["applied_to_interview"] == {"numerator": 1, "denominator": 6, "percentage": 16.7}
+
+
+@pytest.mark.parametrize(
+    ("history", "expected"),
+    [
+        ([('applied', NOW), ('recruiter_response', NOW)], (1, 0, 0, 0, 0)),
+        ([('applied', NOW), ('hired', NOW)], (0, 0, 1, 0, 0)),
+        ([('applied', NOW), ('withdrawn', NOW)], (0, 0, 0, 1, 0)),
+        ([('applied', NOW), ('offer', NOW), ('withdrawn', NOW)], (0, 1, 0, 1, 0)),
+        ([('recruiter_response', NOW)], (0, 0, 0, 0, 1)),
+        ([('hired', NOW)], (0, 0, 0, 0, 1)),
+        ([('withdrawn', NOW)], (0, 0, 0, 0, 1)),
+        ([('recruiter_response', NOW), ('applied', NOW)], (0, 0, 0, 0, 1)),
+        ([('applied', NOW), ('recruiter_response', NOW), ('recruiter_response', NOW), ('hired', NOW), ('hired', NOW)], (1, 0, 1, 0, 0)),
+    ],
+)
+def test_summary_counts_new_explicit_stages_without_inference(
+    history: list[tuple[str, datetime]], expected: tuple[int, int, int, int, int],
+) -> None:
+    user_id = _user(780)
+    _application(user_id, "new-stages", history)
+
+    payload = _summary(user_id)
+
+    assert (
+        payload["recruiter_response_count"], payload["offer_count"], payload["hired_count"],
+        payload["withdrawn_count"], payload["funnel_incomplete_count"],
+    ) == expected
+    assert payload["interview_count"] == 0
+
+
+def test_summary_counts_a_complete_explicit_path_without_inferring_or_using_rejected() -> None:
+    user_id = _user(790)
+    _application(user_id, "complete", [
+        ("applied", NOW), ("recruiter_response", NOW), ("interview", NOW),
+        ("offer", NOW), ("hired", NOW), ("rejected", NOW),
+    ])
+
+    payload = _summary(user_id)
+
+    assert payload["applied_count"] == payload["recruiter_response_count"] == 1
+    assert payload["interview_count"] == payload["offer_count"] == payload["hired_count"] == 1
+    assert payload["withdrawn_count"] == 0

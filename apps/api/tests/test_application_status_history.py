@@ -105,6 +105,30 @@ def test_transitions_are_newest_first_and_same_status_retry_is_idempotent() -> N
     ]
 
 
+@pytest.mark.parametrize("status", ["recruiter_response", "hired", "withdrawn"])
+def test_explicit_status_is_persisted_once_with_a_history_event(status: str) -> None:
+    owner = create_user(230)
+    app_id, _ = _create_new_application(owner, f"explicit-{status}")
+    url = f"/users/{owner}/applications/{app_id}/status"
+
+    assert client.put(url, json={"status": status}).json()["application"]["status"] == status
+    assert client.put(url, json={"status": status}).status_code == 200
+    assert [item["status"] for item in _history(owner, app_id)] == [status, "saved"]
+
+
+def test_offer_to_withdrawn_preserves_offer_and_new_statuses_allow_real_process_changes() -> None:
+    owner = create_user(231)
+    app_id, _ = _create_new_application(owner, "withdrawn")
+    url = f"/users/{owner}/applications/{app_id}/status"
+
+    for status in ("applied", "offer", "withdrawn", "recruiter_response"):
+        assert client.put(url, json={"status": status}).status_code == 200
+
+    assert [item["status"] for item in _history(owner, app_id)] == [
+        "recruiter_response", "withdrawn", "offer", "applied", "saved",
+    ]
+
+
 def test_history_order_uses_id_desc_for_equal_timestamps() -> None:
     owner = create_user(206)
     _, job_id = create_application(owner)

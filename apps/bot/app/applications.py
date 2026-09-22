@@ -46,8 +46,9 @@ APPLICATIONS_SORT = "applications_sort"
 APPLICATIONS_SORT_VIEW = "sort_picker"
 APPLICATIONS_SUMMARY_VIEW = "learning_summary"
 STATUS_LABELS = {
-    "saved": "Сохранена", "applied": "Откликнулся", "interview": "Собеседование",
-    "rejected": "Отказ", "offer": "Оффер",
+    "saved": "Сохранена", "applied": "Откликнулся", "recruiter_response": "HR ответил",
+    "interview": "Собеседование", "rejected": "Отказ", "offer": "Оффер",
+    "hired": "Вышел на работу", "withdrawn": "Я прекратил процесс",
 }
 SORT_LABELS = {
     "newest": "Сначала новые",
@@ -770,10 +771,15 @@ def _format_application_learning_summary(summary: dict[str, object]) -> str:
         "📊 Статистика поиска\n\n"
         f"Сохранено вакансий: {summary['total_applications']}\n"
         f"Откликов отмечено: {summary['applied_count']}\n"
+        f"Ответов HR: {summary['recruiter_response_count']}\n"
         f"До интервью дошло: {summary['interview_count']}\n"
         f"Офферов отмечено: {summary['offer_count']}\n\n"
+        f"Выходов на работу: {summary['hired_count']}\n"
+        f"Процессов прекращено мной: {summary['withdrawn_count']}\n\n"
+        f"Отклик → ответ HR: {_format_percentage(summary['applied_to_recruiter_response'])}\n"
         f"Отклик → интервью: {_format_percentage(summary['applied_to_interview'])}\n"
-        f"Отклик → оффер: {_format_percentage(summary['applied_to_offer'])}"
+        f"Отклик → оффер: {_format_percentage(summary['applied_to_offer'])}\n"
+        f"Отклик → выход на работу: {_format_percentage(summary['applied_to_hired'])}"
     )
     if incomplete:
         text += f"\n\n⚠️ Неполная история: {incomplete}"
@@ -1136,7 +1142,9 @@ async def _handle_history_callback(
         return
     items = history.get("items")
     assert isinstance(items, list)
-    text = _format_application_status_history(cast(list[dict[str, object]], items))
+    # The API orders events by (occurred_at, id) descending. Reverse that stable
+    # sequence only for the Telegram timeline so users read oldest to newest.
+    text = _format_application_status_history(list(reversed(cast(list[dict[str, object]], items))))
     await state.update_data({APPLICATIONS_VIEW: APPLICATIONS_HISTORY_VIEW})
     await _replace_or_send(
         message, state, text, application_history_keyboard(application_id, offset)

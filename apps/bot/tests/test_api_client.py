@@ -347,10 +347,11 @@ def test_create_profile_draft_from_cv_calls_multipart_endpoint() -> None:
 
 
 @pytest.mark.parametrize("outcome", ["success", "404", "422", "500", "network", "json", "shape", "wrong_owner", "wrong_status"])
-def test_put_application_status_contract_and_errors(outcome):
+@pytest.mark.parametrize("status", ["applied", "recruiter_response", "hired", "withdrawn"])
+def test_put_application_status_contract_and_errors(outcome, status):
     async def scenario():
         requests = []
-        payload = {"application": {"id": 18, "user_id": 4, "job_id": 2, "status": "applied"}, "job": {"id": 2}}
+        payload = {"application": {"id": 18, "user_id": 4, "job_id": 2, "status": status}, "job": {"id": 2}}
         def handler(request):
             requests.append(request)
             if outcome == "network":
@@ -371,27 +372,28 @@ def test_put_application_status_contract_and_errors(outcome):
         client._client = httpx.AsyncClient(base_url="http://api", transport=httpx.MockTransport(handler))
         try:
             if outcome == "success":
-                assert await client.put_application_status(4, 18, "applied") == payload
+                assert await client.put_application_status(4, 18, status) == payload
             else:
                 with pytest.raises(httpx.HTTPError):
-                    await client.put_application_status(4, 18, "applied")
+                    await client.put_application_status(4, 18, status)
         finally:
             await client.close()
         assert len(requests) == 1
         assert requests[0].method == "PUT"
         assert requests[0].url.path == "/users/4/applications/18/status"
-        assert requests[0].content == b'{"status":"applied"}'
+        assert json.loads(requests[0].content) == {"status": status}
     asyncio.run(scenario())
 
 
 @pytest.mark.parametrize(
     "outcome", ["success", "404", "500", "network", "shape", "status", "naive_time"]
 )
-def test_get_application_status_history_contract_and_errors(outcome):
+@pytest.mark.parametrize("status_value", ["interview", "recruiter_response", "hired", "withdrawn"])
+def test_get_application_status_history_contract_and_errors(outcome, status_value):
     async def scenario():
         requests = []
         payload = {
-            "items": [{"status": "interview", "occurred_at": "2026-09-07T17:14:00+00:00"}]
+            "items": [{"status": status_value, "occurred_at": "2026-09-07T17:14:00+00:00"}]
         }
 
         def handler(request):
@@ -428,7 +430,7 @@ def test_get_application_status_history_contract_and_errors(outcome):
     asyncio.run(scenario())
 
 
-@pytest.mark.parametrize("status", [None, "saved", "applied", "interview", "rejected", "offer"])
+@pytest.mark.parametrize("status", [None, "saved", "applied", "recruiter_response", "interview", "rejected", "offer", "hired", "withdrawn"])
 @pytest.mark.parametrize("q", [None, "Python & SQL"])
 @pytest.mark.parametrize("sort", ["newest", "oldest", "next_action"])
 def test_list_applications_filter_query(status, q, sort):

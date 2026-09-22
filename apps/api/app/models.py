@@ -152,8 +152,11 @@ class WorkExperience(Base):
 class ApplicationStatus(str, Enum):
     SAVED = "saved"
     APPLIED = "applied"
+    RECRUITER_RESPONSE = "recruiter_response"
     INTERVIEW = "interview"
     OFFER = "offer"
+    HIRED = "hired"
+    WITHDRAWN = "withdrawn"
     REJECTED = "rejected"
 
 
@@ -241,7 +244,7 @@ class Application(Base):
     __table_args__ = (
         UniqueConstraint("user_id", "job_id"),
         CheckConstraint(
-            "status IN ('saved', 'applied', 'interview', 'offer', 'rejected')",
+            "status IN ('saved', 'applied', 'recruiter_response', 'interview', 'offer', 'hired', 'withdrawn', 'rejected')",
             name="ck_applications_status",
         ),
         CheckConstraint(
@@ -258,7 +261,7 @@ class Application(Base):
     next_action: Mapped[str | None] = mapped_column(Text, nullable=True)
     next_action_due_on: Mapped[date | None] = mapped_column(Date, nullable=True)
     status: Mapped[str] = mapped_column(
-        String(16), default=ApplicationStatus.SAVED.value, server_default=ApplicationStatus.SAVED.value
+        String(32), default=ApplicationStatus.SAVED.value, server_default=ApplicationStatus.SAVED.value
     )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
@@ -275,7 +278,7 @@ class ApplicationStatusHistory(Base):
     __tablename__ = "application_status_history"
     __table_args__ = (
         CheckConstraint(
-            "status IN ('saved', 'applied', 'interview', 'offer', 'rejected')",
+            "status IN ('saved', 'applied', 'recruiter_response', 'interview', 'offer', 'hired', 'withdrawn', 'rejected')",
             name="ck_application_status_history_status",
         ),
         Index(
@@ -290,7 +293,7 @@ class ApplicationStatusHistory(Base):
     application_id: Mapped[int] = mapped_column(
         ForeignKey("applications.id", ondelete="CASCADE"), nullable=False
     )
-    status: Mapped[str] = mapped_column(String(16), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False)
     occurred_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
