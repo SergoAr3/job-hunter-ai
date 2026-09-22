@@ -297,3 +297,83 @@ class ApplicationStatusHistory(Base):
     occurred_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
+
+
+class ApplicationMatchSnapshot(Base):
+    __tablename__ = "application_match_snapshots"
+    __table_args__ = (
+        UniqueConstraint("application_id", name="uq_application_match_snapshots_application_id"),
+        CheckConstraint(
+            "snapshot_schema_version = 1",
+            name="ck_application_match_snapshots_schema_version",
+        ),
+        CheckConstraint(
+            "capture_status IN ('captured', 'unavailable')",
+            name="ck_application_match_snapshots_capture_status",
+        ),
+        CheckConstraint(
+            "unavailable_reason IS NULL OR unavailable_reason IN ('profile_missing', 'matcher_error')",
+            name="ck_application_match_snapshots_unavailable_reason",
+        ),
+        CheckConstraint(
+            "score IS NULL OR score BETWEEN 0 AND 100",
+            name="ck_application_match_snapshots_score",
+        ),
+        CheckConstraint(
+            "coverage IS NULL OR coverage BETWEEN 0 AND 100",
+            name="ck_application_match_snapshots_coverage",
+        ),
+        CheckConstraint(
+            "verdict IS NULL OR verdict IN ('insufficient_data', 'low', 'medium', 'high')",
+            name="ck_application_match_snapshots_verdict",
+        ),
+        CheckConstraint(
+            "confidence IS NULL OR confidence IN ('low', 'medium', 'high')",
+            name="ck_application_match_snapshots_confidence",
+        ),
+        CheckConstraint(
+            "(capture_status = 'captured' AND unavailable_reason IS NULL "
+            "AND algorithm_version IS NOT NULL AND verdict IS NOT NULL AND coverage IS NOT NULL "
+            "AND profile_updated_at IS NOT NULL AND job_updated_at IS NOT NULL "
+            "AND job_parsing_status IS NOT NULL AND job_ai_enrichment_status IS NOT NULL "
+            "AND inputs IS NOT NULL AND result_detail IS NOT NULL) OR "
+            "(capture_status = 'unavailable' AND unavailable_reason IS NOT NULL "
+            "AND algorithm_version IS NULL AND score IS NULL AND verdict IS NULL "
+            "AND coverage IS NULL AND confidence IS NULL AND profile_updated_at IS NULL "
+            "AND job_updated_at IS NULL AND job_parsing_status IS NULL "
+            "AND job_ai_enrichment_status IS NULL AND inputs IS NULL AND result_detail IS NULL)",
+            name="ck_application_match_snapshots_capture_payload",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    application_id: Mapped[int] = mapped_column(
+        ForeignKey("applications.id", ondelete="CASCADE"), nullable=False
+    )
+    trigger_status_history_id: Mapped[int] = mapped_column(
+        ForeignKey("application_status_history.id", ondelete="CASCADE"), nullable=False
+    )
+    snapshot_schema_version: Mapped[int] = mapped_column(nullable=False, default=1, server_default="1")
+    capture_status: Mapped[str] = mapped_column(String(16), nullable=False)
+    unavailable_reason: Mapped[str | None] = mapped_column(String(32))
+    recorded_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+    algorithm_version: Mapped[str | None] = mapped_column(String(64))
+    score: Mapped[int | None]
+    verdict: Mapped[str | None] = mapped_column(String(32))
+    coverage: Mapped[int | None]
+    confidence: Mapped[str | None] = mapped_column(String(16))
+
+    profile_updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    job_updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    job_parsing_status: Mapped[str | None] = mapped_column(String(16))
+    job_ai_enrichment_status: Mapped[str | None] = mapped_column(String(16))
+
+    inputs: Mapped[dict[str, object] | None] = mapped_column(
+        JSON(none_as_null=True).with_variant(JSONB(none_as_null=True), "postgresql")
+    )
+    result_detail: Mapped[dict[str, object] | None] = mapped_column(
+        JSON(none_as_null=True).with_variant(JSONB(none_as_null=True), "postgresql")
+    )
