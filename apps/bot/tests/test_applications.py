@@ -76,6 +76,18 @@ class Api:
         self.match_calls: list[tuple[int, int]] = []
         self.history_calls: list[tuple[int, int]] = []
         self.history: dict[str, object] = {"items": []}
+        self.learning_summary_calls: list[int] = []
+        self.learning_summary: dict[str, object] = {
+            "total_applications": 0,
+            "applied_count": 0,
+            "interview_count": 0,
+            "offer_count": 0,
+            "applied_to_interview": {"numerator": 0, "denominator": 0, "percentage": None},
+            "applied_to_offer": {"numerator": 0, "denominator": 0, "percentage": None},
+            "history_missing_count": 0,
+            "funnel_incomplete_count": 0,
+            "as_of": "2026-09-21T00:00:00+00:00",
+        }
         self.match: dict[str, object] = {
             "score": 80,
             "verdict": "high",
@@ -115,6 +127,10 @@ class Api:
     ) -> dict[str, object]:
         self.history_calls.append((user_id, app_id))
         return self.history
+
+    async def get_application_learning_summary(self, user_id: int) -> dict[str, object]:
+        self.learning_summary_calls.append(user_id)
+        return self.learning_summary
 
 
 def _state() -> tuple[MemoryStorage, FSMContext]:

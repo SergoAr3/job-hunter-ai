@@ -385,6 +385,31 @@ class ApplicationsPageOut(BaseModel):
     has_next: bool
 
 
+class ApplicationLearningConversionOut(BaseModel):
+    numerator: int
+    denominator: int
+    percentage: float | None
+
+
+class ApplicationLearningSummaryOut(BaseModel):
+    total_applications: int
+    applied_count: int
+    interview_count: int
+    offer_count: int
+    applied_to_interview: ApplicationLearningConversionOut
+    applied_to_offer: ApplicationLearningConversionOut
+    history_missing_count: int
+    funnel_incomplete_count: int
+    as_of: datetime
+
+    @field_validator("as_of")
+    @classmethod
+    def ensure_as_of_timezone(cls, value: datetime) -> datetime:
+        if value.tzinfo is None:
+            return value.replace(tzinfo=timezone.utc)
+        return value.astimezone(timezone.utc)
+
+
 class ApplicationDetailOut(BaseModel):
     application: ApplicationOut
     job: JobOut

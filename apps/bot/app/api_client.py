@@ -52,6 +52,8 @@ class BotApiClient(Protocol):
         q: str | None = None, sort: str = "newest",
     ) -> dict[str, object]: ...
 
+    async def get_application_learning_summary(self, user_id: int) -> dict[str, object]: ...
+
     async def get_application(self, user_id: int, application_id: int) -> dict[str, object]: ...
 
     async def put_application_status(self, user_id: int, application_id: int, status: str) -> dict[str, object]: ...
@@ -181,6 +183,30 @@ class JobHunterApiClient:
             for item in payload["items"]
         ):
             raise httpx.DecodingError("API response has invalid application list item", request=response.request)
+        return payload
+
+    async def get_application_learning_summary(self, user_id: int) -> dict[str, object]:
+        response = await self._client.get(f"/users/{user_id}/applications/learning-summary")
+        response.raise_for_status()
+        payload = _json_object(response)
+        conversion_keys = {"numerator", "denominator", "percentage"}
+        conversions = (payload.get("applied_to_interview"), payload.get("applied_to_offer"))
+        if (
+            not all(type(payload.get(key)) is int and payload[key] >= 0 for key in (
+                "total_applications", "applied_count", "interview_count", "offer_count",
+                "history_missing_count", "funnel_incomplete_count",
+            ))
+            or not _is_aware_iso_datetime(payload.get("as_of"))
+            or not all(
+                isinstance(conversion, dict)
+                and conversion_keys == set(conversion)
+                and type(conversion.get("numerator")) is int
+                and type(conversion.get("denominator")) is int
+                and (conversion.get("percentage") is None or type(conversion.get("percentage")) in (int, float))
+                for conversion in conversions
+            )
+        ):
+            raise httpx.DecodingError("API response has invalid learning summary shape", request=response.request)
         return payload
 
     async def get_application(self, user_id: int, application_id: int) -> dict[str, object]:
