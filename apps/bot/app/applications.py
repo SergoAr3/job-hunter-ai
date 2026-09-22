@@ -14,6 +14,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message, User
 from aiogram.utils.chat_action import ChatActionSender
+from aiogram.utils.text_decorations import html_decoration
 
 from app.api_client import BotApiClient
 from app.jobs import (
@@ -45,6 +46,11 @@ APPLICATIONS_FILTER_VIEW = "filter_picker"
 APPLICATIONS_SORT = "applications_sort"
 APPLICATIONS_SORT_VIEW = "sort_picker"
 APPLICATIONS_SUMMARY_VIEW = "learning_summary"
+APPLICATIONS_FOLLOW_UPS_VIEW = "follow_ups"
+APPLICATIONS_FOLLOW_UPS_TOKEN = "applications_follow_ups_token"
+APPLICATIONS_FOLLOW_UPS_OFFSET = "applications_follow_ups_offset"
+APPLICATIONS_FOLLOW_UPS_HAS_NEXT = "applications_follow_ups_has_next"
+APPLICATIONS_FOLLOW_UPS_RETURN_OFFSET = "applications_follow_ups_return_offset"
 STATUS_LABELS = {
     "saved": "Сохранена", "applied": "Откликнулся", "recruiter_response": "HR ответил",
     "interview": "Собеседование", "rejected": "Отказ", "offer": "Оффер",
@@ -121,6 +127,9 @@ def applications_list_keyboard(
     rows.append([InlineKeyboardButton(
         text="📊 Статистика", callback_data=f"applications:list:{token}:summary",
     )])
+    rows.append([InlineKeyboardButton(
+        text="🔔 Что требует внимания", callback_data=f"applications:list:{token}:follow_ups",
+    )])
     if q is not None:
         rows.append([InlineKeyboardButton(
             text="✖️ Сбросить поиск", callback_data=f"applications:list:{token}:reset_search",
@@ -161,7 +170,15 @@ def _sort_picker_content(
     return text, InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def application_detail_keyboard(application_id: int, offset: int, *, has_note: bool = False, has_next_action: bool = False) -> InlineKeyboardMarkup:
+def application_detail_keyboard(
+    application_id: int,
+    offset: int,
+    *,
+    has_note: bool = False,
+    has_next_action: bool = False,
+    back_callback: str | None = None,
+    back_text: str = "⬅️ К списку",
+) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="Изменить статус", callback_data=f"applications:status:{application_id}:{offset}")],
         [InlineKeyboardButton(text="📅 Следующее действие", callback_data=f"applications:next_action:{application_id}:{offset}")],
@@ -171,7 +188,7 @@ def application_detail_keyboard(application_id: int, offset: int, *, has_note: b
         [InlineKeyboardButton(text="🕘 История статусов", callback_data=f"applications:history:{application_id}:{offset}")],
         [InlineKeyboardButton(text="🔎 Почему подходит?", callback_data=f"applications:match:{application_id}:{offset}")],
         [InlineKeyboardButton(text="✍️ Сопроводительное письмо", callback_data=f"applications:letter:{application_id}:{offset}")],
-        [InlineKeyboardButton(text="⬅️ К списку", callback_data=f"applications:page:{offset}")],
+        [InlineKeyboardButton(text=back_text, callback_data=back_callback or f"applications:page:{offset}")],
     ])
 
 
@@ -202,7 +219,12 @@ async def show_applications_list(
     commit_search_query: bool = False,
     search_failure_prompt: bool = False,
 ) -> bool:
-    await state.update_data({APPLICATIONS_STATUS_TOKEN: None, APPLICATIONS_LIST_TOKEN: None})
+    await state.update_data({
+        APPLICATIONS_STATUS_TOKEN: None,
+        APPLICATIONS_LIST_TOKEN: None,
+        APPLICATIONS_FOLLOW_UPS_TOKEN: None,
+        APPLICATIONS_FOLLOW_UPS_RETURN_OFFSET: None,
+    })
     context = await state.get_data()
     status = cast(str | None, context.get(APPLICATIONS_FILTER_STATUS))
     search_query = q if commit_search_query else cast(str | None, context.get(APPLICATIONS_SEARCH_QUERY))
@@ -402,6 +424,9 @@ async def handle_applications_callback(callback: CallbackQuery, state: FSMContex
         return
     if data.startswith(("applications:note:", "applications:note_delete:", "applications:note_cancel:")):
         await _handle_note_callback(callback, message, state, api_client, state_data)
+        return
+    if data.startswith("applications:followups:"):
+        await _handle_follow_ups_callback(callback, message, state, api_client, state_data)
         return
     if view in (APPLICATIONS_NOTE_VIEW, "note_loading") or await state.get_state() == ApplicationsStates.waiting_for_note.state:
         return
@@ -641,10 +666,10 @@ async def _handle_list_callback(
         return
     status = cast(str | None, context.get(APPLICATIONS_FILTER_STATUS))
     q = cast(str | None, context.get(APPLICATIONS_SEARCH_QUERY))
-    if action in ("filter", "sort", "add", "open", "page", "search", "reset_search", "summary"):
+    if action in ("filter", "sort", "add", "open", "page", "search", "reset_search", "summary", "follow_ups"):
         if view != APPLICATIONS_LIST_VIEW:
             return
-        if action in ("filter", "sort", "add", "search", "reset_search", "summary"):
+        if action in ("filter", "sort", "add", "search", "reset_search", "summary", "follow_ups"):
             if len(parts) != 4 or (action == "add" and (status is not None or q is not None)):
                 return
             if action == "reset_search" and q is None:
@@ -734,6 +759,9 @@ async def _handle_list_callback(
     if action == "summary":
         await _show_application_learning_summary(message, state, api_client, user_id, offset)
         return
+    if action == "follow_ups":
+        await _show_follow_ups(message, state, api_client, user_id, offset=0)
+        return
     if action == "open":
         await _show_application_detail(message, state, api_client, user_id, int(parts[4]), offset)
     else:
@@ -763,6 +791,175 @@ def _application_learning_summary_keyboard(offset: int) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[[
         InlineKeyboardButton(text="⬅️ К списку", callback_data=f"applications:page:{offset}")
     ]])
+
+
+def _truncate_utf16(value: str, maximum: int) -> str:
+    if _utf16_units(value) <= maximum:
+        return value
+    return value.encode("utf-16-le")[:max(0, maximum - 1) * 2].decode(
+        "utf-16-le", errors="ignore"
+    ) + "…"
+
+
+def _follow_up_due_label(item: dict[str, object]) -> str:
+    due_on = item["next_action_due_on"]
+    assert isinstance(due_on, str)
+    parsed = date.fromisoformat(due_on)
+    return f"{parsed.day:02d}.{parsed.month:02d}"
+
+
+def _follow_up_dynamic_text(value: str, maximum: int) -> str:
+    return _truncate_utf16(html_decoration.quote(value), maximum)
+
+
+def _follow_up_queue_content(
+    items: list[dict[str, object]], *, offset: int, has_next: bool, token: str,
+) -> tuple[str, InlineKeyboardMarkup]:
+    header = "🔔 Что требует внимания"
+    if not items:
+        text = f"{header}\n\nЗапланированных действий пока нет."
+    else:
+        labels = {"overdue": "⚠️ Срок прошёл", "today": "📍 На сегодня", "upcoming": "📅 Запланировано"}
+        groups: list[str] = []
+        for due_state in ("overdue", "today", "upcoming"):
+            group = [item for item in items if item.get("due_state") == due_state]
+            if not group:
+                continue
+            entries: list[str] = []
+            for item in group:
+                title = _follow_up_dynamic_text(
+                    item["title"] if isinstance(item.get("title"), str) else "Без названия", 90
+                )
+                company_value = item.get("company")
+                company = _follow_up_dynamic_text(company_value, 80) if isinstance(company_value, str) else ""
+                action = _follow_up_dynamic_text(str(item["next_action"]), 300)
+                context = f"{title} · {company}" if company.strip() else title
+                status = STATUS_LABELS.get(str(item.get("status")), "Не указан")
+                entries.append(
+                    f"{_follow_up_due_label(item)} · {action}\n"
+                    f"{context}\nСтатус: {html_decoration.quote(status)}"
+                )
+            groups.append(f"<b>{labels[due_state]}</b>\n\n" + "\n\n".join(entries))
+        text = header + "\n\n" + "\n\n".join(groups) + "\n\n«Сегодня» определяется по UTC."
+    rows: list[list[InlineKeyboardButton]] = []
+    for item in items:
+        application_id = item.get("application_id")
+        if isinstance(application_id, int) and not isinstance(application_id, bool):
+            title = item.get("title") if isinstance(item.get("title"), str) else "Без названия"
+            rows.append([InlineKeyboardButton(
+                text=_truncate_utf16(title, 55),
+                callback_data=f"applications:followups:{token}:open:{application_id}",
+            )])
+    navigation: list[InlineKeyboardButton] = []
+    if offset > 0:
+        navigation.append(InlineKeyboardButton(
+            text="⬅️ Назад", callback_data=f"applications:followups:{token}:page:{max(0, offset - PAGE_SIZE)}"
+        ))
+    if has_next:
+        navigation.append(InlineKeyboardButton(
+            text="Вперёд ➡️", callback_data=f"applications:followups:{token}:page:{offset + PAGE_SIZE}"
+        ))
+    if navigation:
+        rows.append(navigation)
+    rows.append([InlineKeyboardButton(
+        text="⬅️ К списку", callback_data=f"applications:followups:{token}:back:0",
+    )])
+    return text, InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+async def _show_follow_ups(
+    message: Message, state: FSMContext, api_client: BotApiClient, user_id: int, *, offset: int,
+) -> None:
+    await state.update_data({APPLICATIONS_FOLLOW_UPS_TOKEN: None})
+    try:
+        while True:
+            page = await api_client.list_application_follow_ups(user_id, limit=PAGE_SIZE, offset=offset)
+            items = cast(list[dict[str, object]], page["items"])
+            if items or offset == 0:
+                break
+            offset = max(0, offset - PAGE_SIZE)
+    except httpx.HTTPError:
+        logger.warning("Could not load follow-up queue", exc_info=True)
+        await state.update_data({APPLICATIONS_VIEW: "follow_ups_error"})
+        await _replace_or_send(
+            message, state, "Не удалось загрузить запланированные действия. Попробуй ещё раз.",
+            InlineKeyboardMarkup(inline_keyboard=[[
+                InlineKeyboardButton(text="⬅️ К списку", callback_data="applications:page:0")
+            ]]),
+            canonical_target=True,
+        )
+        return
+    token = secrets.token_hex(4)
+    text, markup = _follow_up_queue_content(
+        items, offset=offset, has_next=bool(page["has_next"]), token=token,
+    )
+    await _replace_or_send(message, state, text, markup, parse_mode=ParseMode.HTML, canonical_target=True)
+    await state.set_state(None)
+    await state.update_data({
+        APPLICATIONS_VIEW: APPLICATIONS_FOLLOW_UPS_VIEW,
+        APPLICATIONS_APPLICATION_ID: None,
+        APPLICATIONS_FOLLOW_UPS_TOKEN: token,
+        APPLICATIONS_FOLLOW_UPS_OFFSET: offset,
+        APPLICATIONS_FOLLOW_UPS_HAS_NEXT: bool(page["has_next"]),
+        APPLICATIONS_FOLLOW_UPS_RETURN_OFFSET: None,
+        APPLICATIONS_LIST_TOKEN: None,
+    })
+
+
+async def _handle_follow_ups_callback(
+    callback: CallbackQuery, message: Message, state: FSMContext,
+    api_client: BotApiClient, context: dict[str, object],
+) -> None:
+    parts = (callback.data or "").split(":")
+    if len(parts) == 4 and parts[2] == "return":
+        value = parts[3]
+        if context.get(APPLICATIONS_VIEW) != APPLICATIONS_DETAIL_VIEW or not value.isdecimal():
+            return
+        offset = context.get(APPLICATIONS_FOLLOW_UPS_RETURN_OFFSET)
+        if type(offset) is not int or int(value) != offset:
+            return
+        try:
+            user_id = await api_client.create_or_get_user(callback.from_user)
+        except httpx.HTTPError:
+            return
+        await _show_follow_ups(message, state, api_client, user_id, offset=offset)
+        return
+    if len(parts) != 5 or context.get(APPLICATIONS_VIEW) != APPLICATIONS_FOLLOW_UPS_VIEW:
+        return
+    token, action, value = parts[2], parts[3], parts[4]
+    if token != context.get(APPLICATIONS_FOLLOW_UPS_TOKEN):
+        return
+    offset = context.get(APPLICATIONS_FOLLOW_UPS_OFFSET)
+    has_next = context.get(APPLICATIONS_FOLLOW_UPS_HAS_NEXT)
+    if type(offset) is not int or type(has_next) is not bool:
+        return
+    if action == "back":
+        if value != "0":
+            return
+    elif action == "page":
+        if (
+            not value.isdecimal()
+            or int(value) == offset + PAGE_SIZE and not has_next
+            or int(value) not in (max(0, offset - PAGE_SIZE), offset + PAGE_SIZE)
+        ):
+            return
+    elif action == "open":
+        if not value.isdecimal():
+            return
+    else:
+        return
+    await state.update_data({APPLICATIONS_FOLLOW_UPS_TOKEN: None})
+    try:
+        user_id = await api_client.create_or_get_user(callback.from_user)
+    except httpx.HTTPError:
+        return
+    if action == "back":
+        await show_applications_list(message, state, api_client, offset=0, user_id=user_id)
+    elif action == "page":
+        await _show_follow_ups(message, state, api_client, user_id, offset=int(value))
+    else:
+        await state.update_data({APPLICATIONS_FOLLOW_UPS_RETURN_OFFSET: offset})
+        await _show_application_detail(message, state, api_client, user_id, int(value), offset)
 
 
 def _format_application_learning_summary(summary: dict[str, object]) -> str:
@@ -995,7 +1192,14 @@ async def _show_application_detail(
 async def _render_application_detail(
     message: Message, state: FSMContext, detail: dict[str, object], application_id: int, offset: int,
 ) -> None:
-    text, markup = _application_detail_content(detail, application_id, offset)
+    return_offset = (await state.get_data()).get(APPLICATIONS_FOLLOW_UPS_RETURN_OFFSET)
+    back_callback = (
+        f"applications:followups:return:{return_offset}"
+        if isinstance(return_offset, int) else None
+    )
+    text, markup = _application_detail_content(
+        detail, application_id, offset, back_callback=back_callback,
+    )
     await state.update_data({APPLICATIONS_STATUS_TOKEN: None, APPLICATIONS_NOTE_TOKEN: None, APPLICATIONS_VIEW: APPLICATIONS_DETAIL_VIEW})
     await _replace_or_send(message, state, text, markup, canonical_target=True)
     await state.update_data(
@@ -1008,7 +1212,7 @@ async def _render_application_detail(
 
 
 def _application_detail_content(
-    detail: dict[str, object], application_id: int, offset: int,
+    detail: dict[str, object], application_id: int, offset: int, *, back_callback: str | None = None,
 ) -> tuple[str, InlineKeyboardMarkup]:
     job = detail["job"]
     assert isinstance(job, dict)
@@ -1028,13 +1232,27 @@ def _application_detail_content(
     card = format_job_card(job) or "Вакансия без данных."
     if len(card.encode("utf-16-le")) // 2 > budget:
         card = card.encode("utf-16-le")[:max(0, budget - 1) * 2].decode("utf-16-le", errors="ignore") + "…"
-    return card + suffix, application_detail_keyboard(application_id, offset, has_note=bool(note), has_next_action=bool(action))
+    return card + suffix, application_detail_keyboard(
+        application_id,
+        offset,
+        has_note=bool(note),
+        has_next_action=bool(action),
+        back_callback=back_callback,
+        back_text="⬅️ К действиям" if back_callback else "⬅️ К списку",
+    )
 
 
 async def _send_new_application_detail(
     message: Message, state: FSMContext, detail: dict[str, object], application_id: int, offset: int,
 ) -> None:
-    text, markup = _application_detail_content(detail, application_id, offset)
+    return_offset = (await state.get_data()).get(APPLICATIONS_FOLLOW_UPS_RETURN_OFFSET)
+    back_callback = (
+        f"applications:followups:return:{return_offset}"
+        if isinstance(return_offset, int) else None
+    )
+    text, markup = _application_detail_content(
+        detail, application_id, offset, back_callback=back_callback,
+    )
     old_message_id = (await state.get_data()).get(APPLICATIONS_MESSAGE_ID)
     await state.update_data(
         **{
@@ -1188,7 +1406,13 @@ def _utf16_units(value: str) -> int:
 
 async def remove_active_applications_inline_keyboard(message: Message, state: FSMContext) -> None:
     await state.update_data({APPLICATIONS_NEXT_ACTION_TOKEN: None, APPLICATIONS_NEXT_ACTION_DRAFT: None})
-    await state.update_data({APPLICATIONS_STATUS_TOKEN: None, APPLICATIONS_LIST_TOKEN: None, APPLICATIONS_NOTE_TOKEN: None})
+    await state.update_data({
+        APPLICATIONS_STATUS_TOKEN: None,
+        APPLICATIONS_LIST_TOKEN: None,
+        APPLICATIONS_FOLLOW_UPS_TOKEN: None,
+        APPLICATIONS_FOLLOW_UPS_HAS_NEXT: None,
+        APPLICATIONS_NOTE_TOKEN: None,
+    })
     message_id = (await state.get_data()).get(APPLICATIONS_MESSAGE_ID)
     await _remove_applications_inline_keyboard(message, message_id)
 

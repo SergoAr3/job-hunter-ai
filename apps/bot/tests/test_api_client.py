@@ -315,6 +315,44 @@ def test_applications_client_uses_read_only_endpoints_and_validates_shape() -> N
     asyncio.run(scenario())
 
 
+@pytest.mark.parametrize("due_state", ["overdue", "today", "upcoming"])
+def test_follow_up_queue_client_contract_and_validation(due_state: str) -> None:
+    async def scenario() -> None:
+        payload = {
+            "items": [{
+                "application_id": 18,
+                "title": "Python Developer",
+                "company": "Example",
+                "status": "applied",
+                "next_action": "Write HR",
+                "next_action_due_on": "2026-09-28",
+                "due_state": due_state,
+            }],
+            "has_next": False,
+        }
+        requests: list[httpx.Request] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            requests.append(request)
+            return httpx.Response(200, json=payload, request=request)
+
+        client = JobHunterApiClient("http://api")
+        await client._client.aclose()
+        client._client = httpx.AsyncClient(base_url="http://api", transport=httpx.MockTransport(handler))
+        try:
+            assert await client.list_application_follow_ups(4, limit=5, offset=10) == payload
+            payload["items"][0]["due_state"] = "invalid"
+            with pytest.raises(httpx.DecodingError):
+                await client.list_application_follow_ups(4, limit=5, offset=10)
+        finally:
+            await client.close()
+
+        assert requests[0].url.path == "/users/4/applications/follow-ups"
+        assert dict(requests[0].url.params) == {"limit": "5", "offset": "10"}
+
+    asyncio.run(scenario())
+
+
 def test_create_profile_draft_from_cv_calls_multipart_endpoint() -> None:
     async def scenario() -> None:
         requests: list[httpx.Request] = []

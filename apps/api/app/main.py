@@ -11,6 +11,8 @@ from app.models import ApplicationStatus, Job
 from app.schemas import (
     ApplicationCreateIn,
     ApplicationDetailOut,
+    ApplicationFollowUpOut,
+    ApplicationFollowUpsPageOut,
     ApplicationLearningSummaryOut,
     ApplicationListItemOut,
     ApplicationOut,
@@ -41,6 +43,7 @@ from app.services.applications import (
     get_application_for_user,
     get_application_status_history,
     list_applications_for_user,
+    list_application_follow_ups,
     normalize_application_search_query,
     InvalidApplicationSearchQueryError,
     save_application_for_user,
@@ -320,6 +323,34 @@ def read_applications(
                 ai_enrichment_status=job.ai_enrichment_status,
             )
             for application, job in rows[:limit]
+        ],
+        has_next=len(rows) > limit,
+    )
+
+
+@app.get(
+    "/users/{user_id}/applications/follow-ups",
+    response_model=ApplicationFollowUpsPageOut,
+)
+def read_application_follow_ups(
+    user_id: int,
+    limit: int = Query(default=5, ge=1, le=5),
+    offset: int = Query(default=0, ge=0),
+    session: Session = Depends(get_session),
+) -> ApplicationFollowUpsPageOut:
+    rows = list_application_follow_ups(session, user_id, limit=limit, offset=offset)
+    return ApplicationFollowUpsPageOut(
+        items=[
+            ApplicationFollowUpOut(
+                application_id=application.id,
+                title=job.title,
+                company=job.company,
+                status=ApplicationStatus(application.status),
+                next_action=application.next_action,
+                next_action_due_on=application.next_action_due_on,
+                due_state=due_state,
+            )
+            for application, job, due_state in rows[:limit]
         ],
         has_next=len(rows) > limit,
     )
