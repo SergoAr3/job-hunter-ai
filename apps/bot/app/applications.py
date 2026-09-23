@@ -71,6 +71,9 @@ PAGE_SIZE = 5
 APPLICATIONS_EMPTY_MESSAGE = "Сохранённых вакансий пока нет."
 APPLICATIONS_LOAD_ERROR_MESSAGE = "Не удалось загрузить вакансии. Попробуй ещё раз."
 APPLICATION_NOT_FOUND_MESSAGE = "Вакансия больше недоступна."
+MATCH_LEARNING_DISCLAIMER = (
+    "Это наблюдения по вашим отметкам на текущий момент, не прогноз."
+)
 APPLICATIONS_NOTE_TOKEN = "applications_note_token"
 APPLICATIONS_NOTE_VIEW = "note_input"
 APPLICATIONS_NEXT_ACTION_TOKEN = "applications_next_action_token"
@@ -962,7 +965,12 @@ async def _handle_follow_ups_callback(
         await _show_application_detail(message, state, api_client, user_id, int(value), offset)
 
 
-def _format_application_learning_summary(summary: dict[str, object]) -> str:
+def _format_application_learning_summary(
+    summary: dict[str, object],
+    match_summary: dict[str, object] | None = None,
+    *,
+    match_unavailable: bool = False,
+) -> str:
     incomplete = summary["history_missing_count"] + summary["funnel_incomplete_count"]
     text = (
         "📊 Статистика поиска\n\n"
@@ -980,7 +988,157 @@ def _format_application_learning_summary(summary: dict[str, object]) -> str:
     )
     if incomplete:
         text += f"\n\n⚠️ Неполная история: {incomplete}"
-    return text + "\n\nСтатистика рассчитана по вашим отметкам."
+    text += "\n\nСтатистика рассчитана по вашим отметкам."
+    if match_summary is not None:
+        text += "\n\n" + _format_match_learning_summary(match_summary)
+        return _limit_learning_summary(text, MATCH_LEARNING_DISCLAIMER)
+    if match_unavailable:
+        text += "\n\n📊 Matching на момент отклика\n\nНе удалось загрузить исторические данные Matching."
+    return _truncate_utf16(text, 4096)
+
+
+def _format_match_learning_summary(summary: dict[str, object]) -> str:
+    coverage = summary["snapshot_coverage"]
+    versions = summary["algorithm_versions"]
+    assert isinstance(coverage, dict)
+    assert isinstance(versions, list)
+    captured = int(coverage["captured_count"])
+    applied = int(coverage["applied_application_count"])
+    lines = ["📊 Matching на момент отклика", ""]
+    lines.append(
+        f"Данных для анализа: {captured} из {applied} {_pluralize_application_genitive(applied)}"
+    )
+    legacy = int(coverage["legacy_without_snapshot_count"])
+    unavailable = int(coverage["unavailable_count"])
+    invalid_anchor = int(coverage["invalid_anchor_count"])
+    if legacy:
+        lines.append(
+            f"{legacy} {_pluralize_application(legacy)} были сохранены до появления истории Matching."
+        )
+    if unavailable:
+        lines.append(
+            f"Matching был недоступен для {unavailable} "
+            f"{_pluralize_application_genitive(unavailable)}."
+        )
+    if invalid_anchor:
+        lines.append(
+            f"{invalid_anchor} {_pluralize_record(invalid_anchor)} не удалось включить в анализ."
+        )
+
+    if len(versions) > 1:
+        lines.extend([
+            "",
+            "Оценки рассчитаны разными версиями Matching, поэтому результаты показаны отдельно.",
+        ])
+    has_comparable_bucket = any(
+        isinstance(raw_version, dict)
+        and isinstance(raw_version["score_buckets"], list)
+        and any(
+            isinstance(raw_bucket, dict)
+            and int(raw_bucket["application_count"]) >= 5
+            for raw_bucket in raw_version["score_buckets"]
+        )
+        for raw_version in versions
+    )
+    for raw_version in versions:
+        assert isinstance(raw_version, dict)
+        algorithm_version = " ".join(str(raw_version["algorithm_version"]).split())
+        if len(versions) > 1:
+            lines.extend(["", f"Версия {_truncate_utf16(algorithm_version, 64)}"])
+        buckets = raw_version["score_buckets"]
+        assert isinstance(buckets, list)
+        for raw_bucket in buckets:
+            assert isinstance(raw_bucket, dict)
+            application_count = int(raw_bucket["application_count"])
+            if application_count == 0:
+                continue
+            lines.extend([
+                "",
+                f"{_match_learning_bucket_label(raw_bucket['bucket'])} · "
+                f"{raw_bucket['score_min']}–{raw_bucket['score_max']}",
+                f"{application_count} {_pluralize_application(application_count)}",
+            ])
+            if application_count < 5:
+                continue
+            outcomes = raw_bucket["outcomes"]
+            assert isinstance(outcomes, dict)
+            for status, label in (
+                ("recruiter_response", "Ответ HR"),
+                ("interview", "Интервью"),
+                ("offer", "Оффер"),
+                ("hired", "Выход на работу"),
+                ("withdrawn", "Прекратил сам"),
+            ):
+                lines.append(f"{label}: {_format_match_learning_rate(outcomes[status])}")
+        insufficient = int(raw_version["insufficient_data_count"])
+        if insufficient:
+            lines.extend([
+                "",
+                f"Для {insufficient} {_pluralize_application_genitive(insufficient)} "
+                "не хватило данных для оценки Matching.",
+            ])
+
+    if not has_comparable_bucket and versions:
+        lines.extend([
+            "",
+            "Пока данных недостаточно, чтобы сравнивать результаты для разных уровней совпадения.",
+        ])
+
+    lines.extend(["", MATCH_LEARNING_DISCLAIMER])
+    return "\n".join(lines)
+
+
+def _format_match_learning_rate(conversion: object) -> str:
+    assert isinstance(conversion, dict)
+    numerator = int(conversion["numerator"])
+    denominator = int(conversion["denominator"])
+    percentage = conversion["percentage"]
+    if denominator == 0 or percentage is None:
+        return "нет данных"
+    percentage_text = str(percentage).replace(".0", "").replace(".", ",")
+    return f"{numerator} из {denominator} · {percentage_text}%"
+
+
+def _match_learning_bucket_label(bucket: object) -> str:
+    return {
+        "high": "Высокое совпадение",
+        "medium": "Среднее совпадение",
+        "low": "Низкое совпадение",
+    }[str(bucket)]
+
+
+def _pluralize_application(count: int) -> str:
+    return _pluralize_russian(count, "отклик", "отклика", "откликов")
+
+
+def _pluralize_application_genitive(count: int) -> str:
+    remainder = abs(count) % 100
+    return "отклика" if remainder % 10 == 1 and remainder != 11 else "откликов"
+
+
+def _pluralize_record(count: int) -> str:
+    return _pluralize_russian(count, "запись", "записи", "записей")
+
+
+def _pluralize_russian(count: int, one: str, few: str, many: str) -> str:
+    remainder = abs(count) % 100
+    if 11 <= remainder <= 14:
+        return many
+    remainder %= 10
+    if remainder == 1:
+        return one
+    if 2 <= remainder <= 4:
+        return few
+    return many
+
+
+def _limit_learning_summary(text: str, suffix: str) -> str:
+    if _utf16_units(text) <= 4096:
+        return text
+    preserved_suffix = f"\n\nПоказана только часть статистики.\n\n{suffix}"
+    body = text.removesuffix(suffix).rstrip()
+    budget = 4096 - _utf16_units(preserved_suffix)
+    return _truncate_utf16(body, budget) + preserved_suffix
 
 
 async def _show_application_learning_summary(
@@ -997,10 +1155,19 @@ async def _show_application_learning_summary(
             _application_learning_summary_keyboard(offset), canonical_target=True,
         )
         return
+    match_summary: dict[str, object] | None = None
+    match_unavailable = False
+    try:
+        match_summary = await api_client.get_application_match_learning_summary(user_id)
+    except httpx.HTTPError:
+        match_unavailable = True
+        logger.warning("Could not load application match learning summary", exc_info=True)
     if (await state.get_data()).get(APPLICATIONS_MESSAGE_ID) != message.message_id:
         return
     await _replace_or_send(
-        message, state, _format_application_learning_summary(summary),
+        message, state, _format_application_learning_summary(
+            summary, match_summary, match_unavailable=match_unavailable,
+        ),
         _application_learning_summary_keyboard(offset), canonical_target=True,
     )
     await state.update_data({APPLICATIONS_VIEW: APPLICATIONS_SUMMARY_VIEW, APPLICATIONS_LIST_TOKEN: None})

@@ -14,6 +14,7 @@ from app.schemas import (
     ApplicationFollowUpOut,
     ApplicationFollowUpsPageOut,
     ApplicationLearningSummaryOut,
+    ApplicationMatchLearningSummaryOut,
     ApplicationListItemOut,
     ApplicationOut,
     ApplicationNotePutIn,
@@ -52,6 +53,7 @@ from app.services.applications import (
     set_application_next_action,
 )
 from app.services.application_learning import build_application_learning_summary
+from app.services.application_match_learning import build_application_match_learning_summary
 from app.services.job_matching import calculate_match
 from app.services.cv_profile_draft import (
     ERROR_AI_PROVIDER,
@@ -365,6 +367,18 @@ def read_application_learning_summary(
 ) -> ApplicationLearningSummaryOut:
     return ApplicationLearningSummaryOut.model_validate(
         build_application_learning_summary(session, user_id)
+    )
+
+
+@app.get(
+    "/users/{user_id}/applications/match-learning-summary",
+    response_model=ApplicationMatchLearningSummaryOut,
+)
+def read_application_match_learning_summary(
+    user_id: int, session: Session = Depends(get_session),
+) -> ApplicationMatchLearningSummaryOut:
+    return ApplicationMatchLearningSummaryOut.model_validate(
+        build_application_match_learning_summary(session, user_id)
     )
 
 
