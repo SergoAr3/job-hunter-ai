@@ -109,7 +109,7 @@ def save_application_for_user(
         job, job_created = _get_or_create_job(
             session, normalized_url, detect_job_source(normalized_url)
         )
-        application, application_created = _get_or_create_application(session, user_id, job.id)
+        application, application_created = get_or_create_application(session, user_id, job.id)
         job_id = job.id
         job_url = job.source_url
         session.commit()
@@ -125,7 +125,7 @@ def save_application_for_user(
         job = session.get(Job, job_id)
         if job is None:
             raise RuntimeError("Saved job disappeared before AI enrichment")
-        _run_ai_enrichment(session, job, ai_service, merge_existing=not job_created)
+        run_job_ai_enrichment(session, job, ai_service, merge_existing=not job_created)
     job = session.get(Job, job_id)
     if job is None:
         raise RuntimeError("Saved job disappeared")
@@ -215,7 +215,7 @@ def _merge_deterministic_data(job: Job, values: dict[str, object]) -> bool:
     return source_text_added
 
 
-def _run_ai_enrichment(
+def run_job_ai_enrichment(
     session: Session,
     job: Job,
     service: JobAIEnrichmentService,
@@ -379,7 +379,7 @@ def _get_or_create_job(session: Session, source_url: str, source: str) -> tuple[
     return job, True
 
 
-def _get_or_create_application(session: Session, user_id: int, job_id: int) -> tuple[Application, bool]:
+def get_or_create_application(session: Session, user_id: int, job_id: int) -> tuple[Application, bool]:
     application = session.scalar(
         select(Application).where(Application.user_id == user_id, Application.job_id == job_id)
     )

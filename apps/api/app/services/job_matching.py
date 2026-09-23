@@ -2,10 +2,18 @@ from __future__ import annotations
 
 import re
 import unicodedata
+from dataclasses import dataclass
 from decimal import Decimal
 
 from app.models import Application, Job, UserProfile
-from app.schemas import MatchComponentOut, MatchInputStateOut, MatchReasonOut, MatchRecommendationOut, MatchResultOut
+from app.schemas import (
+    MatchComponentOut,
+    MatchInputStateOut,
+    MatchPreviewOut,
+    MatchReasonOut,
+    MatchRecommendationOut,
+    MatchResultOut,
+)
 from app.services.match_aliases import (
     LANGUAGE_ALIASES,
     ROLE_PHRASE_ALIASES,
@@ -28,6 +36,27 @@ WEIGHTS = {
 }
 _SENIORITY_ORDER = {"intern": 0, "junior": 1, "middle": 2, "senior": 3, "lead": 4}
 _LEVEL_ORDER = {"a1": 1, "a2": 2, "b1": 3, "b2": 4, "c1": 5, "c2": 6, "fluent": 6, "native": 7}
+
+
+@dataclass(frozen=True)
+class MatchEvidenceAvailability:
+    skills: bool
+    languages: bool
+    location: bool
+
+
+@dataclass(frozen=True)
+class _MatchCoreResult:
+    score: int | None
+    verdict: str
+    coverage: int
+    confidence: str | None
+    components: dict[str, MatchComponentOut]
+    strengths: list[MatchReasonOut]
+    gaps: list[MatchReasonOut]
+    unknowns: list[MatchReasonOut]
+    conflicts: list[MatchReasonOut]
+    recommendation: MatchRecommendationOut
 
 
 def serialize_match_inputs(profile: UserProfile, job: Job) -> dict[str, object]:
@@ -76,19 +105,79 @@ def canonical_skill(value: str) -> str:
 
 
 def calculate_match(profile: UserProfile, job: Job, application: Application) -> MatchResultOut:
+    ai_evidence_available = job.ai_enrichment_status == "success"
+    core = _calculate_match_core(
+        profile,
+        job,
+        MatchEvidenceAvailability(
+            skills=ai_evidence_available,
+            languages=ai_evidence_available,
+            location=job.workplace_type in {"onsite", "hybrid"},
+        ),
+    )
+    return MatchResultOut(
+        algorithm_version=ALGORITHM_VERSION,
+        application_id=application.id,
+        job_id=job.id,
+        score=core.score,
+        verdict=core.verdict,
+        coverage=core.coverage,
+        confidence=core.confidence,
+        input_state=MatchInputStateOut(
+            profile_updated_at=profile.updated_at,
+            job_updated_at=job.updated_at,
+            parsing_status=job.parsing_status,
+            ai_enrichment_status=job.ai_enrichment_status,
+        ),
+        components=core.components,
+        strengths=core.strengths,
+        gaps=core.gaps,
+        unknowns=core.unknowns,
+        conflicts=core.conflicts,
+        recommendation=core.recommendation,
+    )
+
+
+def calculate_match_preview(
+    profile: UserProfile,
+    job: Job,
+    *,
+    evidence: MatchEvidenceAvailability,
+) -> MatchPreviewOut:
+    core = _calculate_match_core(profile, job, evidence)
+    return MatchPreviewOut(
+        available=True,
+        algorithm_version=ALGORITHM_VERSION,
+        score=core.score,
+        verdict=core.verdict,
+        coverage=core.coverage,
+        confidence=core.confidence,
+        components=core.components,
+        strengths=core.strengths,
+        gaps=core.gaps,
+        unknowns=core.unknowns,
+        conflicts=core.conflicts,
+        recommendation=core.recommendation,
+    )
+
+
+def _calculate_match_core(
+    profile: UserProfile,
+    job: Job,
+    evidence: MatchEvidenceAvailability,
+) -> _MatchCoreResult:
     components: dict[str, MatchComponentOut] = {}
     conflicts: list[MatchReasonOut] = []
 
     components["role"] = _role_component(profile.target_roles, job.title)
 
-    skills_available = job.ai_enrichment_status == "success"
-    components["required_skills"] = _skills_component(profile.skills, job.required_skills, skills_available, "required_skills")
-    components["nice_to_have_skills"] = _skills_component(profile.skills, job.nice_to_have_skills, skills_available, "nice_to_have_skills")
+    components["required_skills"] = _skills_component(profile.skills, job.required_skills, evidence.skills, "required_skills")
+    components["nice_to_have_skills"] = _skills_component(profile.skills, job.nice_to_have_skills, evidence.skills, "nice_to_have_skills")
 
     components["seniority"] = _seniority_component(profile.experience, job.seniority)
-    components["languages"] = _languages_component(profile.languages, job.language_requirements, skills_available)
+    components["languages"] = _languages_component(profile.languages, job.language_requirements, evidence.languages)
     components["workplace"] = _workplace_component(profile.workplace_preference, job.workplace_type)
-    components["location"] = _location_component(profile.location, job.location, job.workplace_type)
+    components["location"] = _location_component(profile.location, job.location, evidence.location)
     components["salary"], salary_conflict = _salary_component(profile, job)
     if salary_conflict:
         conflicts.append(MatchReasonOut(code="salary_below_minimum", component="salary"))
@@ -106,23 +195,14 @@ def calculate_match(profile: UserProfile, job: Job, application: Application) ->
         verdict = "high" if score >= 75 else "medium" if score >= 50 else "low"
         confidence = _confidence(coverage)
 
-    strengths, gaps, unknowns = _explanation_reasons(profile, job, components, skills_available)
+    strengths, gaps, unknowns = _explanation_reasons(profile, job, components, evidence)
     recommendation = _recommendation(verdict, conflicts, gaps, unknowns)
 
-    return MatchResultOut(
-        algorithm_version=ALGORITHM_VERSION,
-        application_id=application.id,
-        job_id=job.id,
+    return _MatchCoreResult(
         score=score,
         verdict=verdict,
         coverage=coverage,
         confidence=confidence,
-        input_state=MatchInputStateOut(
-            profile_updated_at=profile.updated_at,
-            job_updated_at=job.updated_at,
-            parsing_status=job.parsing_status,
-            ai_enrichment_status=job.ai_enrichment_status,
-        ),
         components=components,
         strengths=strengths,
         gaps=gaps,
@@ -285,8 +365,8 @@ def _workplace_component(preference: str, workplace: str) -> MatchComponentOut:
     return _component("workplace", 0, "mismatch", missing=[workplace])
 
 
-def _location_component(locations: list[str], job_location: str | None, workplace: str) -> MatchComponentOut:
-    if workplace not in {"onsite", "hybrid"} or not job_location or not locations:
+def _location_component(locations: list[str], job_location: str | None, available: bool) -> MatchComponentOut:
+    if not available or not job_location or not locations:
         return _component("location", None, "unknown")
     if normalize_text(job_location) in {normalize_text(location) for location in locations}:
         return _component("location", 100, "matched", [job_location])
@@ -315,7 +395,10 @@ def _annual_amount(amount: Decimal, period: str) -> Decimal:
 
 
 def _explanation_reasons(
-    profile: UserProfile, job: Job, components: dict[str, MatchComponentOut], skills_available: bool
+    profile: UserProfile,
+    job: Job,
+    components: dict[str, MatchComponentOut],
+    evidence: MatchEvidenceAvailability,
 ) -> tuple[list[MatchReasonOut], list[MatchReasonOut], list[MatchReasonOut]]:
     strengths: list[MatchReasonOut] = []
     gaps: list[MatchReasonOut] = []
@@ -340,7 +423,7 @@ def _explanation_reasons(
         value = components[component]
         strengths.extend(MatchReasonOut(code=match_code, component=component, value=item) for item in value.matched)
         gaps.extend(MatchReasonOut(code=gap_code, component=component, value=item) for item in value.missing)
-    if not skills_available and (job.required_skills or job.nice_to_have_skills):
+    if not evidence.skills and (job.required_skills or job.nice_to_have_skills):
         unknowns.append(MatchReasonOut(code="vacancy_skills_unavailable", component="required_skills"))
     elif job.required_skills and not profile.skills:
         unknowns.append(MatchReasonOut(code="profile_skills_missing", component="required_skills"))
@@ -357,7 +440,7 @@ def _explanation_reasons(
 
     languages = components["languages"]
     strengths.extend(MatchReasonOut(code="language_level_sufficient", component="languages", value=item) for item in languages.matched)
-    if skills_available and job.language_requirements:
+    if evidence.languages and job.language_requirements:
         parsed = [_parse_language_requirement(item) for item in job.language_requirements]
         usable = [(language, level, raw) for language, level, raw in parsed if language is not None and level is not None]
         if not usable:
@@ -370,7 +453,7 @@ def _explanation_reasons(
                     gaps.append(MatchReasonOut(code="language_not_listed", component="languages", value=raw))
                 elif actual < level:
                     gaps.append(MatchReasonOut(code="language_level_below_requirement", component="languages", value=raw))
-    elif not skills_available and job.language_requirements:
+    elif not evidence.languages and job.language_requirements:
         unknowns.append(MatchReasonOut(code="vacancy_language_requirements_unavailable", component="languages"))
 
     workplace = components["workplace"]

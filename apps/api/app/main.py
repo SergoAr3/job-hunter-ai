@@ -25,6 +25,8 @@ from app.schemas import (
     ApplicationSort,
     ApplicationsPageOut,
     CVProfileDraftOut,
+    DiscoverJobSaveIn,
+    DiscoverJobsPageOut,
     JobOut,
     ProfileLanguagesNormalizeIn,
     ProfileExperienceFactIn,
@@ -55,6 +57,14 @@ from app.services.applications import (
 from app.services.application_learning import build_application_learning_summary
 from app.services.application_match_learning import build_application_match_learning_summary
 from app.services.job_matching import calculate_match
+from app.services.discover import (
+    SourceIdentityConflictError,
+    UnsupportedDiscoverSourceError,
+    UnsupportedMarketError,
+    save_discovered_job,
+    search_discover_jobs,
+)
+from app.services.trudvsem import TrudvsemClient, TrudvsemError
 from app.services.cv_profile_draft import (
     ERROR_AI_PROVIDER,
     ERROR_AI_TIMEOUT,
@@ -125,6 +135,7 @@ app.add_middleware(CVUploadBodyLimitMiddleware)
 enrichment_service = VacancyEnrichmentService()
 ai_enrichment_service = JobAIEnrichmentService()
 cv_profile_draft_ai_service = CVProfileDraftAIService()
+trudvsem_client = TrudvsemClient()
 
 CV_DRAFT_ERROR_STATUS = {
     ERROR_USER_NOT_FOUND: status.HTTP_404_NOT_FOUND,
@@ -138,6 +149,16 @@ CV_DRAFT_ERROR_STATUS = {
     ERROR_AI_UNAVAILABLE: status.HTTP_503_SERVICE_UNAVAILABLE,
     ERROR_AI_TIMEOUT: status.HTTP_504_GATEWAY_TIMEOUT,
 }
+
+
+def _discover_source_error(error: TrudvsemError) -> HTTPException:
+    status_code = {
+        "source_timeout": status.HTTP_504_GATEWAY_TIMEOUT,
+        "source_rate_limited": status.HTTP_429_TOO_MANY_REQUESTS,
+        "source_bad_response": status.HTTP_502_BAD_GATEWAY,
+        "vacancy_not_found": status.HTTP_404_NOT_FOUND,
+    }.get(error.code, status.HTTP_503_SERVICE_UNAVAILABLE)
+    return HTTPException(status_code=status_code, detail={"code": error.code})
 
 
 @app.get("/health")
@@ -290,6 +311,73 @@ def save_application(
         application=ApplicationOut.model_validate(application),
         job_created=job_created,
         application_created=application_created,
+    )
+
+
+@app.get("/users/{user_id}/discover/jobs", response_model=DiscoverJobsPageOut)
+def discover_jobs(
+    user_id: int,
+    market_country: str = Query(min_length=2, max_length=2),
+    query: str = Query(min_length=1, max_length=200),
+    region_code: str | None = Query(default=None, min_length=1, max_length=32),
+    remote_only: bool = Query(default=False),
+    limit: int = Query(default=10, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+    session: Session = Depends(get_session),
+) -> DiscoverJobsPageOut:
+    try:
+        return search_discover_jobs(
+            session,
+            user_id,
+            market_country=market_country,
+            query=query,
+            limit=limit,
+            offset=offset,
+            region_code=region_code,
+            remote_only=remote_only,
+            client=trudvsem_client,
+        )
+    except UnsupportedMarketError as error:
+        raise HTTPException(status_code=422, detail={"code": error.code}) from error
+    except UserNotFoundError as error:
+        raise HTTPException(status_code=404, detail={"code": "USER_NOT_FOUND"}) from error
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail={"code": "INVALID_DISCOVER_QUERY"}) from error
+    except TrudvsemError as error:
+        raise _discover_source_error(error) from error
+
+
+@app.post("/users/{user_id}/discover/jobs/save", response_model=SavedApplicationOut)
+def save_discover_job(
+    user_id: int,
+    payload: DiscoverJobSaveIn,
+    session: Session = Depends(get_session),
+) -> SavedApplicationOut:
+    try:
+        result = save_discovered_job(
+            session,
+            user_id,
+            source=payload.source,
+            source_scope=payload.source_scope,
+            external_id=payload.external_id,
+            client=trudvsem_client,
+            ai_service=ai_enrichment_service,
+        )
+    except UnsupportedDiscoverSourceError as error:
+        raise HTTPException(status_code=422, detail={"code": error.code}) from error
+    except UserNotFoundError as error:
+        raise HTTPException(status_code=404, detail={"code": "USER_NOT_FOUND"}) from error
+    except SourceIdentityConflictError as error:
+        raise HTTPException(status_code=409, detail={"code": error.code}) from error
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail={"code": "INVALID_SOURCE_IDENTITY"}) from error
+    except TrudvsemError as error:
+        raise _discover_source_error(error) from error
+    return SavedApplicationOut(
+        job=JobOut.model_validate(result.job),
+        application=ApplicationOut.model_validate(result.application),
+        job_created=result.job_created,
+        application_created=result.application_created,
     )
 
 
