@@ -166,10 +166,12 @@ class JobSource(str, Enum):
     GREENHOUSE = "greenhouse"
     LEVER = "lever"
     COMPANY_SITE = "company_site"
+    TRUDVSEM = "trudvsem"
 
 
 class IngestionMethod(str, Enum):
     MANUAL = "manual"
+    DISCOVER = "discover"
 
 
 class ParsingStatus(str, Enum):
@@ -190,8 +192,16 @@ class AIEnrichmentStatus(str, Enum):
 class Job(Base):
     __tablename__ = "jobs"
     __table_args__ = (
-        CheckConstraint("source IN ('linkedin', 'hh', 'greenhouse', 'lever', 'company_site')", name="ck_jobs_source"),
-        CheckConstraint("ingestion_method IN ('manual')", name="ck_jobs_ingestion_method"),
+        CheckConstraint("source IN ('linkedin', 'hh', 'greenhouse', 'lever', 'company_site', 'trudvsem')", name="ck_jobs_source"),
+        CheckConstraint("ingestion_method IN ('manual', 'discover')", name="ck_jobs_ingestion_method"),
+        CheckConstraint(
+            "(external_id IS NULL AND source_scope IS NULL) OR "
+            "(external_id IS NOT NULL AND source_scope IS NOT NULL)",
+            name="ck_jobs_external_identity_block",
+        ),
+        UniqueConstraint(
+            "source", "source_scope", "external_id", name="uq_jobs_external_identity"
+        ),
         CheckConstraint("salary_period IN ('hour', 'day', 'week', 'month', 'year', 'unknown')", name="ck_jobs_salary_period"),
         CheckConstraint("workplace_type IN ('remote', 'hybrid', 'onsite', 'unknown')", name="ck_jobs_workplace_type"),
         CheckConstraint("employment_type IN ('full_time', 'part_time', 'contract', 'internship', 'temporary', 'unknown')", name="ck_jobs_employment_type"),
@@ -208,6 +218,10 @@ class Job(Base):
     source: Mapped[str] = mapped_column(String(32), nullable=False)
     ingestion_method: Mapped[str] = mapped_column(String(16), nullable=False, default="manual", server_default="manual")
     source_url: Mapped[str] = mapped_column(String(2048), nullable=False, unique=True)
+    external_id: Mapped[str | None] = mapped_column(String(255))
+    source_scope: Mapped[str | None] = mapped_column(String(255))
+    source_updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    fetched_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     title: Mapped[str | None] = mapped_column(String(512))
     company: Mapped[str | None] = mapped_column(String(512))
     description: Mapped[str | None] = mapped_column(String)

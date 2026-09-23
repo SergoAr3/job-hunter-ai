@@ -266,6 +266,10 @@ class JobOut(BaseModel):
     source: str
     ingestion_method: str
     source_url: str
+    external_id: str | None = None
+    source_scope: str | None = None
+    source_updated_at: datetime | None = None
+    fetched_at: datetime | None = None
     title: str | None
     company: str | None
     description: str | None
@@ -533,3 +537,55 @@ class MatchResultOut(BaseModel):
     unknowns: list[MatchReasonOut]
     conflicts: list[MatchReasonOut]
     recommendation: MatchRecommendationOut
+
+
+class MatchPreviewOut(BaseModel):
+    available: bool
+    unavailable_reason: str | None = None
+    algorithm_version: str | None = None
+    score: int | None = None
+    verdict: str | None = None
+    coverage: int | None = None
+    confidence: str | None = None
+    components: dict[str, MatchComponentOut] = Field(default_factory=dict)
+    strengths: list[MatchReasonOut] = Field(default_factory=list)
+    gaps: list[MatchReasonOut] = Field(default_factory=list)
+    unknowns: list[MatchReasonOut] = Field(default_factory=list)
+    conflicts: list[MatchReasonOut] = Field(default_factory=list)
+    recommendation: MatchRecommendationOut | None = None
+
+
+class DiscoverJobSaveIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    source: str = Field(min_length=1, max_length=32)
+    source_scope: str = Field(min_length=1, max_length=255)
+    external_id: str = Field(min_length=1, max_length=255)
+
+
+class DiscoverJobItemOut(BaseModel):
+    source: str
+    source_scope: str
+    external_id: str
+    source_url: str
+    title: str
+    company: str
+    location: str | None
+    workplace_type: str
+    salary_text: str | None
+    salary_min: float | None
+    salary_max: float | None
+    salary_currency: str | None
+    source_updated_at: datetime | None
+    preview_match: MatchPreviewOut
+    already_saved_for_user: bool
+
+
+class DiscoverJobsPageOut(BaseModel):
+    items: list[DiscoverJobItemOut]
+    source_total: int
+    returned_count: int
+    limit: int
+    offset: int
+    next_offset: int | None
+    locally_filtered: bool

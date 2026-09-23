@@ -3,7 +3,13 @@ from decimal import Decimal
 import pytest
 
 from app.models import Application, Job, UserProfile
-from app.services.job_matching import ALGORITHM_VERSION, WEIGHTS, calculate_match
+from app.services.job_matching import (
+    ALGORITHM_VERSION,
+    WEIGHTS,
+    MatchEvidenceAvailability,
+    calculate_match,
+    calculate_match_preview,
+)
 
 
 def profile(**changes: object) -> UserProfile:
@@ -71,6 +77,27 @@ def test_missing_required_skill_is_a_gap() -> None:
     assert result.components["required_skills"].score == 50
     assert result.components["required_skills"].missing == ["Kubernetes"]
     assert any(reason.code == "required_skill_not_listed" for reason in result.gaps)
+
+
+def test_preview_uses_explicit_source_evidence_without_fake_ai_success() -> None:
+    transient = job(ai_enrichment_status="not_attempted")
+
+    unavailable = calculate_match_preview(
+        profile(),
+        transient,
+        evidence=MatchEvidenceAvailability(skills=False, languages=False, location=False),
+    )
+    structured = calculate_match_preview(
+        profile(),
+        transient,
+        evidence=MatchEvidenceAvailability(skills=True, languages=True, location=False),
+    )
+
+    assert unavailable.components["required_skills"].score is None
+    assert structured.components["required_skills"].score == 100
+    assert transient.ai_enrichment_status == "not_attempted"
+    assert not hasattr(structured, "application_id")
+    assert not hasattr(structured, "job_id")
 
 
 @pytest.mark.parametrize(
