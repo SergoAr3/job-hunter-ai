@@ -31,6 +31,12 @@ class FollowUpDueState(str, Enum):
     UPCOMING = "upcoming"
 
 
+class MatchLearningScoreBucket(str, Enum):
+    HIGH = "high"
+    MEDIUM = "medium"
+    LOW = "low"
+
+
 class TelegramUserIn(BaseModel):
     telegram_id: int = Field(gt=0)
     username: str | None = Field(default=None, max_length=255)
@@ -427,6 +433,51 @@ class ApplicationLearningSummaryOut(BaseModel):
     history_missing_count: int
     funnel_incomplete_count: int
     as_of: datetime
+
+    @field_validator("as_of")
+    @classmethod
+    def ensure_as_of_timezone(cls, value: datetime) -> datetime:
+        if value.tzinfo is None:
+            return value.replace(tzinfo=timezone.utc)
+        return value.astimezone(timezone.utc)
+
+
+class ApplicationMatchLearningCoverageOut(BaseModel):
+    applied_application_count: int
+    captured_count: int
+    unavailable_count: int
+    legacy_without_snapshot_count: int
+    invalid_anchor_count: int
+
+
+class ApplicationMatchLearningOutcomesOut(BaseModel):
+    recruiter_response: ApplicationLearningConversionOut
+    interview: ApplicationLearningConversionOut
+    offer: ApplicationLearningConversionOut
+    hired: ApplicationLearningConversionOut
+    withdrawn: ApplicationLearningConversionOut
+
+
+class ApplicationMatchLearningScoreBucketOut(BaseModel):
+    bucket: MatchLearningScoreBucket
+    score_min: int
+    score_max: int
+    application_count: int
+    outcomes: ApplicationMatchLearningOutcomesOut
+
+
+class ApplicationMatchLearningVersionOut(BaseModel):
+    algorithm_version: str
+    captured_count: int
+    scored_count: int
+    insufficient_data_count: int
+    score_buckets: list[ApplicationMatchLearningScoreBucketOut]
+
+
+class ApplicationMatchLearningSummaryOut(BaseModel):
+    as_of: datetime
+    snapshot_coverage: ApplicationMatchLearningCoverageOut
+    algorithm_versions: list[ApplicationMatchLearningVersionOut]
 
     @field_validator("as_of")
     @classmethod

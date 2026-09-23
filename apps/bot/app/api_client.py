@@ -27,6 +27,10 @@ _APPLICATION_STATUS_VALUES = {
     "saved", "applied", "recruiter_response", "interview", "offer", "hired", "withdrawn", "rejected",
 }
 _FOLLOW_UP_DUE_STATES = {"overdue", "today", "upcoming"}
+_MATCH_LEARNING_BUCKETS = ("high", "medium", "low")
+_MATCH_LEARNING_OUTCOMES = {
+    "recruiter_response", "interview", "offer", "hired", "withdrawn",
+}
 
 
 def _is_aware_iso_datetime(value: object) -> bool:
@@ -37,6 +41,73 @@ def _is_aware_iso_datetime(value: object) -> bool:
     except ValueError:
         return False
     return parsed.tzinfo is not None and parsed.utcoffset() is not None
+
+
+def _is_match_learning_summary(payload: dict[str, object]) -> bool:
+    coverage = payload.get("snapshot_coverage")
+    versions = payload.get("algorithm_versions")
+    coverage_fields = {
+        "applied_application_count", "captured_count", "unavailable_count",
+        "legacy_without_snapshot_count", "invalid_anchor_count",
+    }
+    if (
+        not _is_aware_iso_datetime(payload.get("as_of"))
+        or not isinstance(coverage, dict)
+        or set(coverage) != coverage_fields
+        or not all(_is_nonnegative_int(coverage.get(field)) for field in coverage_fields)
+        or not isinstance(versions, list)
+    ):
+        return False
+    return all(_is_match_learning_version(version) for version in versions)
+
+
+def _is_match_learning_version(value: object) -> bool:
+    if not isinstance(value, dict):
+        return False
+    buckets = value.get("score_buckets")
+    if (
+        not isinstance(value.get("algorithm_version"), str)
+        or not value["algorithm_version"]
+        or not all(_is_nonnegative_int(value.get(field)) for field in (
+            "captured_count", "scored_count", "insufficient_data_count",
+        ))
+        or not isinstance(buckets, list)
+        or [bucket.get("bucket") if isinstance(bucket, dict) else None for bucket in buckets]
+        != list(_MATCH_LEARNING_BUCKETS)
+    ):
+        return False
+    return all(_is_match_learning_bucket(bucket) for bucket in buckets)
+
+
+def _is_match_learning_bucket(value: object) -> bool:
+    if not isinstance(value, dict):
+        return False
+    outcomes = value.get("outcomes")
+    if (
+        value.get("bucket") not in _MATCH_LEARNING_BUCKETS
+        or not all(_is_nonnegative_int(value.get(field)) for field in (
+            "score_min", "score_max", "application_count",
+        ))
+        or not isinstance(outcomes, dict)
+        or set(outcomes) != _MATCH_LEARNING_OUTCOMES
+    ):
+        return False
+    return all(_is_match_learning_conversion(conversion) for conversion in outcomes.values())
+
+
+def _is_match_learning_conversion(value: object) -> bool:
+    if not isinstance(value, dict) or set(value) != {"numerator", "denominator", "percentage"}:
+        return False
+    percentage = value.get("percentage")
+    return (
+        _is_nonnegative_int(value.get("numerator"))
+        and _is_nonnegative_int(value.get("denominator"))
+        and (percentage is None or type(percentage) in (int, float))
+    )
+
+
+def _is_nonnegative_int(value: object) -> bool:
+    return type(value) is int and value >= 0
 
 
 class BotApiClient(Protocol):
@@ -57,6 +128,8 @@ class BotApiClient(Protocol):
     ) -> dict[str, object]: ...
 
     async def get_application_learning_summary(self, user_id: int) -> dict[str, object]: ...
+
+    async def get_application_match_learning_summary(self, user_id: int) -> dict[str, object]: ...
 
     async def list_application_follow_ups(
         self, user_id: int, *, limit: int, offset: int,
@@ -219,6 +292,19 @@ class JobHunterApiClient:
             )
         ):
             raise httpx.DecodingError("API response has invalid learning summary shape", request=response.request)
+        return payload
+
+    async def get_application_match_learning_summary(self, user_id: int) -> dict[str, object]:
+        response = await self._client.get(
+            f"/users/{user_id}/applications/match-learning-summary"
+        )
+        response.raise_for_status()
+        payload = _json_object(response)
+        if not _is_match_learning_summary(payload):
+            raise httpx.DecodingError(
+                "API response has invalid match learning summary shape",
+                request=response.request,
+            )
         return payload
 
     async def list_application_follow_ups(

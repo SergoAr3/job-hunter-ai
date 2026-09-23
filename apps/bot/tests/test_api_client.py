@@ -353,6 +353,69 @@ def test_follow_up_queue_client_contract_and_validation(due_state: str) -> None:
     asyncio.run(scenario())
 
 
+def test_match_learning_client_contract_and_validation() -> None:
+    async def scenario() -> None:
+        payload = {
+            "as_of": "2026-09-22T12:00:00+00:00",
+            "snapshot_coverage": {
+                "applied_application_count": 5,
+                "captured_count": 3,
+                "unavailable_count": 1,
+                "legacy_without_snapshot_count": 1,
+                "invalid_anchor_count": 0,
+            },
+            "algorithm_versions": [{
+                "algorithm_version": "job-match-v2.1",
+                "captured_count": 3,
+                "scored_count": 2,
+                "insufficient_data_count": 1,
+                "score_buckets": [
+                    {
+                        "bucket": bucket,
+                        "score_min": score_min,
+                        "score_max": score_max,
+                        "application_count": 2 if bucket == "high" else 0,
+                        "outcomes": {
+                            status: {
+                                "numerator": 1 if bucket == "high" and status == "interview" else 0,
+                                "denominator": 2 if bucket == "high" else 0,
+                                "percentage": None,
+                            }
+                            for status in (
+                                "recruiter_response", "interview", "offer", "hired", "withdrawn"
+                            )
+                        },
+                    }
+                    for bucket, score_min, score_max in (
+                        ("high", 75, 100), ("medium", 50, 74), ("low", 0, 49)
+                    )
+                ],
+            }],
+        }
+        requests: list[httpx.Request] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            requests.append(request)
+            return httpx.Response(200, json=payload, request=request)
+
+        client = JobHunterApiClient("http://api")
+        await client._client.aclose()
+        client._client = httpx.AsyncClient(
+            base_url="http://api", transport=httpx.MockTransport(handler)
+        )
+        try:
+            assert await client.get_application_match_learning_summary(4) == payload
+            payload["algorithm_versions"][0]["score_buckets"].reverse()
+            with pytest.raises(httpx.DecodingError):
+                await client.get_application_match_learning_summary(4)
+        finally:
+            await client.close()
+
+        assert requests[0].url.path == "/users/4/applications/match-learning-summary"
+
+    asyncio.run(scenario())
+
+
 def test_create_profile_draft_from_cv_calls_multipart_endpoint() -> None:
     async def scenario() -> None:
         requests: list[httpx.Request] = []
