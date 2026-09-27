@@ -381,6 +381,8 @@ def _discover_item(
         source_url=vacancy.source_url,
         title=vacancy.title,
         company=vacancy.company,
+        description=vacancy.description,
+        requirements_text=vacancy.requirements_text,
         location=vacancy.location,
         workplace_type=vacancy.workplace_type,
         salary_text=vacancy.salary_text,

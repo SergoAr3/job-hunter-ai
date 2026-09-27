@@ -18,6 +18,7 @@ from aiogram.types import (
 
 from app.api_client import BotApiClient
 from app.cv_profile import handle_cv_profile_setup
+from app.discover import DISCOVER_BUTTON, start_discover, remove_active_discover_inline_keyboard
 from app.jobs import handle_add_job, remove_active_match_inline_keyboard
 from app.applications import APPLICATIONS_BUTTON, handle_applications_menu, remove_active_applications_inline_keyboard
 from app.profile import (
@@ -41,7 +42,7 @@ logger = logging.getLogger(__name__)
 
 ADD_JOB_BUTTON = "💼 Добавить вакансию"
 PROFILE_BUTTON = "👤 Мой профиль"
-MENU_ACTIONS = {ADD_JOB_BUTTON, APPLICATIONS_BUTTON, PROFILE_BUTTON}
+MENU_ACTIONS = {ADD_JOB_BUTTON, DISCOVER_BUTTON, APPLICATIONS_BUTTON, PROFILE_BUTTON}
 PROFILE_SETUP_CALLBACK = "profile_section:setup"
 PROFILE_CV_CALLBACK = "profile_section:cv"
 PROFILE_REPLACE_CV_CONTINUE_CALLBACK = "profile_replace_cv:continue"
@@ -54,6 +55,7 @@ def main_menu_keyboard() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
         keyboard=[
             [KeyboardButton(text=ADD_JOB_BUTTON)],
+            [KeyboardButton(text=DISCOVER_BUTTON)],
             [KeyboardButton(text=APPLICATIONS_BUTTON)],
             [KeyboardButton(text=PROFILE_BUTTON)],
         ],
@@ -97,9 +99,12 @@ async def main_menu_action(
     await remove_active_profile_inline_keyboard(message, state)
     await remove_active_match_inline_keyboard(message, state)
     await remove_active_applications_inline_keyboard(message, state)
+    await remove_active_discover_inline_keyboard(message, state)
     await state.clear()
     if message.text == ADD_JOB_BUTTON:
         await handle_add_job(message, state)
+    elif message.text == DISCOVER_BUTTON:
+        await start_discover(message, state)
     elif message.text == APPLICATIONS_BUTTON:
         if api_client is None:
             await message.answer("Не удалось загрузить вакансии. Попробуй ещё раз.")

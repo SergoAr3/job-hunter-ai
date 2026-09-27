@@ -1,6 +1,7 @@
 import re
 from datetime import date, datetime
 from typing import Protocol, TypeGuard
+from urllib.parse import urlsplit
 
 import httpx
 from aiogram.types import User
@@ -31,6 +32,44 @@ _MATCH_LEARNING_BUCKETS = ("high", "medium", "low")
 _MATCH_LEARNING_OUTCOMES = {
     "recruiter_response", "interview", "offer", "hired", "withdrawn",
 }
+
+
+def _is_discover_item(value: object) -> bool:
+    if not isinstance(value, dict):
+        return False
+    url = value.get("source_url")
+    if not isinstance(url, str):
+        return False
+    try:
+        parsed = urlsplit(url)
+        valid_port = parsed.port in (None, 443)
+    except ValueError:
+        return False
+    preview = value.get("preview_match")
+    return (
+        parsed.scheme == "https"
+        and parsed.hostname == "trudvsem.ru"
+        and parsed.path.startswith("/vacancy/card/")
+        and not parsed.username
+        and not parsed.password
+        and valid_port
+        and value.get("source") == "trudvsem"
+        and all(isinstance(value.get(key), str) and bool(value[key]) for key in (
+            "source_scope", "external_id", "title", "company",
+        ))
+        and all(value.get(key) is None or isinstance(value.get(key), str) for key in (
+            "location", "description", "requirements_text", "salary_currency", "salary_text",
+        ))
+        and all(value.get(key) is None or type(value.get(key)) in (int, float) for key in (
+            "salary_min", "salary_max",
+        ))
+        and value.get("workplace_type") in {"remote", "unknown", "onsite", "hybrid"}
+        and type(value.get("already_saved_for_user")) is bool
+        and isinstance(preview, dict)
+        and type(preview.get("available")) is bool
+        and (preview.get("score") is None or type(preview.get("score")) is int)
+        and (preview.get("verdict") is None or isinstance(preview.get("verdict"), str))
+    )
 
 
 def _is_aware_iso_datetime(value: object) -> bool:
@@ -111,6 +150,10 @@ def _is_nonnegative_int(value: object) -> bool:
 
 
 class BotApiClient(Protocol):
+    async def discover_jobs(self, user_id: int, *, query: str, limit: int, offset: int) -> dict[str, object]: ...
+
+    async def save_discovered_job(self, user_id: int, *, source: str, source_scope: str, external_id: str) -> dict[str, object]: ...
+
     async def list_work_experiences(self, user_id: int) -> list[dict[str, object]]: ...
     async def save_work_experience(self, user_id: int, payload: dict, entry_id: int | None = None) -> dict: ...
     async def delete_work_experience(self, user_id: int, entry_id: int) -> None: ...
@@ -175,6 +218,55 @@ class BotApiClient(Protocol):
 
 
 class JobHunterApiClient:
+    async def discover_jobs(self, user_id: int, *, query: str, limit: int, offset: int) -> dict[str, object]:
+        response = await self._client.get(
+            f"/users/{user_id}/discover/jobs",
+            params={"market_country": "RU", "query": query, "limit": limit, "offset": offset},
+            timeout=35.0,
+        )
+        response.raise_for_status()
+        payload = _json_object(response)
+        items = payload.get("items")
+        next_offset = payload.get("next_offset")
+        if (
+            not isinstance(items, list)
+            or len(items) > limit
+            or "next_offset" not in payload
+            or type(payload.get("offset")) is not int
+            or payload["offset"] != offset
+            or (next_offset is not None and (type(next_offset) is not int or next_offset <= offset))
+            or not all(_is_discover_item(item) for item in items)
+        ):
+            raise httpx.DecodingError("Invalid Discover search response", request=response.request)
+        return payload
+
+    async def save_discovered_job(self, user_id: int, *, source: str, source_scope: str, external_id: str) -> dict[str, object]:
+        response = await self._client.post(
+            f"/users/{user_id}/discover/jobs/save",
+            json={"source": source, "source_scope": source_scope, "external_id": external_id},
+            timeout=60.0,
+        )
+        response.raise_for_status()
+        payload = _json_object(response)
+        application, job = payload.get("application"), payload.get("job")
+        if (
+            not isinstance(application, dict)
+            or not isinstance(job, dict)
+            or type(application.get("id")) is not int
+            or type(application.get("user_id")) is not int
+            or application["user_id"] != user_id
+            or type(application.get("job_id")) is not int
+            or type(job.get("id")) is not int
+            or application["job_id"] != job["id"]
+            or job.get("source") != source
+            or job.get("source_scope") != source_scope
+            or job.get("external_id") != external_id
+            or type(payload.get("application_created")) is not bool
+            or type(payload.get("job_created")) is not bool
+        ):
+            raise httpx.DecodingError("Invalid Discover save response", request=response.request)
+        return payload
+
     async def list_work_experiences(self, user_id: int) -> list[dict[str, object]]:
         response = await self._client.get(f"/users/{user_id}/profile/work-experiences")
         response.raise_for_status()
