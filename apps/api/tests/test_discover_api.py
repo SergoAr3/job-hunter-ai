@@ -99,6 +99,11 @@ def test_search_is_ephemeral_and_missing_profile_keeps_results(monkeypatch) -> N
     payload = response.json()
     assert payload["source_total"] == 15
     assert payload["next_offset"] == 10
+    item = payload["items"][0]
+    assert item["description"] == "Build APIs"
+    assert item["requirements_text"] == "Python"
+    assert "raw_payload" not in item
+    assert "application_id" not in item and "job_id" not in item
     assert payload["items"][0]["preview_match"] == {
         "available": False,
         "unavailable_reason": "profile_missing_for_preview",
@@ -114,6 +119,23 @@ def test_search_is_ephemeral_and_missing_profile_keeps_results(monkeypatch) -> N
         "conflicts": [],
         "recommendation": None,
     }
+    with TestSessionLocal() as session:
+        assert session.query(Job).count() == 0
+        assert session.query(Application).count() == 0
+
+
+def test_search_description_and_requirements_are_nullable(monkeypatch) -> None:
+    user_id = create_user(101)
+    source = StubClient([replace(vacancy(), description=None, requirements_text=None)])
+    monkeypatch.setattr(main_module, "trudvsem_client", source)
+    response = client.get(
+        f"/users/{user_id}/discover/jobs",
+        params={"market_country": "RU", "query": "Backend"},
+    )
+    assert response.status_code == 200
+    item = response.json()["items"][0]
+    assert item["description"] is None
+    assert item["requirements_text"] is None
     with TestSessionLocal() as session:
         assert session.query(Job).count() == 0
         assert session.query(Application).count() == 0

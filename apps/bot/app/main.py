@@ -9,6 +9,11 @@ from aiogram.types import CallbackQuery, Message
 
 from app.api_client import JobHunterApiClient
 from app.cv_profile import handle_cv_document, handle_unsupported_cv_message
+from app.discover import (
+    DiscoverStates, handle_discover_callback, handle_discover_cancel,
+    handle_discover_non_text, handle_discover_query,
+    remove_active_discover_inline_keyboard,
+)
 from app.jobs import AddJobStates, handle_add_job, handle_cancel, handle_job_url, handle_match_callback
 from app.applications import ApplicationsStates, handle_applications_callback, handle_note_cancel, handle_note_text
 from app.applications import handle_next_action_cancel, handle_next_action_non_text, handle_next_action_text
@@ -44,23 +49,34 @@ api_client = JobHunterApiClient(API_BASE_URL)
 
 
 @dp.message(CommandStart())
-async def start(message: Message) -> None:
+async def start(message: Message, state: FSMContext) -> None:
+    if (await state.get_data()).get("discover_current_screen") is not None:
+        await remove_active_discover_inline_keyboard(message, state)
+        await state.clear()
     await handle_start(message, api_client)
 
 
 @dp.message(Command("add_job"))
 async def add_job(message: Message, state: FSMContext) -> None:
+    if (await state.get_data()).get("discover_current_screen") is not None:
+        await remove_active_discover_inline_keyboard(message, state)
+        await state.clear()
     await handle_add_job(message, state)
 
 
 @dp.message(Command("profile_setup"))
 async def profile_setup(message: Message, state: FSMContext) -> None:
+    if (await state.get_data()).get("discover_current_screen") is not None:
+        await remove_active_discover_inline_keyboard(message, state)
+        await state.clear()
     await handle_profile_setup(message, state)
 
 
 @dp.message(Command("cancel"), StateFilter("*"))
 async def cancel(message: Message, state: FSMContext) -> None:
-    if str((await state.get_data()).get(APPLICATIONS_VIEW)).startswith("letter"):
+    if (await state.get_data()).get("discover_current_screen") is not None:
+        await handle_discover_cancel(message, state)
+    elif str((await state.get_data()).get(APPLICATIONS_VIEW)).startswith("letter"):
         await handle_letter_cancel(message, state, api_client)
     elif (await state.get_data()).get(APPLICATIONS_VIEW) == APPLICATIONS_SORT_VIEW:
         await handle_sort_cancel(message, state, api_client)
@@ -78,6 +94,21 @@ async def cancel(message: Message, state: FSMContext) -> None:
 
 
 register_main_menu_handlers(dp, lambda: api_client)
+
+
+@dp.message(DiscoverStates.waiting_for_query, F.text)
+async def receive_discover_query(message: Message, state: FSMContext) -> None:
+    await handle_discover_query(message, state, api_client)
+
+
+@dp.message(DiscoverStates.waiting_for_query)
+async def receive_discover_non_text(message: Message, state: FSMContext) -> None:
+    await handle_discover_non_text(message, state)
+
+
+@dp.callback_query(F.data.startswith("discover:"))
+async def discover_callback(callback: CallbackQuery, state: FSMContext) -> None:
+    await handle_discover_callback(callback, state, api_client)
 
 
 @dp.callback_query(F.data.startswith("history:") | (F.data == "profile_section:work_history"))

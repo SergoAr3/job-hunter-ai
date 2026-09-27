@@ -570,6 +570,8 @@ class DiscoverJobItemOut(BaseModel):
     source_url: str
     title: str
     company: str
+    description: str | None = None
+    requirements_text: str | None = None
     location: str | None
     workplace_type: str
     salary_text: str | None

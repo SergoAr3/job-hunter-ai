@@ -218,6 +218,7 @@ async def show_applications_list(
     *,
     offset: int = 0,
     user_id: int | None = None,
+    actor: User | None = None,
     q: str | None = None,
     commit_search_query: bool = False,
     search_failure_prompt: bool = False,
@@ -234,9 +235,10 @@ async def show_applications_list(
     sort = _committed_sort(context)
     try:
         if user_id is None:
-            if message.from_user is None:
+            resolved_actor = actor or message.from_user
+            if resolved_actor is None:
                 return False
-            user_id = await api_client.create_or_get_user(message.from_user)
+            user_id = await api_client.create_or_get_user(resolved_actor)
         while True:
             page = await api_client.list_applications(
                 user_id, limit=PAGE_SIZE, offset=offset, status=status, q=search_query, sort=sort
@@ -386,14 +388,16 @@ async def _render_sort_transition(
     return True
 
 
-async def handle_applications_menu(message: Message, state: FSMContext, api_client: BotApiClient) -> None:
+async def handle_applications_menu(
+    message: Message, state: FSMContext, api_client: BotApiClient, *, actor: User | None = None
+) -> None:
     await state.update_data({
         APPLICATIONS_FILTER_STATUS: None,
         APPLICATIONS_SEARCH_QUERY: None,
         APPLICATIONS_OFFSET: 0,
         APPLICATIONS_SORT: "newest",
     })
-    await show_applications_list(message, state, api_client)
+    await show_applications_list(message, state, api_client, actor=actor)
 
 
 async def handle_applications_callback(callback: CallbackQuery, state: FSMContext, api_client: BotApiClient) -> None:

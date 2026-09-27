@@ -7,6 +7,71 @@ import pytest
 from app.api_client import JobHunterApiClient, _json_object
 
 
+def _discover_item() -> dict[str, object]:
+    return {
+        "source": "trudvsem", "source_scope": "company", "external_id": "vacancy",
+        "source_url": "https://trudvsem.ru/vacancy/card/company/vacancy",
+        "title": "Python", "company": "Acme", "location": None,
+        "description": None, "requirements_text": None,
+        "workplace_type": "unknown", "salary_text": None, "salary_min": None,
+        "salary_max": None, "salary_currency": None,
+        "preview_match": {"available": False, "score": None, "verdict": None},
+        "already_saved_for_user": False,
+    }
+
+
+def test_discover_client_contract_and_scoped_timeouts() -> None:
+    async def scenario() -> None:
+        requests: list[httpx.Request] = []
+        def handler(request: httpx.Request) -> httpx.Response:
+            requests.append(request)
+            if request.method == "GET":
+                return httpx.Response(200, json={"items": [_discover_item()], "offset": 0, "next_offset": None})
+            return httpx.Response(200, json={
+                "application": {"id": 3, "user_id": 2, "job_id": 4},
+                "job": {"id": 4, "source": "trudvsem", "source_scope": "company", "external_id": "vacancy"},
+                "application_created": True, "job_created": True,
+            })
+        client = JobHunterApiClient("http://api")
+        await client._client.aclose()
+        client._client = httpx.AsyncClient(base_url="http://api", transport=httpx.MockTransport(handler), timeout=40.0)
+        try:
+            page = await client.discover_jobs(2, query="Python", limit=5, offset=0)
+            saved = await client.save_discovered_job(2, source="trudvsem", source_scope="company", external_id="vacancy")
+            assert page["items"][0]["title"] == "Python"
+            assert saved["application_created"] is True
+            assert dict(requests[0].url.params) == {"market_country": "RU", "query": "Python", "limit": "5", "offset": "0"}
+            assert requests[0].extensions["timeout"]["read"] == 35.0
+            assert requests[1].extensions["timeout"]["read"] == 60.0
+            assert json.loads(requests[1].content) == {"source": "trudvsem", "source_scope": "company", "external_id": "vacancy"}
+            assert client._client.timeout.read == 40.0
+        finally:
+            await client.close()
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("change", [
+    {"source_url": "https://example.com/vacancy/card/company/vacancy"},
+    {"source_url": "https://trudvsem.ru:bad/vacancy/card/company/vacancy"},
+    {"external_id": None}, {"preview_match": None},
+    {"already_saved_for_user": "false"},
+])
+def test_discover_client_rejects_invalid_item(change: dict[str, object]) -> None:
+    async def scenario() -> None:
+        item = {**_discover_item(), **change}
+        client = JobHunterApiClient("http://api")
+        await client._client.aclose()
+        client._client = httpx.AsyncClient(base_url="http://api", transport=httpx.MockTransport(
+            lambda request: httpx.Response(200, json={"items": [item], "offset": 0, "next_offset": None})
+        ))
+        try:
+            with pytest.raises(httpx.DecodingError):
+                await client.discover_jobs(2, query="Python", limit=5, offset=0)
+        finally:
+            await client.close()
+    asyncio.run(scenario())
+
+
 @pytest.mark.parametrize("method", ["PUT", "DELETE"])
 def test_next_action_client_contract(method):
     async def scenario():
