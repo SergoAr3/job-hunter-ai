@@ -1,0 +1,6 @@
+*.tsbuildinfo
+coverage/
+# Some developer global ignores contain lib/ (Python build artifacts).
+# This directory is Web source and must be included in Git.
+!/lib/
+!/lib/**
