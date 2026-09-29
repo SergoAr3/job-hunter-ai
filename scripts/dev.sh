@@ -4,6 +4,8 @@ set -euo pipefail
 
 project_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$project_root"
+# shellcheck disable=SC1091
+source scripts/dev_processes.sh
 
 if [[ ! -f .env ]]; then
     echo "Missing .env. Copy .env.example to .env and configure it first." >&2
@@ -16,6 +18,14 @@ if [[ ! -f apps/api/.venv/bin/activate || ! -f apps/bot/.venv/bin/activate ]]; t
 fi
 if ! apps/bot/.venv/bin/python -c 'import watchfiles' >/dev/null 2>&1; then
     echo "Missing BOT dev dependency. Run: cd apps/bot && .venv/bin/python -m pip install -r requirements-dev.txt" >&2
+    exit 1
+fi
+if ! command -v npm >/dev/null 2>&1; then
+    echo "Missing npm. Install Node.js 22.12+ (which includes npm) to run the Web app." >&2
+    exit 1
+fi
+if [[ ! -x apps/web/node_modules/.bin/next ]]; then
+    echo "Missing Web dependencies. Run: cd apps/web && npm install" >&2
     exit 1
 fi
 
@@ -76,6 +86,30 @@ run_bot() (
     API_BASE_URL=http://127.0.0.1:8000 exec python ../../scripts/bot_dev.py
 )
 
+run_web() (
+    cd apps/web
+
+    # Read only the Web's optional single-user setting from the root .env. The
+    # command substitution keeps unrelated API/Bot settings out of this process.
+    local inherited_web_dev_user_id=${WEB_DEV_USER_ID:-}
+    local web_dev_user_id
+    web_dev_user_id="$(
+        set +u
+        # shellcheck disable=SC1091
+        source ../../.env
+        printf '%s' "${WEB_DEV_USER_ID:-}"
+    )"
+    web_dev_user_id=${web_dev_user_id:-$inherited_web_dev_user_id}
+    if [[ -n "$web_dev_user_id" ]]; then
+        export WEB_DEV_USER_ID="$web_dev_user_id"
+    else
+        unset WEB_DEV_USER_ID
+    fi
+
+    export API_BASE_URL=http://127.0.0.1:8000
+    exec npm run dev -- -p 3100
+)
+
 wait_for_api() {
     local attempt
     for attempt in {1..30}; do
@@ -91,20 +125,27 @@ wait_for_api() {
     return 1
 }
 
+wait_for_web() {
+    local attempt
+    for attempt in {1..30}; do
+        if ! kill -0 "$web_pid" 2>/dev/null; then
+            wait "$web_pid" || true
+            return 1
+        fi
+        if curl --silent --fail --max-time 1 http://127.0.0.1:3100/discover | grep '<title>Job Hunter AI</title>' >/dev/null; then
+            return 0
+        fi
+        sleep 1
+    done
+    return 1
+}
+
 cleanup() {
     local exit_status=$?
-    local service_pid
     trap - EXIT INT TERM
 
     dev_log "Shutting down..."
-    for service_pid in "$api_pid" "$bot_pid"; do
-        [[ -n "$service_pid" ]] || continue
-        kill -TERM "$service_pid" 2>/dev/null || true
-    done
-    for service_pid in "$api_pid" "$bot_pid"; do
-        [[ -n "$service_pid" ]] || continue
-        wait "$service_pid" 2>/dev/null || true
-    done
+    stop_dev_process_groups "$api_pid" "$bot_pid" "$web_pid"
 
     exit "$exit_status"
 }
@@ -129,19 +170,27 @@ dev_log "Migrations complete"
 
 api_pid=""
 bot_pid=""
+web_pid=""
+# Give each managed background job its own process group. $! is its PGID;
+# killing only the shell wrapper would leave service grandchildren running.
+set -m
 trap cleanup EXIT INT TERM
 
 dev_log "Starting API..."
+begin_dev_service_start
 run_api > >(prefix_logs API) 2>&1 &
 api_pid=$!
+finish_dev_service_start
 if ! wait_for_api; then
     dev_error "API exited or did not become ready"
     exit 1
 fi
 
 dev_log "Starting BOT..."
+begin_dev_service_start
 run_bot > >(prefix_logs BOT) 2>&1 &
 bot_pid=$!
+finish_dev_service_start
 
 sleep 1
 if ! kill -0 "$bot_pid" 2>/dev/null; then
@@ -150,9 +199,21 @@ if ! kill -0 "$bot_pid" 2>/dev/null; then
     exit 1
 fi
 
+dev_log "Starting Web..."
+begin_dev_service_start
+run_web > >(prefix_logs WEB) 2>&1 &
+web_pid=$!
+finish_dev_service_start
+
+if ! wait_for_web; then
+    dev_error "Web exited or did not become ready (check whether port 3100 is already in use)"
+    exit 1
+fi
+
 dev_log "Application is running"
 dev_log "API: http://127.0.0.1:8000"
 dev_log "Swagger: http://127.0.0.1:8000/docs"
+dev_log "Web: http://127.0.0.1:3100/discover"
 
 while true; do
     if ! kill -0 "$api_pid" 2>/dev/null; then
@@ -163,6 +224,11 @@ while true; do
     if ! kill -0 "$bot_pid" 2>/dev/null; then
         wait "$bot_pid" || true
         dev_error "BOT exited unexpectedly"
+        exit 1
+    fi
+    if ! kill -0 "$web_pid" 2>/dev/null; then
+        wait "$web_pid" || true
+        dev_error "Web exited unexpectedly"
         exit 1
     fi
     sleep 1
