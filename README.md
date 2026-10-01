@@ -1,69 +1,57 @@
 # Job Hunter AI
 
-Job Hunter AI — ассистент для поиска работы, который помогает сохранять и структурировать вакансии, отслеживать отклики и подбирать наиболее подходящие позиции на основе опыта и навыков пользователя.
+Job Hunter AI — персональное пространство для поиска вакансий, оценки их релевантности и ведения откликов.
 
-## Архитектура и структура
+## Что умеет сейчас
 
-Бизнес-логика и доступ к PostgreSQL находятся в FastAPI. Telegram-бот работает
-с данными только через API.
+### Discover
 
-- `apps/api` — FastAPI, SQLAlchemy models, services и Alembic migrations;
-- `apps/bot` — Telegram-бот на aiogram;
-- `apps/web` — Next.js Web MVP;
-- `docs` — проектная документация.
+- Поиск вакансий в «Работа России» (Trudvsem) для рынка RU через Web и Telegram.
+- Просмотр результатов и деталей вакансии, предварительная оценка совпадения с профилем пользователя.
+- Сохранение вакансии в Applications и переход к её карточке. При сохранении API получает детали из источника и приводит их к общей модели вакансии.
 
-Стек: Python, FastAPI, aiogram, SQLAlchemy, PostgreSQL, Alembic и OpenAI API.
+### Applications
 
-## Что работает
+- Web-раздел `/applications`: сохранённые вакансии, поиск по названию или компании, фильтр по статусу, сортировка и пагинация.
+- Карточка `/applications/{applicationId}`: детали вакансии, изменение статуса и история статусов, загружаемая при раскрытии блока. Web подтверждает изменение повторным чтением из API после `PUT`.
+- В Telegram доступны список откликов и работа со статусами; API также хранит заметки и следующие действия по откликам.
 
-- Telegram `/start` с идемпотентным созданием пользователя;
-- `/add_job` и сохранение связки `Job` / `Application`;
-- deterministic parsing поддерживаемых страниц вакансий;
-- AI enrichment вакансий через OpenAI;
-- PostgreSQL schema management через Alembic;
-- UserProfile v1 с ручной настройкой через `/profile_setup` и AI draft из PDF/DOCX CV.
+### Профиль и Telegram
+
+- Профиль пользователя с ручным заполнением и подтверждаемым AI-черновиком из PDF/DOCX резюме; matching использует данные профиля и вакансии.
+- Telegram-бот на aiogram поддерживает Discover, сохранение вакансий и ведение откликов. Бот обращается к API, не работает с БД напрямую.
+
+## Архитектура
+
+```text
+Telegram → Bot ─┐
+                ├→ API ─┬→ PostgreSQL
+Browser  → Web ─┘       ├→ OpenAI API
+                        └→ Trudvsem
+```
+
+`apps/api` содержит бизнес-логику, matching, интеграции с источниками и доступ к данным. `apps/bot` и `apps/web` — клиенты API; Web использует серверный транспорт Next.js. Миграции БД находятся в `apps/api/alembic`, проектная документация — в `docs`.
+
+## Технологии
+
+Python, FastAPI, SQLAlchemy, Alembic, PostgreSQL, aiogram, Next.js, React, TypeScript, OpenAI API и Docker Compose. Для проверок используются pytest, Vitest и React Testing Library.
 
 ## Локальный запуск
 
-Подготовьте `.env` и локальные зависимости по инструкции в
-[RUN_LOCAL.md](RUN_LOCAL.md), затем запустите из корня:
+Основной способ — `make dev` из корня репозитория. Подготовьте Docker Compose, Python, Node.js 22.12+ и npm; создайте корневой `.env` по `.env.example`, установите зависимости API, Bot и Web по [инструкции локального запуска](RUN_LOCAL.md). Для Telegram нужен `TELEGRAM_BOT_TOKEN`; для функций с OpenAI — `OPENAI_API_KEY`.
+
+Для Web задайте в корневом `.env` `WEB_DEV_USER_ID` — внутренний `users.id` существующего пользователя, созданного через Telegram `/start`. Это локальная настройка одного пользователя, не механизм авторизации. `make dev` сам задаёт `API_BASE_URL=http://127.0.0.1:8000` для Bot и Web.
 
 ```bash
 make dev
 ```
 
-API reloads after Python-code changes through Uvicorn. BOT reloads after Python
-changes under `apps/bot/app` through the development dependency `watchfiles`;
-the dev runner stops the old polling process before starting its replacement.
-`make dev` также запускает Web в Next.js dev mode с Fast Refresh. Команда
-поднимает PostgreSQL, применяет Alembic migrations и запускает FastAPI, Telegram
-BOT и Web с префиксированными логами. Web: [`http://127.0.0.1:3100/discover`](http://127.0.0.1:3100/discover).
-`Ctrl+C` останавливает API/BOT/Web и оставляет PostgreSQL запущенным.
+Команда поднимает PostgreSQL, применяет миграции Alembic и запускает API, Bot и Web. Web: [Discover](http://127.0.0.1:3100/discover) и [Applications](http://127.0.0.1:3100/applications); API и Swagger: [API](http://127.0.0.1:8000) и [Swagger](http://127.0.0.1:8000/docs). `Ctrl+C` останавливает приложения; PostgreSQL остаётся запущенным. Подробности настройки и остановки БД — в [RUN_LOCAL.md](RUN_LOCAL.md).
 
-## Текущий scope и roadmap
+Проверки: из `apps/api` и `apps/bot` — `.venv/bin/python -m pytest tests`; из `apps/web` — `npm test`, `npm run lint`, `npm run typecheck`, `npm run build`.
 
-Текущий scope покрывает ручное сохранение и enrichment вакансий, applications,
-UserProfile v1 и подтверждаемый пользователем AI profile draft из CV.
-Matching/ranking, relational skill taxonomy и i18n (выбор/смена языка,
-локализованные messages и buttons) остаются следующими отдельными этапами.
+## Статус проекта и планы
 
-## Web MVP: Discover → Save → Application
+Проект активно развивается. Web MVP с Discover и Applications и Telegram-сценарии уже работают; центральный слой для них — API. Поиск Discover сейчас подключён к «Работа России» для RU. Поддержка нескольких рынков и источников ещё в разработке.
 
-`apps/web` — Next.js App Router + TypeScript, второй thin client существующего
-API. Первый slice включает поиск в «Работа России / RU», просмотр результата,
-matching preview, сохранение и read-only карточку Application. Applications list
-и изменение статуса пока доступны только в Telegram.
-
-Для локального запуска нужен Node.js 22.12+ (или совместимый более новый Node.js),
-npm и существующий пользователь из BOT. Профиль нужен для matching preview, но не
-для поиска/сохранения. URL, настройка `WEB_DEV_USER_ID` и ограничения локального
-single-user режима описаны в [RUN_LOCAL.md](RUN_LOCAL.md).
-
-Browser обращается к same-origin Web transport, который подставляет user ID;
-бизнес-логика остаётся в FastAPI. CORS для этого flow не нужен. Search не сохраняет
-вакансии, Save передаёт только source identity. Вакансия, уже сохранённая до поиска,
-показывает badge без повторного Save ради получения ID.
-
-Проверки из `apps/web`: `npm test`, `npm run lint`, `npm run typecheck`,
-`npm run build`. Production smoke: `npm run start` после build. Тестовые fixtures
-используются только тестами; runtime обращается к реальному API.
+Ближайшие направления: подготовка GitHub-страницы и демо, официальный доступ к источникам вакансий Армении, семантика нескольких рынков и интеграции Армении, международные remote-источники и ATS компаний, улучшение качества Discover и matching v2, развитие учёта откликов и follow-up. Это планы, а не доступные интеграции или функции.
