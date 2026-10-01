@@ -1,6 +1,7 @@
 import Link from "next/link";
 import type { Metadata } from "next";
 import "./globals.css";
+import { Navigation } from "../components/navigation";
 export const metadata: Metadata = {
   title: "Job Hunter AI",
   description: "Персональный поиск работы",
@@ -23,23 +24,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
                 <span className="brand-subtitle">Поиск работы, по порядку</span>
               </span>
             </Link>
-            <nav aria-label="Главная навигация">
-              <span className="nav-caption">Рабочее пространство</span>
-              <Link href="/discover">
-                <svg
-                  aria-hidden="true"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  strokeWidth="1.8"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                >
-                  <circle cx="10.8" cy="10.8" r="6.3" />
-                  <path d="m15.5 15.5 4.2 4.2" />
-                </svg>
-                Поиск вакансий
-              </Link>
-            </nav>
+            <Navigation />
             <div className="local-label">
               <span className="local-dot" /> Локальный режим
               <p>Ваши вакансии — в одном месте.</p>

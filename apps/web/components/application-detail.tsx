@@ -1,17 +1,33 @@
+import type { ReactNode } from "react";
 import type { ApplicationDetail } from "../lib/contracts";
 import { JobMetadata, JobText, SourceLink, statusLabels } from "./vacancy";
-export function ApplicationView({ detail }: { detail: ApplicationDetail }) {
+export function ApplicationView({
+  detail,
+  statusControl,
+  historySection,
+  statusUnconfirmed = false,
+}: {
+  detail: ApplicationDetail;
+  statusControl?: ReactNode;
+  historySection?: ReactNode;
+  statusUnconfirmed?: boolean;
+}) {
   const { job, application } = detail;
   return (
     <article className="application-card">
-      <div className="section-heading">
-        <span className="eyebrow">СОХРАНЁННАЯ ВАКАНСИЯ</span>
+      <header className="application-detail-header">
+        <div className="application-detail-heading">
+          <span className="eyebrow">СОХРАНЁННАЯ ВАКАНСИЯ</span>
+          <h1>{job.title ?? "Вакансия без названия"}</h1>
+          {job.company && <p className="company">{job.company}</p>}
+        </div>
         <span className="badge status-badge">
-          {statusLabels[application.status] ?? application.status}
+          {statusUnconfirmed
+            ? "Статус не подтверждён"
+            : (statusLabels[application.status] ?? application.status)}
         </span>
-      </div>
-      <h1>{job.title ?? "Вакансия без названия"}</h1>
-      {job.company && <p className="company">{job.company}</p>}
+      </header>
+      {statusControl}
       <JobMetadata job={job} />
       <div className="save-area">
         <SourceLink url={job.source_url} />
@@ -42,8 +58,9 @@ export function ApplicationView({ detail }: { detail: ApplicationDetail }) {
         </section>
       )}
       <JobText job={job} />
+      {historySection}
       <p className="muted read-only-note">
-        Просмотр без редактирования. Статусы и записи можно изменить в Telegram.
+        Заметку и следующее действие можно изменить в Telegram.
       </p>
     </article>
   );

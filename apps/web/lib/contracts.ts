@@ -67,7 +67,28 @@ export interface ApplicationDetail {
     salary_currency: string | null;
   };
 }
+export interface ApplicationStatusHistory {
+  items: {
+    status: string;
+    occurred_at: string;
+  }[];
+}
 export interface SaveResult extends ApplicationDetail {
   job_created: boolean;
   application_created: boolean;
+}
+export interface ApplicationListItem {
+  app_id: number;
+  status: string;
+  created_at: string;
+  title: string | null;
+  company: string | null;
+  location: string | null;
+  workplace_type: string;
+  parsing_status: string;
+  ai_enrichment_status: string;
+}
+export interface ApplicationsPage {
+  items: ApplicationListItem[];
+  has_next: boolean;
 }

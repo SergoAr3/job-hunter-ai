@@ -12,7 +12,11 @@ export async function webRequest<T>(
   } catch (error) {
     if (error instanceof WebError) throw error;
     throw new WebError(
-      init?.method === "POST" ? "ambiguous_save" : "api_unavailable",
+      init?.method === "POST"
+        ? "ambiguous_save"
+        : init?.method === "PUT"
+          ? "ambiguous_status"
+          : "api_unavailable",
     );
   }
 }

@@ -3,17 +3,32 @@ import { getConfig } from "./config";
 import { WebError } from "../errors";
 import type {
   ApplicationDetail,
+  ApplicationStatusHistory,
+  ApplicationsPage,
   DiscoverPage,
   Identity,
   SaveResult,
 } from "../contracts";
+import {
+  applicationsUrl,
+  APPLICATIONS_PAGE_SIZE,
+  type ApplicationsState,
+  applicationStatuses,
+  type ApplicationStatus,
+} from "../applications";
 
-async function request(path: string, body?: Identity): Promise<unknown> {
+async function request(
+  path: string,
+  body?: Identity | { status: ApplicationStatus },
+  method: "POST" | "PUT" = "POST",
+): Promise<unknown> {
   const { userId, baseUrl } = getConfig();
+  const mutation = body ? method : "GET";
+  const ambiguous = method === "PUT" ? "ambiguous_status" : "ambiguous_save";
   let response: Response;
   try {
     response = await fetch(`${baseUrl}/users/${userId}/${path}`, {
-      method: body ? "POST" : "GET",
+      method: mutation,
       cache: "no-store",
       redirect: "error",
       headers: body ? { "Content-Type": "application/json" } : undefined,
@@ -21,13 +36,13 @@ async function request(path: string, body?: Identity): Promise<unknown> {
       signal: AbortSignal.timeout(body ? 60000 : 35000),
     });
   } catch {
-    throw new WebError(body ? "ambiguous_save" : "api_unavailable", 503);
+    throw new WebError(body ? ambiguous : "api_unavailable", 503);
   }
   let value;
   try {
     value = await response.json();
   } catch {
-    throw new WebError(body ? "ambiguous_save" : "api_unavailable");
+    throw new WebError(body ? ambiguous : "api_unavailable");
   }
   if (!response.ok) {
     const code = value?.detail?.code;
@@ -45,11 +60,15 @@ async function request(path: string, body?: Identity): Promise<unknown> {
       known.includes(code)
         ? code
         : body && response.status >= 500
-          ? "ambiguous_save"
+          ? ambiguous
           : response.status === 422
-            ? "invalid_request"
+            ? method === "PUT"
+              ? "status_invalid"
+              : "invalid_request"
             : body
-              ? "save_failed"
+              ? method === "PUT"
+                ? "status_failed"
+                : "save_failed"
               : "api_unavailable",
       response.status,
     );
@@ -144,6 +163,109 @@ export async function getApplication(id: string) {
   return publicDetail(
     (await request(`applications/${id}`)) as ApplicationDetail,
   );
+}
+export async function getApplicationStatusHistory(
+  id: string,
+): Promise<ApplicationStatusHistory> {
+  if (!/^[1-9]\d*$/.test(id) || !Number.isSafeInteger(Number(id)))
+    throw new WebError("APPLICATION_NOT_FOUND", 404);
+  const data = (await request(
+    `applications/${id}/status-history`,
+  )) as ApplicationStatusHistory;
+  if (!Array.isArray(data?.items)) throw new WebError("api_unavailable");
+  return {
+    items: data.items.map((item) => {
+      if (
+        typeof item?.status !== "string" ||
+        !applicationStatuses.includes(item.status as ApplicationStatus) ||
+        typeof item.occurred_at !== "string" ||
+        !/(?:Z|[+-]\d{2}:\d{2})$/i.test(item.occurred_at) ||
+        Number.isNaN(Date.parse(item.occurred_at))
+      )
+        throw new WebError("api_unavailable");
+      return { status: item.status, occurred_at: item.occurred_at };
+    }),
+  };
+}
+export async function setApplicationStatus(
+  id: string,
+  status: ApplicationStatus,
+) {
+  if (!/^[1-9]\d*$/.test(id) || !Number.isSafeInteger(Number(id)))
+    throw new WebError("APPLICATION_NOT_FOUND", 404);
+  if (!applicationStatuses.includes(status))
+    throw new WebError("status_invalid", 400);
+  try {
+    const detail = publicDetail(
+      (await request(
+        `applications/${id}/status`,
+        { status },
+        "PUT",
+      )) as ApplicationDetail,
+    );
+    if (detail.application.id !== Number(id))
+      throw new Error("Unexpected application");
+    return { ok: true };
+  } catch (error) {
+    if (error instanceof WebError && error.code === "api_unavailable")
+      throw new WebError("ambiguous_status", error.status);
+    if (!(error instanceof WebError)) throw new WebError("ambiguous_status");
+    throw error;
+  }
+}
+export async function listApplications(
+  state: ApplicationsState,
+): Promise<ApplicationsPage> {
+  const query = applicationsUrl(state).split("?")[1];
+  const data = (await request(
+    `applications?limit=${APPLICATIONS_PAGE_SIZE}${query ? `&${query}` : ""}`,
+  )) as ApplicationsPage;
+  if (
+    !Array.isArray(data?.items) ||
+    data.items.length > APPLICATIONS_PAGE_SIZE ||
+    typeof data.has_next !== "boolean"
+  )
+    throw new WebError("api_unavailable");
+  return {
+    has_next: data.has_next,
+    items: data.items.map((item) => {
+      if (
+        !Number.isSafeInteger(item?.app_id) ||
+        item.app_id <= 0 ||
+        typeof item.status !== "string" ||
+        typeof item.created_at !== "string" ||
+        ![item.title, item.company, item.location].every(
+          (value) => value === null || typeof value === "string",
+        ) ||
+        typeof item.workplace_type !== "string" ||
+        typeof item.parsing_status !== "string" ||
+        typeof item.ai_enrichment_status !== "string"
+      )
+        throw new WebError("api_unavailable");
+      const {
+        app_id,
+        status,
+        created_at,
+        title,
+        company,
+        location,
+        workplace_type,
+        parsing_status,
+        ai_enrichment_status,
+      } = item;
+      return {
+        app_id,
+        status,
+        created_at,
+        title,
+        company,
+        location,
+        workplace_type,
+        parsing_status,
+        ai_enrichment_status,
+      };
+    }),
+  };
 }
 export function errorResponse(error: unknown) {
   const safe =
