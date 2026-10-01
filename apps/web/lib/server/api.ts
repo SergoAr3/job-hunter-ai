@@ -271,7 +271,10 @@ export function errorResponse(error: unknown) {
   const safe =
     error instanceof WebError ? error : new WebError("api_unavailable");
   return Response.json(
-    { code: safe.code },
+    {
+      code: safe.code,
+      ...(safe.fieldErrors ? { fieldErrors: safe.fieldErrors } : {}),
+    },
     { status: safe.status, headers: { "Cache-Control": "no-store" } },
   );
 }

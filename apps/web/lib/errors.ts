@@ -2,6 +2,7 @@ export class WebError extends Error {
   constructor(
     public code: string,
     public status = 502,
+    public fieldErrors?: Record<string, string>,
   ) {
     super(code);
   }
@@ -32,6 +33,14 @@ const messages: Record<string, string> = {
   status_failed: "Не удалось изменить статус. Повторите попытку.",
   status_unconfirmed:
     "Изменение отправлено, но актуальный статус не удалось подтвердить. Обновите данные.",
+  profile_missing: "Профиль ещё не создан.",
+  profile_user_not_found:
+    "Настроенный пользователь не найден. Проверьте WEB_DEV_USER_ID.",
+  profile_invalid: "Проверьте поля профиля и повторите сохранение.",
+  ambiguous_profile:
+    "Не удалось подтвердить результат сохранения. Изменения могли сохраниться. Обновите данные.",
+  profile_unconfirmed:
+    "Изменение отправлено, но актуальный профиль не удалось загрузить. Обновите данные.",
 };
 export function errorMessage(error: unknown): string {
   return error instanceof WebError

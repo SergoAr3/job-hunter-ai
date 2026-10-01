@@ -7,7 +7,16 @@ export async function webRequest<T>(
     const response = await fetch(url, { ...init, cache: "no-store" });
     const value = await response.json();
     if (!response.ok)
-      throw new WebError(value.code ?? "api_unavailable", response.status);
+      throw new WebError(
+        typeof value?.code === "string" ? value.code : "api_unavailable",
+        response.status,
+        value?.code === "profile_invalid" &&
+          value?.fieldErrors &&
+          typeof value.fieldErrors === "object" &&
+          !Array.isArray(value.fieldErrors)
+          ? value.fieldErrors
+          : undefined,
+      );
     return value;
   } catch (error) {
     if (error instanceof WebError) throw error;
@@ -15,7 +24,9 @@ export async function webRequest<T>(
       init?.method === "POST"
         ? "ambiguous_save"
         : init?.method === "PUT"
-          ? "ambiguous_status"
+          ? url === "/api/profile"
+            ? "ambiguous_profile"
+            : "ambiguous_status"
           : "api_unavailable",
     );
   }
