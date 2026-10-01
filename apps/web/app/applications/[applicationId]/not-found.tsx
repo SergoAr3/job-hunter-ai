@@ -4,7 +4,7 @@ export default function NotFound() {
     <div className="state">
       <h1>Вакансия не найдена</h1>
       <p>Эта запись недоступна у настроенного пользователя.</p>
-      <Link href="/discover">Вернуться к поиску</Link>
+      <Link href="/applications">К моим вакансиям</Link>
     </div>
   );
 }

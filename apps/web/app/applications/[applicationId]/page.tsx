@@ -1,15 +1,19 @@
 import Link from "next/link";
-import { ApplicationView } from "../../../components/application-detail";
+import { ApplicationStatusDetail } from "../../../components/application-status-detail";
 import { getApplication } from "../../../lib/server/api";
 import { errorMessage, WebError } from "../../../lib/errors";
 import { notFound } from "next/navigation";
+import { safeApplicationsReturn } from "../../../lib/applications";
 export const dynamic = "force-dynamic";
 export default async function Page({
   params,
+  searchParams,
 }: {
   params: Promise<{ applicationId: string }>;
+  searchParams: Promise<{ from?: string | string[] }>;
 }) {
   const { applicationId } = await params;
+  const backUrl = safeApplicationsReturn((await searchParams).from);
   let detail;
   try {
     detail = await getApplication(applicationId);
@@ -28,10 +32,10 @@ export default async function Page({
   }
   return (
     <>
-      <Link className="back-link" href="/discover">
-        ← К поиску вакансий
+      <Link className="back-link" href={backUrl}>
+        ← К моим вакансиям
       </Link>
-      <ApplicationView detail={detail} />
+      <ApplicationStatusDetail detail={detail} />
     </>
   );
 }
