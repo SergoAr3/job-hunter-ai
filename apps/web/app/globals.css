@@ -2072,3 +2072,88 @@ summary {
 .account-menu a {
   color: #bab8ff;
 }
+
+.telegram-login {
+  margin-top: 12px;
+  width: 100%;
+}
+.telegram-login-button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  width: 100%;
+  min-height: 48px;
+  border-radius: 12px;
+  border-color: #167caf;
+  background: #167caf;
+  color: #fff;
+  white-space: nowrap;
+}
+.telegram-login-button:hover:not(:disabled) {
+  border-color: #126b99;
+  background: #126b99;
+}
+.telegram-login-button:active:not(:disabled) {
+  background: #105d85;
+  border-color: #105d85;
+}
+.telegram-login-button:focus-visible {
+  outline-color: #167caf;
+}
+.telegram-login-button:disabled {
+  color: #fff;
+  border-color: #719db5;
+  background: #719db5;
+}
+.telegram-icon {
+  width: 22px;
+  height: 22px;
+  flex: 0 0 22px;
+}
+.telegram-waiting {
+  padding: 16px 0 4px;
+  text-align: center;
+}
+.telegram-waiting p {
+  margin: 0 0 8px;
+}
+.auth-card .telegram-waiting-title {
+  color: var(--ink);
+  font-weight: 600;
+}
+.telegram-verification,
+.telegram-fallback-hint,
+.telegram-fallback {
+  font-size: 12px;
+}
+.telegram-waiting .telegram-fallback-hint {
+  margin: 14px 0 4px;
+}
+.telegram-fallback {
+  display: inline-block;
+  padding: 10px 12px;
+  min-height: 44px;
+}
+
+.telegram-cancel {
+  display: block;
+  margin: 8px auto 0;
+  max-width: 100%;
+  min-height: 44px;
+  padding: 10px 18px;
+  border-color: var(--border-strong);
+  background: transparent;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.telegram-cancel:hover:not(:disabled) {
+  border-color: var(--muted);
+  background: var(--surface-muted);
+  color: var(--ink);
+}
+.telegram-cancel:focus-visible {
+  outline-color: var(--muted);
+}

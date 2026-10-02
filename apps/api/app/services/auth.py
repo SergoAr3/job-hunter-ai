@@ -137,17 +137,23 @@ def login(session: Session, payload: AuthCredentials) -> LoginOut:
         if replacement is not None:
             user.password_hash = replacement
         break
-    now = utc_now()
-    raw = secrets.token_urlsafe(32)
-    expiry = now + SESSION_ABSOLUTE_LIFETIME
-    session.add(AuthSession(token_hash=token_hash(raw), user_id=user_id,
-                            created_at=now, expires_at=expiry, last_seen_at=now))
+    result = issue_session(session, user_id)
     try:
         session.commit()
     except SQLAlchemyError:
         session.rollback()
         # Do not propagate/log SQL parameters containing the token digest.
         raise AuthError("AUTH_UNAVAILABLE", 503) from None
+    return result
+
+
+def issue_session(session: Session, user_id: int) -> LoginOut:
+    """Add a fresh session to the caller's identity transaction; never commit."""
+    now = utc_now()
+    raw = secrets.token_urlsafe(32)
+    expiry = now + SESSION_ABSOLUTE_LIFETIME
+    session.add(AuthSession(token_hash=token_hash(raw), user_id=user_id,
+                            created_at=now, expires_at=expiry, last_seen_at=now))
     return LoginOut(session_token=raw, expires_at=expiry, me=current_user(session, user_id))
 
 

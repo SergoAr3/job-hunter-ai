@@ -156,7 +156,7 @@ class _BotServiceAuth(httpx.Auth):
 
     def auth_flow(self, request):
         # Service credential is only for identity/domain user operations.
-        if request.url.path.startswith("/users/"):
+        if request.url.path.startswith("/users/") or request.url.path.startswith("/auth/telegram/bot/"):
             request.headers["X-Bot-Service-Token"] = self._token
         yield request
 
@@ -172,6 +172,8 @@ class BotApiClient(Protocol):
     async def generate_cover_letter(self, user_id: int, application_id: int, language: str) -> dict[str, object]: ...
 
     async def create_or_get_user(self, telegram_user: User) -> int: ...
+    async def inspect_telegram_challenge(self, token: str) -> dict: ...
+    async def decide_telegram_challenge(self, token: str, telegram_user: User, approve: bool) -> None: ...
 
     async def save_application(self, user_id: int, source_url: str) -> dict[str, object]: ...
 
@@ -323,6 +325,23 @@ class JobHunterApiClient:
         ):
             raise RuntimeError("BOT_API_SERVICE_TOKEN must be a random production secret")
         self._client = httpx.AsyncClient(base_url=base_url, timeout=40.0, auth=_BotServiceAuth(token))
+
+    async def inspect_telegram_challenge(self, token: str) -> dict:
+        response = await self._client.post("/auth/telegram/bot/inspect", json={"token": token})
+        response.raise_for_status()
+        payload = _json_object(response)
+        if payload.get("purpose") not in {"login", "link"} or payload.get("status") not in {"pending", "approved", "expired", "cancelled", "conflict", "consumed"} or not re.fullmatch(r"[A-F0-9]{6}", str(payload.get("code", ""))):
+            raise httpx.DecodingError("Invalid Telegram challenge response", request=response.request)
+        return {key: payload[key] for key in ("purpose", "status", "code")}
+
+    async def decide_telegram_challenge(self, token: str, telegram_user: User, approve: bool) -> None:
+        response = await self._client.post("/auth/telegram/bot/" + ("approve" if approve else "cancel"), json={
+            "token": token, "telegram": {"telegram_id": telegram_user.id, "username": telegram_user.username,
+            "first_name": telegram_user.first_name, "last_name": telegram_user.last_name, "language_code": telegram_user.language_code},
+        })
+        response.raise_for_status()
+        if _json_object(response).get("ok") is not True:
+            raise httpx.DecodingError("Invalid Telegram decision response", request=response.request)
 
     async def create_or_get_user(self, telegram_user: User) -> int:
         response = await self._client.post(

@@ -124,6 +124,8 @@ async def lifespan(app):
 
 app = FastAPI(title="Job Hunter AI API", lifespan=lifespan, dependencies=[Depends(require_user_access)])
 app.include_router(auth_router)
+from app.telegram_auth_routes import router as telegram_auth_router
+app.include_router(telegram_auth_router)
 
 
 @app.exception_handler(AuthError)

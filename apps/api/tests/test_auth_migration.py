@@ -57,7 +57,7 @@ def test_real_revision15_upgrade_downgrade_preserves_accounts(tmp_path, monkeypa
         conn.execute(User.__table__.insert(), {"id": 42, "email": "User+tag@Example.com", "email_canonical": "user+tag@example.com", "password_hash": "preserved-hash"})
         before_users = conn.exec_driver_sql("SELECT * FROM users ORDER BY id").mappings().all()
         before_graph = graph(conn)
-    command.upgrade(config, "head")
+    command.upgrade(config, "20261002_15")
     with engine.connect() as conn:
         assert conn.exec_driver_sql("SELECT version_num FROM alembic_version").scalar_one() == "20261002_15"
         inspector = sa.inspect(conn)
@@ -89,7 +89,7 @@ def test_real_revision15_upgrade_downgrade_preserves_accounts(tmp_path, monkeypa
         assert "auth_sessions" not in sa.inspect(conn).get_table_names()
         assert conn.exec_driver_sql("SELECT * FROM users ORDER BY id").mappings().all() == before_users
         assert graph(conn) == before_graph
-    command.upgrade(config, "head")
+    command.upgrade(config, "20261002_15")
     with engine.connect() as conn:
         if dialect == "sqlite":
             conn.exec_driver_sql("PRAGMA foreign_keys=ON")

@@ -2,7 +2,7 @@ import asyncio
 import os
 
 from aiogram import Bot, Dispatcher, F
-from aiogram.filters import Command, CommandStart, StateFilter
+from aiogram.filters import Command, CommandStart, CommandObject, StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.storage.memory import MemoryStorage, SimpleEventIsolation
 from aiogram.types import CallbackQuery, Message
@@ -40,6 +40,7 @@ from app.profile import (
     remove_active_profile_inline_keyboard,
 )
 from app.start import handle_start
+from app.telegram_auth import handle_auth_start, handle_auth_callback, remove_auth_keyboard
 
 TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
 API_BASE_URL = os.getenv("API_BASE_URL", "http://localhost:8000")
@@ -49,15 +50,25 @@ api_client = JobHunterApiClient(API_BASE_URL)
 
 
 @dp.message(CommandStart())
-async def start(message: Message, state: FSMContext) -> None:
+async def start(message: Message, state: FSMContext, command: CommandObject) -> None:
+    if command.args and command.args.startswith("auth_"):
+        await handle_auth_start(message, state, api_client, command.args)
+        return
+    await remove_auth_keyboard(message, state)
     if (await state.get_data()).get("discover_current_screen") is not None:
         await remove_active_discover_inline_keyboard(message, state)
         await state.clear()
     await handle_start(message, api_client)
 
 
+@dp.callback_query(F.data.startswith("tga:"))
+async def telegram_auth_callback(callback: CallbackQuery, state: FSMContext) -> None:
+    await handle_auth_callback(callback, state, api_client)
+
+
 @dp.message(Command("add_job"))
 async def add_job(message: Message, state: FSMContext) -> None:
+    await remove_auth_keyboard(message, state)
     if (await state.get_data()).get("discover_current_screen") is not None:
         await remove_active_discover_inline_keyboard(message, state)
         await state.clear()
@@ -66,6 +77,7 @@ async def add_job(message: Message, state: FSMContext) -> None:
 
 @dp.message(Command("profile_setup"))
 async def profile_setup(message: Message, state: FSMContext) -> None:
+    await remove_auth_keyboard(message, state)
     if (await state.get_data()).get("discover_current_screen") is not None:
         await remove_active_discover_inline_keyboard(message, state)
         await state.clear()
@@ -74,6 +86,7 @@ async def profile_setup(message: Message, state: FSMContext) -> None:
 
 @dp.message(Command("cancel"), StateFilter("*"))
 async def cancel(message: Message, state: FSMContext) -> None:
+    await remove_auth_keyboard(message, state)
     if (await state.get_data()).get("discover_current_screen") is not None:
         await handle_discover_cancel(message, state)
     elif str((await state.get_data()).get(APPLICATIONS_VIEW)).startswith("letter"):

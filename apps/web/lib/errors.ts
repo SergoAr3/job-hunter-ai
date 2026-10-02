@@ -8,6 +8,14 @@ export class WebError extends Error {
   }
 }
 const messages: Record<string, string> = {
+  ACCOUNT_LINK_CONFLICT: "Этот Telegram уже связан с другим аккаунтом.",
+  TELEGRAM_CHALLENGE_INVALID: "Запрос Telegram недействителен. Начните заново.",
+  TELEGRAM_CHALLENGE_EXPIRED: "Время подтверждения истекло. Начните заново.",
+  TELEGRAM_CHALLENGE_CANCELLED: "Подтверждение отменено в Telegram.",
+  TELEGRAM_CHALLENGE_CONSUMED: "Запрос уже завершён. Начните заново.",
+  TELEGRAM_CHALLENGE_CONFLICT: "Этот Telegram уже связан с другим аккаунтом.",
+  TELEGRAM_CHALLENGE_PENDING: "Подтвердите запрос в Telegram.",
+  AUTH_INVALID_CREDENTIALS: "Не удалось подтвердить пароль аккаунта.",
   unauthenticated: "Сессия завершилась. Войдите снова.",
   auth_invalid_credentials: "Не удалось войти. Проверьте email и пароль.",
   auth_invalid: "Проверьте введённые данные.",

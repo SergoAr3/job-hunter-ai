@@ -1,5 +1,6 @@
 "use client";
 import Link from "next/link";
+import { TelegramAuth } from "./telegram-auth";
 import { useRef, useState } from "react";
 import { safeNext } from "../lib/auth";
 import { webRequest } from "../lib/client";
@@ -128,6 +129,7 @@ export function AuthForm({
           {pending ? "Подождите…" : registering ? "Создать аккаунт" : "Войти"}
         </button>
       </form>
+      {!registering && <TelegramAuth purpose="login" next={next} />}
       <p>
         {registering ? "Уже есть аккаунт? " : "Ещё нет аккаунта? "}
         <Link

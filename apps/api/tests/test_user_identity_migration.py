@@ -96,7 +96,7 @@ def legacy_schema(connection):
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
     )
     for table in Base.metadata.sorted_tables:
-        if table.name not in {"users", "auth_sessions"}:
+        if table.name not in {"users", "auth_sessions", "auth_telegram_challenges"}:
             table.to_metadata(metadata)
     metadata.create_all(connection)
     return metadata

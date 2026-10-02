@@ -125,3 +125,29 @@ preview, но не для поиска или сохранения ваканс�
 
 Все данные runtime настоящие; test fixtures используются только в тестах.
 Файл `.env` содержит локальные секреты и не должен коммититься.
+
+## Telegram Web login и linking (Slice 4)
+
+Укажите публичный `TELEGRAM_BOT_USERNAME` без `@` в корневом `.env` для API
+(например имя из Bot profile), затем перезапустите `make dev`. `TELEGRAM_BOT_TOKEN`
+и Bot service credential остаются только у API/Bot, не передаются Web.
+Новая migration `20261002_16` создаёт только короткоживущие challenges.
+
+На `/login` нажмите «Войти через Telegram»: вкладка Telegram откроется автоматически.
+Web останется в ожидании; если открытие заблокировано, используйте запасную ссылку
+«Открыть Telegram». Сравните шестизначный
+код Web/Bot. Подтверждайте только собственный запрос. После подтверждения Web
+завершит вход в том же браузере: старый Telegram account сохраняет свой users.id,
+Profile и Applications. Новый Telegram получает account без Profile.
+Если передумали, нажмите «Отменить вход» в Web: polling остановится, waiting
+исчезнет и challenge cookie очистится; можно сразу начать новую попытку.
+
+В account shell email-пользователя «Подключить Telegram» требует повторного
+ввода пароля и подтверждения в Bot. Занятый другим account Telegram вызывает
+явный конфликт: никакого merge/переноса. Отменённый/expired/consumed challenge
+не переиспользуется; начните новый. Каждая attempt имеет отдельную HttpOnly
+binding cookie: terminal response одной вкладки не удаляет binding другой.
+Незавершённые cookies истекают через пять минут. AuthSession по-прежнему общая
+для вкладок; login при уже активной session не разрешён. После Bot restart
+откройте deep link снова.
+Подробный контракт: [docs/auth-slice4.md](docs/auth-slice4.md).

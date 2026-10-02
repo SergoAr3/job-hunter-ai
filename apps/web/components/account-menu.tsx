@@ -1,9 +1,16 @@
 "use client";
 import { useRef, useState } from "react";
 import Link from "next/link";
+import { TelegramAuth } from "./telegram-auth";
 import { webRequest } from "../lib/client";
 import { errorMessage } from "../lib/errors";
-export function AccountMenu({ label }: { label: string | null }) {
+export function AccountMenu({
+  label,
+  telegramLinked,
+}: {
+  label: string | null;
+  telegramLinked?: boolean;
+}) {
   const [pending, setPending] = useState(false);
   const [error, setError] = useState("");
   const busy = useRef(false);
@@ -35,6 +42,11 @@ export function AccountMenu({ label }: { label: string | null }) {
       {label ? (
         <>
           <span>{label}</span>
+          {telegramLinked === true ? (
+            <span>Telegram подключён</span>
+          ) : telegramLinked === false ? (
+            <TelegramAuth purpose="link" />
+          ) : null}
           <button onClick={logout} disabled={pending}>
             {pending ? "Выходим…" : "Выйти"}
           </button>

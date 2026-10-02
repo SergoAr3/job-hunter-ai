@@ -40,14 +40,16 @@ export async function authFetch(
       ...init,
       cache: "no-store",
       redirect: "error",
-      signal: AbortSignal.timeout(15000),
+      signal: init?.signal ?? AbortSignal.timeout(15000),
     });
   } catch {
     throw new WebError("auth_unavailable", 503);
   }
 }
 export async function sessionCookie() {
-  const name = cookieConfig().name;
+  return namedCookie(cookieConfig().name, TOKEN_PATTERN);
+}
+export async function namedCookie(name: string, pattern: RegExp) {
   // Next drops undecodable values and collapses duplicate names. Determine
   // presence/ambiguity from the raw header before consulting its cookie store.
   const matches = ((await headers()).get("cookie") ?? "")
@@ -68,9 +70,7 @@ export async function sessionCookie() {
   return {
     present: true,
     token:
-      all.length === 1 &&
-      all[0].value === decoded &&
-      TOKEN_PATTERN.test(decoded)
+      all.length === 1 && all[0].value === decoded && pattern.test(decoded)
         ? all[0].value
         : null,
   };

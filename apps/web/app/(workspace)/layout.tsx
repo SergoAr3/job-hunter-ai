@@ -22,6 +22,11 @@ export default async function WorkspaceLayout({
         </Link>
         <Navigation />
         <AccountMenu
+          telegramLinked={
+            state.kind === "authenticated"
+              ? state.user.telegram_linked
+              : undefined
+          }
           label={
             state.kind === "authenticated"
               ? state.user.display_name || state.user.email || "Аккаунт"

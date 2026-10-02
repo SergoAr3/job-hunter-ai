@@ -74,6 +74,29 @@ class AuthSession(Base):
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
+class TelegramChallenge(Base):
+    __tablename__ = "auth_telegram_challenges"
+    __table_args__ = (
+        CheckConstraint("purpose IN ('login','link')", name="ck_telegram_challenge_purpose"),
+        CheckConstraint("(purpose = 'login' AND initiating_user_id IS NULL AND initiating_session_hash IS NULL) OR (purpose = 'link' AND initiating_user_id IS NOT NULL AND initiating_session_hash IS NOT NULL)", name="ck_telegram_challenge_initiator"),
+        CheckConstraint("expires_at > created_at", name="ck_telegram_challenge_expiry"),
+        CheckConstraint("(approved_at IS NULL AND approved_telegram_id IS NULL AND telegram_metadata IS NULL) OR (approved_at IS NOT NULL AND approved_telegram_id IS NOT NULL AND telegram_metadata IS NOT NULL)", name="ck_telegram_challenge_approval"),
+        CheckConstraint("(consumed_at IS NULL AND outcome IS NULL) OR (consumed_at IS NOT NULL AND outcome IS NOT NULL AND outcome IN ('completed','conflict','cancelled'))", name="ck_telegram_challenge_outcome"),
+    )
+    token_hash: Mapped[str] = mapped_column(String(64), primary_key=True)
+    binding_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    purpose: Mapped[str] = mapped_column(String(8), nullable=False)
+    initiating_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    initiating_session_hash: Mapped[str | None] = mapped_column(ForeignKey("auth_sessions.token_hash", ondelete="CASCADE"))
+    approved_telegram_id: Mapped[int | None] = mapped_column(BigInteger)
+    telegram_metadata: Mapped[dict | None] = mapped_column(JSON(none_as_null=True).with_variant(JSONB(none_as_null=True), "postgresql"))
+    approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    consumed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    outcome: Mapped[str | None] = mapped_column(String(16))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+
+
 class ExperienceLevel(str, Enum):
     INTERN = "intern"
     JUNIOR = "junior"
