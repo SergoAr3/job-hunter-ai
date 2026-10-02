@@ -332,3 +332,21 @@ def test_credential_change_during_verification_cannot_issue_stale_session(monkey
     with TestSessionLocal() as session:
         assert session.query(AuthSession).count() == 0
         assert session.scalar(select(User)).password_hash == replacement
+
+
+def test_internal_principal_bearer_only_and_safe_public_me():
+    register()
+    data = login()
+    token = data["session_token"]
+    with TestSessionLocal() as session:
+        uid = session.scalar(select(User)).id
+    response = plain.get("/auth/internal/principal", headers=bearer(token))
+    assert response.status_code == 200
+    assert response.json() == {"user_id": uid, "me": data["me"]}
+    assert response.headers["cache-control"] == "no-store"
+    assert token not in response.text and PASSWORD not in response.text
+    assert "user_id" not in plain.get("/auth/me", headers=bearer(token)).json()
+    for headers in ({}, {"X-Bot-Service-Token": SERVICE_TOKEN}, {"X-Web-Dev-Api-Token": SERVICE_TOKEN}):
+        assert plain.get("/auth/internal/principal", headers=headers).status_code == 401
+    plain.post("/auth/logout", headers=bearer(token))
+    assert plain.get("/auth/internal/principal", headers=bearer(token)).status_code == 401

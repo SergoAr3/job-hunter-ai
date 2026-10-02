@@ -63,3 +63,9 @@ class LoginOut(BaseModel):
     session_token: str = Field(repr=False)
     expires_at: datetime
     me: CurrentUserOut
+
+
+class InternalPrincipalOut(BaseModel):
+    # Bearer-only server transport; Next never exposes this internal ID to browser.
+    user_id: int
+    me: CurrentUserOut

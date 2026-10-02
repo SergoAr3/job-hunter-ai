@@ -9,6 +9,7 @@ const context = (applicationId = "42") => ({
 });
 
 beforeEach(() => {
+  vi.stubEnv("WEB_PUBLIC_ORIGIN", "http://localhost");
   vi.stubEnv("APP_ENV", "development");
   vi.stubEnv("AUTH_ROLLOUT_MODE", "legacy-development");
   vi.stubEnv("WEB_DEV_API_TOKEN", "web-tests-server-only-dev-token-123456");

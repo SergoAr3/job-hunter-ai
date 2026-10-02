@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, Request, Response
 from sqlalchemy.orm import Session
 
 from app.auth_dependencies import bearer_token, require_principal
-from app.auth_schemas import AuthCredentials, CurrentUserOut, LoginOut, RegisterIn
+from app.auth_schemas import AuthCredentials, CurrentUserOut, InternalPrincipalOut, LoginOut, RegisterIn
 from app.database import get_session
 from app.services.auth import Principal, current_user, login, logout, register
 
@@ -33,3 +33,9 @@ def logout_account(request: Request, session: Session = Depends(get_session)):
 def read_current_user(response: Response, principal: Principal = Depends(require_principal), session: Session = Depends(get_session)):
     response.headers["Cache-Control"] = "no-store"
     return current_user(session, principal.user_id)
+
+
+@router.get("/internal/principal", response_model=InternalPrincipalOut)
+def read_internal_principal(response: Response, principal: Principal = Depends(require_principal), session: Session = Depends(get_session)):
+    response.headers["Cache-Control"] = "no-store"
+    return InternalPrincipalOut(user_id=principal.user_id, me=current_user(session, principal.user_id))

@@ -1,5 +1,5 @@
 import "server-only";
-import { getConfig } from "./config";
+import { getDomainIdentity } from "./auth";
 import { WebError } from "../errors";
 import type {
   ApplicationDetail,
@@ -22,7 +22,7 @@ async function request(
   body?: Identity | { status: ApplicationStatus },
   method: "POST" | "PUT" = "POST",
 ): Promise<unknown> {
-  const { userId, baseUrl, devToken } = getConfig();
+  const { userId, baseUrl, headers } = await getDomainIdentity();
   const mutation = body ? method : "GET";
   const ambiguous = method === "PUT" ? "ambiguous_status" : "ambiguous_save";
   let response: Response;
@@ -32,7 +32,7 @@ async function request(
       cache: "no-store",
       redirect: "error",
       headers: {
-        "X-Web-Dev-Api-Token": devToken,
+        ...headers,
         ...(body ? { "Content-Type": "application/json" } : {}),
       },
       body: body ? JSON.stringify(body) : undefined,
@@ -41,6 +41,7 @@ async function request(
   } catch {
     throw new WebError(body ? ambiguous : "api_unavailable", 503);
   }
+  if (response.status === 401) throw new WebError("unauthenticated", 401);
   let value;
   try {
     value = await response.json();
@@ -270,14 +271,9 @@ export async function listApplications(
     }),
   };
 }
-export function errorResponse(error: unknown) {
-  const safe =
-    error instanceof WebError ? error : new WebError("api_unavailable");
-  return Response.json(
-    {
-      code: safe.code,
-      ...(safe.fieldErrors ? { fieldErrors: safe.fieldErrors } : {}),
-    },
-    { status: safe.status, headers: { "Cache-Control": "no-store" } },
+export async function errorResponse(error: unknown) {
+  const { authError } = await import("./auth-handlers");
+  return authError(
+    error instanceof WebError ? error : new WebError("api_unavailable"),
   );
 }

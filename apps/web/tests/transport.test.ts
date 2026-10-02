@@ -8,6 +8,7 @@ import { POST } from "../app/api/discover/save/route";
 import { errorMessage, WebError } from "../lib/errors";
 import { saved } from "./fixtures";
 beforeEach(() => {
+  vi.stubEnv("WEB_PUBLIC_ORIGIN", "http://localhost");
   vi.stubEnv("APP_ENV", "development");
   vi.stubEnv("AUTH_ROLLOUT_MODE", "legacy-development");
   vi.stubEnv("WEB_DEV_API_TOKEN", "web-tests-server-only-dev-token-123456");
@@ -128,7 +129,7 @@ it("treats malformed successful Save as ambiguous", async () => {
     saveJob({ source: "trudvsem", source_scope: "c", external_id: "v" }),
   ).rejects.toThrow("ambiguous_save");
 });
-it("accepts browser Host when Next uses an internal hostname, without trusting forwarded-host", async () => {
+it("accepts explicit local origin without trusting Host or forwarded-host", async () => {
   const fetcher = vi.fn().mockResolvedValue(Response.json(saved));
   vi.stubGlobal("fetch", fetcher);
   const response = await POST(

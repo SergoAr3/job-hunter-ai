@@ -1,9 +1,13 @@
+import { redirect } from "next/navigation";
+import { loginUrl } from "../../../../lib/auth";
+import { pageAccess } from "../../../../lib/server/page-access";
+import { AuthUnavailable } from "../../../../components/auth-unavailable";
 import Link from "next/link";
-import { ApplicationStatusDetail } from "../../../components/application-status-detail";
-import { getApplication } from "../../../lib/server/api";
-import { errorMessage, WebError } from "../../../lib/errors";
+import { ApplicationStatusDetail } from "../../../../components/application-status-detail";
+import { getApplication } from "../../../../lib/server/api";
+import { errorMessage, WebError } from "../../../../lib/errors";
 import { notFound } from "next/navigation";
-import { safeApplicationsReturn } from "../../../lib/applications";
+import { safeApplicationsReturn } from "../../../../lib/applications";
 export const dynamic = "force-dynamic";
 export default async function Page({
   params,
@@ -13,11 +17,15 @@ export default async function Page({
   searchParams: Promise<{ from?: string | string[] }>;
 }) {
   const { applicationId } = await params;
+  if (!(await pageAccess(`/applications/${encodeURIComponent(applicationId)}`)))
+    return <AuthUnavailable />;
   const backUrl = safeApplicationsReturn((await searchParams).from);
   let detail;
   try {
     detail = await getApplication(applicationId);
   } catch (error) {
+    if (error instanceof WebError && error.code === "unauthenticated")
+      redirect(loginUrl(`/applications/${applicationId}`));
     if (error instanceof WebError && error.code === "APPLICATION_NOT_FOUND")
       notFound();
     return (

@@ -2002,3 +2002,73 @@ summary {
     transition: none;
   }
 }
+
+.auth-shell {
+  display: grid;
+  place-items: center;
+  min-height: 100dvh;
+  padding: 32px 20px;
+}
+.auth-card {
+  width: 100%;
+  max-width: 440px;
+  padding: 32px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--surface-shadow);
+}
+.auth-brand {
+  text-decoration: none;
+  font-weight: 700;
+}
+.auth-card h1 {
+  margin: 24px 0 8px;
+}
+.auth-card p,
+.auth-card label span {
+  color: var(--muted);
+}
+.auth-card form {
+  display: grid;
+  gap: 20px;
+  margin-top: 24px;
+}
+.auth-card label {
+  display: grid;
+  gap: 6px;
+  font-weight: 600;
+}
+.auth-card input {
+  width: 100%;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  padding: 12px;
+  background: var(--surface);
+  color: var(--ink);
+}
+.auth-card label span {
+  font-size: 12px;
+  font-weight: 400;
+}
+.account-menu {
+  display: grid;
+  gap: 12px;
+  margin-top: auto;
+  overflow-wrap: anywhere;
+  font-size: 13px;
+}
+.account-menu span {
+  color: var(--sidebar-muted);
+}
+.account-menu button {
+  background: transparent;
+  border-color: #454553;
+  color: var(--sidebar-ink);
+}
+.account-menu button:hover:not(:disabled) {
+  background: #292932;
+}
+.account-menu a {
+  color: #bab8ff;
+}

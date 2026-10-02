@@ -68,13 +68,15 @@ session или Bot credential. Production запрещает `legacy-development
 python3 -c 'import secrets; print(secrets.token_urlsafe(32))'
 ```
 
-Backend Auth пока предназначен для private/dev flow: email verification будет
-в Slice 6; cookie/BFF и Web Auth UI ещё отсутствуют. Подробный контракт и таблица
-routes: [docs/auth-slice2.md](docs/auth-slice2.md).
+Auth остаётся private/dev flow: email verification будет в Slice 6. Backend
+контракт: [docs/auth-slice2.md](docs/auth-slice2.md); текущий Web flow:
+[docs/auth-slice3.md](docs/auth-slice3.md).
 
 ## Настройка локального Web
 
-Чтобы пользоваться Web, задайте `WEB_DEV_USER_ID` в корневом `.env`. Это
+### A. Transitional dev identity (до Slice 5)
+
+Чтобы пользоваться Web без login, задайте `WEB_DEV_USER_ID` в корневом `.env`. Это
 внутренний `users.id` существующего пользователя, **не** Telegram ID. Например,
 узнать ID можно запросом к локальной БД:
 
@@ -83,7 +85,7 @@ docker compose exec db psql -U job_hunter -d job_hunter \
   -c 'SELECT id, telegram_id, username, first_name FROM users ORDER BY id;'
 ```
 
-Web не создаёт пользователей. Если `WEB_DEV_USER_ID` пуст или отсутствует,
+Dev fallback не создаёт пользователей. Если `WEB_DEV_USER_ID` пуст или отсутствует,
 Next.js всё равно запускается и отображает существующую ошибку конфигурации;
 укажите ID и перезапустите `make dev`. Server-side `API_BASE_URL` для этого
 workflow автоматически указывает на `http://127.0.0.1:8000`. Переменные доступны
@@ -91,6 +93,24 @@ workflow автоматически указывает на `http://127.0.0.1:80
 
 Это локальная single-user development configuration, а не production
 authentication. Не публикуйте Web/API через tunnel или публичный reverse proxy.
+
+### B. Real email login
+
+Откройте `http://127.0.0.1:3100/register`, отправьте форму, затем войдите на
+`/login`. Регистрация возвращает нейтральный результат и не создаёт сессию
+или Profile. Для нового аккаунта создайте Profile через Web. `WEB_DEV_USER_ID`
+не нужен для real session: cookie имеет приоритет над dev identity во всех
+domain requests. Невалидная/expired cookie не включает fallback.
+
+В local HTTP используется отдельная HttpOnly cookie `job_hunter_session_dev`.
+После logout без cookie режим A может снова показать dev account; это явный
+transitional workflow, который будет удалён в Slice 5. Для проверки redirect
+без cookie запускайте Next с `AUTH_ROLLOUT_MODE=enforced`.
+
+В production задайте точный `WEB_PUBLIC_ORIGIN=https://your-host.example`
+(без trailing slash). Host/X-Forwarded-Host не определяют доверенный Origin.
+Локально разрешены только `http://127.0.0.1:3100`, `http://localhost:3100` и
+явно настроенный `WEB_PUBLIC_ORIGIN`. Не меняйте `.env.example` на реальные секреты.
 
 ## Smoke-сценарий Discover → Save → Application
 

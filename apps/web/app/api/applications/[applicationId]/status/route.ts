@@ -1,3 +1,4 @@
+import { requireMutation } from "../../../../../lib/server/origin";
 import {
   applicationStatuses,
   type ApplicationStatus,
@@ -20,17 +21,7 @@ export async function PUT(
     )
       throw new WebError("APPLICATION_NOT_FOUND", 404);
     if (new URL(request.url).search) throw new WebError("invalid_request", 400);
-    // The configured local user is selected on the server; Origin is checked before any mutation.
-    const expectedOrigin = new URL(request.url);
-    const host = request.headers.get("host");
-    if (host) expectedOrigin.host = host;
-    if (
-      request.headers.get("origin") !== expectedOrigin.origin ||
-      request.headers.get("sec-fetch-site") === "cross-site"
-    )
-      throw new WebError("invalid_request", 403);
-    if (!request.headers.get("content-type")?.startsWith("application/json"))
-      throw new WebError("invalid_request", 400);
+    requireMutation(request);
     let value: unknown;
     try {
       value = JSON.parse(await request.text());

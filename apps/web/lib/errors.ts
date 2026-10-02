@@ -8,6 +8,10 @@ export class WebError extends Error {
   }
 }
 const messages: Record<string, string> = {
+  unauthenticated: "Сессия завершилась. Войдите снова.",
+  auth_invalid_credentials: "Не удалось войти. Проверьте email и пароль.",
+  auth_invalid: "Проверьте введённые данные.",
+  auth_unavailable: "Вход временно недоступен. Повторите попытку позже.",
   configuration:
     "Web не настроен. Для make dev укажите корректный WEB_DEV_USER_ID в корневом .env. При отдельном запуске Web настройте WEB_DEV_USER_ID и API_BASE_URL в apps/web/.env.local. Перезапустите Web. Это локальный режим, не авторизация.",
   api_unavailable:
@@ -22,7 +26,7 @@ const messages: Record<string, string> = {
     "Не удалось безопасно сохранить вакансию. Обновите поиск.",
   USER_NOT_FOUND:
     "Настроенный пользователь не найден. Проверьте WEB_DEV_USER_ID: нужен внутренний ID существующего пользователя.",
-  APPLICATION_NOT_FOUND: "Вакансия не найдена у настроенного пользователя.",
+  APPLICATION_NOT_FOUND: "Вакансия не найдена.",
   ambiguous_save:
     "Не удалось подтвердить результат сохранения. Запись могла быть создана. Можно повторить Save: API переиспользует существующую запись.",
   invalid_request: "Проверьте введённые данные и повторите запрос.",

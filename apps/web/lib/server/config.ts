@@ -19,6 +19,15 @@ export function getConfig() {
     !base
   )
     throw new WebError("configuration", 503);
+  const baseUrl = getApiBase();
+  if (!["localhost", "127.0.0.1", "[::1]"].includes(new URL(baseUrl).hostname))
+    throw new WebError("configuration", 503);
+  return { userId: id, baseUrl, devToken };
+}
+
+export function getApiBase() {
+  const base = process.env.API_BASE_URL;
+  if (!base) throw new WebError("configuration", 503);
   let url: URL;
   try {
     url = new URL(base);
@@ -31,9 +40,8 @@ export function getConfig() {
     url.password ||
     url.search ||
     url.hash ||
-    url.pathname !== "/" ||
-    !["localhost", "127.0.0.1", "[::1]"].includes(url.hostname)
+    url.pathname !== "/"
   )
     throw new WebError("configuration", 503);
-  return { userId: id, baseUrl: url.origin, devToken };
+  return url.origin;
 }

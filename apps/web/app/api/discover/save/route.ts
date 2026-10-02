@@ -1,20 +1,9 @@
+import { requireMutation } from "../../../../lib/server/origin";
 import { saveJob, errorResponse } from "../../../../lib/server/api";
 import { WebError } from "../../../../lib/errors";
 export async function POST(request: Request) {
   try {
-    // This local mutation is same-origin; it is not an authentication mechanism.
-    // Next may construct request.url with its internal hostname. Host is the
-    // browser-facing authority; do not trust arbitrary forwarded-host headers.
-    const expectedOrigin = new URL(request.url);
-    const host = request.headers.get("host");
-    if (host) expectedOrigin.host = host;
-    if (
-      request.headers.get("origin") !== expectedOrigin.origin ||
-      request.headers.get("sec-fetch-site") === "cross-site"
-    )
-      throw new WebError("invalid_request", 403);
-    if (!request.headers.get("content-type")?.startsWith("application/json"))
-      throw new WebError("invalid_request", 400);
+    requireMutation(request);
     let value;
     try {
       value = JSON.parse(await request.text());
