@@ -1,3 +1,4 @@
+import os
 import re
 from datetime import date, datetime
 from typing import Protocol, TypeGuard
@@ -147,6 +148,17 @@ def _is_match_learning_conversion(value: object) -> bool:
 
 def _is_nonnegative_int(value: object) -> bool:
     return type(value) is int and value >= 0
+
+
+class _BotServiceAuth(httpx.Auth):
+    def __init__(self, token: str):
+        self._token = token
+
+    def auth_flow(self, request):
+        # Service credential is only for identity/domain user operations.
+        if request.url.path.startswith("/users/"):
+            request.headers["X-Bot-Service-Token"] = self._token
+        yield request
 
 
 class BotApiClient(Protocol):
@@ -299,8 +311,18 @@ class JobHunterApiClient:
             raise httpx.DecodingError("Invalid cover letter response", request=response.request)
         return payload
 
-    def __init__(self, base_url: str) -> None:
-        self._client = httpx.AsyncClient(base_url=base_url, timeout=40.0)
+    def __init__(self, base_url: str, service_token: str | None = None) -> None:
+        token = service_token if service_token is not None else os.getenv("BOT_API_SERVICE_TOKEN", "")
+        if not 32 <= len(token) <= 512 or not token.isascii() or any(ord(char) < 33 or ord(char) > 126 for char in token):
+            raise RuntimeError("BOT_API_SERVICE_TOKEN must be configured for Bot API access")
+        # Reject deliberate examples/defaults in production, without estimating entropy.
+        unsafe = {"replace", "change", "example", "placeholder", "test", "tests", "dev", "development", "dummy", "secret", "password", "changeme"}
+        if os.getenv("APP_ENV", "production") == "production" and (
+            unsafe.intersection(re.split(r"[^a-z0-9]+", token.lower()))
+            or token.lower() in {"a" * len(token), "0" * len(token)}
+        ):
+            raise RuntimeError("BOT_API_SERVICE_TOKEN must be a random production secret")
+        self._client = httpx.AsyncClient(base_url=base_url, timeout=40.0, auth=_BotServiceAuth(token))
 
     async def create_or_get_user(self, telegram_user: User) -> int:
         response = await self._client.post(

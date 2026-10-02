@@ -42,6 +42,36 @@ make dev
 Нажмите `Ctrl+C`, чтобы завершить API, Bot и Web. Для остановки PostgreSQL
 отдельно выполните `docker compose down`.
 
+## Auth Slice 2: локальный trust boundary
+
+Обновите API-зависимости (`apps/api/.venv/bin/pip install -r apps/api/requirements.txt`):
+password hashing использует Argon2id. `make dev` явно задаёт API
+`APP_ENV=development`, `AUTH_ROLLOUT_MODE=legacy-development` и слушает loopback.
+User-scoped routes требуют session/Bot credential либо отдельный dev secret.
+Runner генерирует временный `WEB_DEV_API_TOKEN` для API и Next server,
+ограниченный одним `WEB_DEV_USER_ID`; browser его не получает. Peer IP должен
+быть loopback; Uvicorn не доверяет forwarded headers. Неверный Bearer всегда
+отклоняется без fallback на dev credential.
+`/users/telegram` требует service credential даже в этом режиме.
+
+Для API и Bot runner использует одинаковый `BOT_API_SERVICE_TOKEN` из `.env`
+либо генерирует временный случайный secret на один запуск. Он не записывается
+в файл и не передаётся Web. Для самостоятельного запуска API/Bot задайте одинаковый
+server-only secret (минимум 32 printable ASCII characters без пробелов).
+API по умолчанию запускается с `APP_ENV=production`, `AUTH_ROLLOUT_MODE=enforced`:
+без service credential startup завершается ошибкой, user-scoped routes требуют
+session или Bot credential. Production запрещает `legacy-development` и
+`WEB_DEV_API_TOKEN`, отвергает известные placeholder/test/dev secrets.
+Сгенерируйте production Bot secret и передайте его обоим процессам через secret storage:
+
+```bash
+python3 -c 'import secrets; print(secrets.token_urlsafe(32))'
+```
+
+Backend Auth пока предназначен для private/dev flow: email verification будет
+в Slice 6; cookie/BFF и Web Auth UI ещё отсутствуют. Подробный контракт и таблица
+routes: [docs/auth-slice2.md](docs/auth-slice2.md).
+
 ## Настройка локального Web
 
 Чтобы пользоваться Web, задайте `WEB_DEV_USER_ID` в корневом `.env`. Это

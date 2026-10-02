@@ -8,3 +8,4 @@ python-multipart==0.0.20
 SQLAlchemy==2.0.52
 starlette==0.47.2
 uvicorn[standard]==0.34.0
+argon2-cffi==25.1.0

@@ -22,7 +22,7 @@ async function request(
   body?: Identity | { status: ApplicationStatus },
   method: "POST" | "PUT" = "POST",
 ): Promise<unknown> {
-  const { userId, baseUrl } = getConfig();
+  const { userId, baseUrl, devToken } = getConfig();
   const mutation = body ? method : "GET";
   const ambiguous = method === "PUT" ? "ambiguous_status" : "ambiguous_save";
   let response: Response;
@@ -31,7 +31,10 @@ async function request(
       method: mutation,
       cache: "no-store",
       redirect: "error",
-      headers: body ? { "Content-Type": "application/json" } : undefined,
+      headers: {
+        "X-Web-Dev-Api-Token": devToken,
+        ...(body ? { "Content-Type": "application/json" } : {}),
+      },
       body: body ? JSON.stringify(body) : undefined,
       signal: AbortSignal.timeout(body ? 60000 : 35000),
     });

@@ -75,14 +75,17 @@ async function upstream(
   method: "GET" | "PUT" = "GET",
   payload?: ProfileInput,
 ): Promise<unknown> {
-  const { userId, baseUrl } = getConfig();
+  const { userId, baseUrl, devToken } = getConfig();
   let response: Response;
   try {
     response = await fetch(`${baseUrl}/users/${userId}/${path}`, {
       method,
       cache: "no-store",
       redirect: "error",
-      headers: payload ? { "Content-Type": "application/json" } : undefined,
+      headers: {
+        "X-Web-Dev-Api-Token": devToken,
+        ...(payload ? { "Content-Type": "application/json" } : {}),
+      },
       body: payload ? JSON.stringify(payload) : undefined,
       signal: AbortSignal.timeout(method === "PUT" ? 60000 : 35000),
     });

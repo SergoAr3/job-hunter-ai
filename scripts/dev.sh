@@ -64,6 +64,27 @@ run_migrations() (
     exec python -m alembic upgrade head
 )
 
+# One server-only credential shared by API and Bot for this dev run.
+# It is never exported to the Web process or written to .env.
+dev_bot_api_service_token="$(
+    set +u
+    source .env
+    if [[ -n "${BOT_API_SERVICE_TOKEN:-}" ]]; then
+        printf '%s' "$BOT_API_SERVICE_TOKEN"
+    else
+        apps/api/.venv/bin/python -c 'import secrets; print(secrets.token_urlsafe(32))'
+    fi
+)"
+
+# Separate Web credential, limited by the API to this configured development ID.
+inherited_web_dev_user_id=${WEB_DEV_USER_ID:-}
+dev_web_user_id="$(set +u; source .env; printf '%s' "${WEB_DEV_USER_ID:-}")"
+dev_web_user_id=${dev_web_user_id:-$inherited_web_dev_user_id}
+dev_web_api_token=""
+if [[ -n "$dev_web_user_id" ]]; then
+    dev_web_api_token="$(apps/api/.venv/bin/python -c 'import secrets; print(secrets.token_urlsafe(32))')"
+fi
+
 run_api() (
     cd apps/api
     # shellcheck disable=SC1091
@@ -72,7 +93,7 @@ run_api() (
     # shellcheck disable=SC1091
     source ../../.env
     set +a
-    exec python -m uvicorn app.main:app --reload
+    APP_ENV=development AUTH_ROLLOUT_MODE=legacy-development BOT_API_SERVICE_TOKEN="$dev_bot_api_service_token" WEB_DEV_USER_ID="$dev_web_user_id" WEB_DEV_API_TOKEN="$dev_web_api_token" exec python -m uvicorn app.main:app --reload --host 127.0.0.1 --no-proxy-headers
 )
 
 run_bot() (
@@ -83,28 +104,17 @@ run_bot() (
     # shellcheck disable=SC1091
     source ../../.env
     set +a
-    API_BASE_URL=http://127.0.0.1:8000 exec python ../../scripts/bot_dev.py
+    unset WEB_DEV_API_TOKEN
+    APP_ENV=development API_BASE_URL=http://127.0.0.1:8000 BOT_API_SERVICE_TOKEN="$dev_bot_api_service_token" exec python ../../scripts/bot_dev.py
 )
 
 run_web() (
     cd apps/web
+    unset BOT_API_SERVICE_TOKEN
 
-    # Read only the Web's optional single-user setting from the root .env. The
-    # command substitution keeps unrelated API/Bot settings out of this process.
-    local inherited_web_dev_user_id=${WEB_DEV_USER_ID:-}
-    local web_dev_user_id
-    web_dev_user_id="$(
-        set +u
-        # shellcheck disable=SC1091
-        source ../../.env
-        printf '%s' "${WEB_DEV_USER_ID:-}"
-    )"
-    web_dev_user_id=${web_dev_user_id:-$inherited_web_dev_user_id}
-    if [[ -n "$web_dev_user_id" ]]; then
-        export WEB_DEV_USER_ID="$web_dev_user_id"
-    else
-        unset WEB_DEV_USER_ID
-    fi
+    export WEB_DEV_USER_ID="$dev_web_user_id"
+    export WEB_DEV_API_TOKEN="$dev_web_api_token"
+    export APP_ENV=development AUTH_ROLLOUT_MODE=legacy-development
 
     export API_BASE_URL=http://127.0.0.1:8000
     exec npm run dev -- -p 3100

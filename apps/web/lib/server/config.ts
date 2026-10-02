@@ -3,6 +3,15 @@ import { WebError } from "../errors";
 export function getConfig() {
   const id = process.env.WEB_DEV_USER_ID;
   const base = process.env.API_BASE_URL;
+  const devToken = process.env.WEB_DEV_API_TOKEN;
+  if (
+    process.env.NODE_ENV === "production" ||
+    process.env.APP_ENV !== "development" ||
+    process.env.AUTH_ROLLOUT_MODE !== "legacy-development" ||
+    !devToken ||
+    !/^[\x21-\x7e]{32,512}$/.test(devToken)
+  )
+    throw new WebError("configuration", 503);
   if (
     !id ||
     !/^[1-9]\d*$/.test(id) ||
@@ -22,8 +31,9 @@ export function getConfig() {
     url.password ||
     url.search ||
     url.hash ||
-    url.pathname !== "/"
+    url.pathname !== "/" ||
+    !["localhost", "127.0.0.1", "[::1]"].includes(url.hostname)
   )
     throw new WebError("configuration", 503);
-  return { userId: id, baseUrl: url.origin };
+  return { userId: id, baseUrl: url.origin, devToken };
 }

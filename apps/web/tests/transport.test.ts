@@ -8,6 +8,9 @@ import { POST } from "../app/api/discover/save/route";
 import { errorMessage, WebError } from "../lib/errors";
 import { saved } from "./fixtures";
 beforeEach(() => {
+  vi.stubEnv("APP_ENV", "development");
+  vi.stubEnv("AUTH_ROLLOUT_MODE", "legacy-development");
+  vi.stubEnv("WEB_DEV_API_TOKEN", "web-tests-server-only-dev-token-123456");
   vi.stubEnv("WEB_DEV_USER_ID", "987");
   vi.stubEnv("API_BASE_URL", "http://127.0.0.1:8000");
 });
