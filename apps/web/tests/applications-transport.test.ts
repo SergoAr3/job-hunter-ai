@@ -1,6 +1,9 @@
 // @vitest-environment node
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 vi.mock("server-only", () => ({}));
+vi.mock("../lib/server/auth", async () => ({
+  getDomainIdentity: vi.fn((await import("./session-fixture")).sessionIdentity),
+}));
 import { GET } from "../app/api/applications/route";
 import { listApplications } from "../lib/server/api";
 import {
@@ -26,9 +29,6 @@ const item = {
 beforeEach(() => {
   vi.stubEnv("WEB_PUBLIC_ORIGIN", "http://localhost");
   vi.stubEnv("APP_ENV", "development");
-  vi.stubEnv("AUTH_ROLLOUT_MODE", "legacy-development");
-  vi.stubEnv("WEB_DEV_API_TOKEN", "web-tests-server-only-dev-token-123456");
-  vi.stubEnv("WEB_DEV_USER_ID", "987");
   vi.stubEnv("API_BASE_URL", "http://127.0.0.1:8000");
 });
 afterEach(() => {
@@ -36,7 +36,7 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-it("uses one list request for the configured user and projects list fields", async () => {
+it("uses one list request for the authenticated user and projects list fields", async () => {
   const fetcher = vi
     .fn()
     .mockResolvedValue(Response.json({ items: [item], has_next: true }));

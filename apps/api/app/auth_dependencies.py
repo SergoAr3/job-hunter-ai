@@ -1,6 +1,5 @@
 """Authentication and path authorization, shared by all user-owned routes."""
 import hmac
-import ipaddress
 import re
 
 from fastapi import Depends, Request
@@ -12,7 +11,6 @@ from app.services.auth import AuthError, Principal, authenticate
 
 
 BOT_HEADER = "x-bot-service-token"
-DEV_HEADER = "x-web-dev-api-token"
 
 
 def bearer_token(request: Request) -> str:
@@ -61,16 +59,4 @@ def require_user_access(
         authorize_user(principal, target)
         request.state.principal = principal
         return
-    # Explicit server-only single-user credential. Host/XFF are not proof of locality.
-    headers = request.headers.getlist(DEV_HEADER)
-    if (settings.environment == "development" and settings.rollout_mode == "legacy-development"
-            and settings.web_dev_api_token and len(headers) == 1 and request.client):
-        try:
-            local_client = ipaddress.ip_address(request.client.host).is_loopback
-            target = int(request.path_params["user_id"])
-        except ValueError:
-            local_client, target = False, None
-        if (local_client and target == settings.web_dev_user_id
-                and hmac.compare_digest(headers[0].encode("utf-8"), settings.web_dev_api_token.encode("utf-8"))):
-            return
     raise AuthError()

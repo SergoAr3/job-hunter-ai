@@ -86,9 +86,6 @@ function deferred() {
 beforeEach(() => {
   vi.stubEnv("NODE_ENV", "development");
   vi.stubEnv("APP_ENV", "development");
-  vi.stubEnv("AUTH_ROLLOUT_MODE", "legacy-development");
-  vi.stubEnv("WEB_DEV_USER_ID", "987");
-  vi.stubEnv("WEB_DEV_API_TOKEN", "server-only-dev-credential-123456");
   vi.stubEnv("API_BASE_URL", "http://127.0.0.1:8000");
   vi.stubEnv("WEB_PUBLIC_ORIGIN", origin);
 });
@@ -97,20 +94,17 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 it.each(["", `${name}_extra=${tokenA}`, `prefix_${name}=${tokenA}`])(
-  "only an absent exact cookie permits explicit dev fallback: %s",
+  "an absent exact cookie never selects an identity: %s",
   async (cookie) => {
     const upstream = vi.fn();
     vi.stubGlobal("fetch", upstream);
-    expect(await within(request(cookie), getDomainIdentity)).toMatchObject({
-      mode: "development",
-      userId: "987",
-    });
-    expect(upstream).not.toHaveBeenCalled();
-    vi.stubEnv("AUTH_ROLLOUT_MODE", "enforced");
     await expect(
       within(request(cookie), getDomainIdentity),
     ).rejects.toMatchObject({ status: 401 });
-    vi.stubEnv("AUTH_ROLLOUT_MODE", "legacy-development");
+    expect(upstream).not.toHaveBeenCalled();
+    await expect(
+      within(request(cookie), getDomainIdentity),
+    ).rejects.toMatchObject({ status: 401 });
     vi.stubEnv("NODE_ENV", "production");
     await expect(
       within(request(cookie), getDomainIdentity),
@@ -121,24 +115,20 @@ it.each([
   `${name}=${tokenA}`,
   `other=hello; ${name}=${tokenA}; ${name}_extra=bad; last=value`,
   `${name}=%41${tokenA.slice(1)}`,
-])(
-  "one decoded valid session takes precedence over dev: %s",
-  async (cookie) => {
-    const upstream = vi
-      .fn()
-      .mockResolvedValue(Response.json({ user_id: 42, me }));
-    vi.stubGlobal("fetch", upstream);
-    expect(await within(request(cookie), getDomainIdentity)).toMatchObject({
-      mode: "session",
-      userId: "42",
-      headers: { Authorization: `Bearer ${tokenA}` },
-    });
-    expect(upstream).toHaveBeenCalledTimes(1);
-    expect(upstream.mock.calls[0][0]).toBe(
-      "http://127.0.0.1:8000/auth/internal/principal",
-    );
-  },
-);
+])("one decoded valid session selects its own identity: %s", async (cookie) => {
+  const upstream = vi
+    .fn()
+    .mockResolvedValue(Response.json({ user_id: 42, me }));
+  vi.stubGlobal("fetch", upstream);
+  expect(await within(request(cookie), getDomainIdentity)).toMatchObject({
+    userId: "42",
+    headers: { Authorization: `Bearer ${tokenA}` },
+  });
+  expect(upstream).toHaveBeenCalledTimes(1);
+  expect(upstream.mock.calls[0][0]).toBe(
+    "http://127.0.0.1:8000/auth/internal/principal",
+  );
+});
 it.each([
   `${name}=%ZZ`,
   `${name}=bad%`,
@@ -151,7 +141,7 @@ it.each([
   `${name}=${tokenA}; ${name}=${tokenA}`,
   `${name}=%ZZ; ${name}=${tokenA}`,
 ])(
-  "raw malformed/duplicate cookie blocks every dev transport: %s",
+  "raw malformed/duplicate cookie blocks every domain transport: %s",
   async (cookie) => {
     const upstream = vi.fn();
     vi.stubGlobal("fetch", upstream);

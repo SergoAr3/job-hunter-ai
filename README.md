@@ -40,7 +40,7 @@ Python, FastAPI, SQLAlchemy, Alembic, PostgreSQL, aiogram, Next.js, React, TypeS
 
 Основной способ — `make dev` из корня репозитория. Подготовьте Docker Compose, Python, Node.js 22.12+ и npm; создайте корневой `.env` по `.env.example`, установите зависимости API, Bot и Web по [инструкции локального запуска](RUN_LOCAL.md). Для Telegram нужен `TELEGRAM_BOT_TOKEN`; для функций с OpenAI — `OPENAI_API_KEY`.
 
-Для Web задайте в корневом `.env` `WEB_DEV_USER_ID` — внутренний `users.id` существующего пользователя, созданного через Telegram `/start`. Это локальная настройка одного пользователя, не механизм авторизации. `make dev` сам задаёт `API_BASE_URL=http://127.0.0.1:8000` для Bot и Web.
+Откройте Web и войдите по email/password или через Telegram. Для доступа к существующим данным Bot используйте Telegram login: он открывает тот же аккаунт. `make dev` задаёт `API_BASE_URL=http://127.0.0.1:8000` для Bot и Web; внутренний users.id настраивать не нужно.
 
 ```bash
 make dev

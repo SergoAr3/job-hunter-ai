@@ -227,10 +227,10 @@ def test_bot_boundary_requires_service_credential():
 
 
 def test_unsafe_startup_settings_rejected():
-    with pytest.raises(RuntimeError, match="only allowed in development"):
-        AuthSettings("production", "legacy-development", SERVICE_TOKEN)
+    with pytest.raises(RuntimeError, match="Invalid APP_ENV"):
+        AuthSettings("unknown", SERVICE_TOKEN)
     with pytest.raises(RuntimeError, match="BOT_API_SERVICE_TOKEN"):
-        AuthSettings("production", "enforced", "")
+        AuthSettings("production", "")
 
 
 def test_all_user_routes_reject_anonymous_and_foreign_principal():

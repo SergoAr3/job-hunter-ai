@@ -1,6 +1,9 @@
 // @vitest-environment node
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 vi.mock("server-only", () => ({}));
+vi.mock("../lib/server/auth", async () => ({
+  getDomainIdentity: vi.fn((await import("./session-fixture")).sessionIdentity),
+}));
 import { GET, PUT } from "../app/api/profile/route";
 import { GET as getWork } from "../app/api/profile/work-experiences/route";
 import { GET as getFacts } from "../app/api/profile/experience-facts/route";
@@ -36,9 +39,6 @@ function mutation(body: unknown, address = url, from = origin) {
 beforeEach(() => {
   vi.stubEnv("WEB_PUBLIC_ORIGIN", "http://localhost");
   vi.stubEnv("APP_ENV", "development");
-  vi.stubEnv("AUTH_ROLLOUT_MODE", "legacy-development");
-  vi.stubEnv("WEB_DEV_API_TOKEN", "web-tests-server-only-dev-token-123456");
-  vi.stubEnv("WEB_DEV_USER_ID", "987");
   vi.stubEnv("API_BASE_URL", "http://127.0.0.1:8000");
 });
 afterEach(() => {
@@ -46,7 +46,7 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
-it("reads the configured user's profile and projects only display fields", async () => {
+it("reads the authenticated user's profile and projects only display fields", async () => {
   const fetcher = vi.fn().mockResolvedValue(Response.json(saved));
   vi.stubGlobal("fetch", fetcher);
   const result = await GET(new Request(url));
@@ -91,7 +91,7 @@ it("rejects user injection and treats initial 404 as missing profile", async () 
   expect(fetcher).toHaveBeenCalledTimes(1);
 });
 
-it("sends the full profile under the configured user and confirms the PUT response shape", async () => {
+it("sends the full profile under the authenticated user and confirms the PUT response shape", async () => {
   const fetcher = vi.fn().mockResolvedValue(Response.json(saved));
   vi.stubGlobal("fetch", fetcher);
   const result = await PUT(mutation({ ...payload, salary_currency: "usd" }));
@@ -187,7 +187,7 @@ it("marks uncertain transport and server outcomes without retrying PUT", async (
   expect(fetcher).toHaveBeenCalledTimes(3);
 });
 
-it("reads both lists under the configured user and strips backend-only fields", async () => {
+it("reads both lists under the authenticated user and strips backend-only fields", async () => {
   const fetcher = vi
     .fn()
     .mockResolvedValueOnce(

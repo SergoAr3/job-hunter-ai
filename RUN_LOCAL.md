@@ -34,7 +34,7 @@ make dev
 
 Проверки и адреса:
 
-- Web Discover: <http://127.0.0.1:3100/discover>
+- Web: <http://127.0.0.1:3100/>
 - API: <http://127.0.0.1:8000>
 - API health: <http://127.0.0.1:8000/health>
 - API Swagger: <http://127.0.0.1:8000/docs>
@@ -42,79 +42,52 @@ make dev
 Нажмите `Ctrl+C`, чтобы завершить API, Bot и Web. Для остановки PostgreSQL
 отдельно выполните `docker compose down`.
 
-## Auth Slice 2: локальный trust boundary
+## Auth и локальный Web после Slice 5
 
-Обновите API-зависимости (`apps/api/.venv/bin/pip install -r apps/api/requirements.txt`):
-password hashing использует Argon2id. `make dev` явно задаёт API
-`APP_ENV=development`, `AUTH_ROLLOUT_MODE=legacy-development` и слушает loopback.
-User-scoped routes требуют session/Bot credential либо отдельный dev secret.
-Runner генерирует временный `WEB_DEV_API_TOKEN` для API и Next server,
-ограниченный одним `WEB_DEV_USER_ID`; browser его не получает. Peer IP должен
-быть loopback; Uvicorn не доверяет forwarded headers. Неверный Bearer всегда
-отклоняется без fallback на dev credential.
-`/users/telegram` требует service credential даже в этом режиме.
+`make dev` использует те же правила идентификации, что production: Web требует
+настоящую AuthSession. Откройте <http://127.0.0.1:3100/> — без session вы попадёте
+на `/login`; после входа — в workspace. Никакой заранее настроенный users.id
+не нужен, users/credentials автоматически не создаются.
+
+1. Запустите `make dev`.
+2. Зарегистрируйтесь по email на `/register` и войдите на `/login`, либо нажмите
+   «Войти через Telegram» и подтвердите свой код в Bot.
+3. Работайте с Profile, Discover и Applications.
+
+Если у вас уже есть данные Bot, используйте Telegram login: он откроет тот же
+аккаунт с прежними Profile / Applications / history. Email account открывает
+свои данные; автоматического объединения аккаунтов нет. Регистрация возвращает
+нейтральный результат и не создаёт session или Profile.
+
+После logout session отзывается (либо сообщается о неподтверждённом отзыве при
+outage), local cookie удаляется, protected pages снова требуют login. Invalid,
+expired и revoked sessions не предоставляют доступ. Недоступный API отображает
+unavailable UX и сохраняет cookie; после recovery действующая session продолжает
+работать с тем же аккаунтом.
 
 Для API и Bot runner использует одинаковый `BOT_API_SERVICE_TOKEN` из `.env`
 либо генерирует временный случайный secret на один запуск. Он не записывается
-в файл и не передаётся Web. Для самостоятельного запуска API/Bot задайте одинаковый
-server-only secret (минимум 32 printable ASCII characters без пробелов).
-API по умолчанию запускается с `APP_ENV=production`, `AUTH_ROLLOUT_MODE=enforced`:
-без service credential startup завершается ошибкой, user-scoped routes требуют
-session или Bot credential. Production запрещает `legacy-development` и
-`WEB_DEV_API_TOKEN`, отвергает известные placeholder/test/dev secrets.
-Сгенерируйте production Bot secret и передайте его обоим процессам через secret storage:
+в файл и не передаётся Web. Для самостоятельного запуска задайте один и тот же
+server-only secret обоим процессам (минимум 32 printable ASCII characters без
+пробелов). Production отвергает placeholder/test secrets. `/users/telegram`
+остаётся Bot-only. User-scoped API требует Bearer session или Bot credential.
 
-```bash
-python3 -c 'import secrets; print(secrets.token_urlsafe(32))'
-```
-
-Auth остаётся private/dev flow: email verification будет в Slice 6. Backend
-контракт: [docs/auth-slice2.md](docs/auth-slice2.md); текущий Web flow:
-[docs/auth-slice3.md](docs/auth-slice3.md).
-
-## Настройка локального Web
-
-### A. Transitional dev identity (до Slice 5)
-
-Чтобы пользоваться Web без login, задайте `WEB_DEV_USER_ID` в корневом `.env`. Это
-внутренний `users.id` существующего пользователя, **не** Telegram ID. Например,
-узнать ID можно запросом к локальной БД:
-
-```bash
-docker compose exec db psql -U job_hunter -d job_hunter \
-  -c 'SELECT id, telegram_id, username, first_name FROM users ORDER BY id;'
-```
-
-Dev fallback не создаёт пользователей. Если `WEB_DEV_USER_ID` пуст или отсутствует,
-Next.js всё равно запускается и отображает существующую ошибку конфигурации;
-укажите ID и перезапустите `make dev`. Server-side `API_BASE_URL` для этого
-workflow автоматически указывает на `http://127.0.0.1:8000`. Переменные доступны
-только серверному Web-процессу.
-
-Это локальная single-user development configuration, а не production
-authentication. Не публикуйте Web/API через tunnel или публичный reverse proxy.
-
-### B. Real email login
-
-Откройте `http://127.0.0.1:3100/register`, отправьте форму, затем войдите на
-`/login`. Регистрация возвращает нейтральный результат и не создаёт сессию
-или Profile. Для нового аккаунта создайте Profile через Web. `WEB_DEV_USER_ID`
-не нужен для real session: cookie имеет приоритет над dev identity во всех
-domain requests. Невалидная/expired cookie не включает fallback.
-
-В local HTTP используется отдельная HttpOnly cookie `job_hunter_session_dev`.
-После logout без cookie режим A может снова показать dev account; это явный
-transitional workflow, который будет удалён в Slice 5. Для проверки redirect
-без cookie запускайте Next с `AUTH_ROLLOUT_MODE=enforced`.
+В local HTTP используется HttpOnly cookie `job_hunter_session_dev`, SameSite=Lax,
+Path=/, без Secure. Production использует Secure `__Host-job_hunter_session`.
+Для отдельного Web процесса задайте серверный `API_BASE_URL` в
+`apps/web/.env.local`. Cookie/environment различия не дают дополнительных прав.
 
 В production задайте точный `WEB_PUBLIC_ORIGIN=https://your-host.example`
 (без trailing slash). Host/X-Forwarded-Host не определяют доверенный Origin.
-Локально разрешены только `http://127.0.0.1:3100`, `http://localhost:3100` и
-явно настроенный `WEB_PUBLIC_ORIGIN`. Не меняйте `.env.example` на реальные секреты.
+Локально разрешены `http://127.0.0.1:3100`, `http://localhost:3100` и явно настроенный
+`WEB_PUBLIC_ORIGIN`. Не добавляйте реальные secrets в examples или Git.
+
+Текущий контракт: [docs/auth-slice5.md](docs/auth-slice5.md). Email verification,
+password reset и public rollout hardening остаются Slice 6.
 
 ## Smoke-сценарий Discover → Save → Application
 
-Создайте пользователя через `/start` в Telegram. Профиль нужен для matching
+Войдите по email или Telegram в Web. Профиль нужен для matching
 preview, но не для поиска или сохранения вакансии.
 
 1. Откройте Discover и выполните поиск.

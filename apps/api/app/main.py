@@ -1,5 +1,4 @@
 from contextlib import asynccontextmanager
-import logging
 
 from datetime import date
 
@@ -115,10 +114,8 @@ from app.services.job_ai_enrichment import JobAIEnrichmentService
 
 @asynccontextmanager
 async def lifespan(app):
-    settings = get_auth_settings()  # Fail startup on missing/unsafe configuration.
+    get_auth_settings()  # Fail startup on missing/unsafe configuration.
     get_passwords()  # Prepare dummy hash before serving traffic.
-    if settings.rollout_mode == "legacy-development":
-        logging.getLogger(__name__).warning("Legacy development identity enabled on loopback until Auth Slice 5")
     yield
 
 

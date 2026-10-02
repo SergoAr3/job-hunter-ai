@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, Request, Response
 from sqlalchemy.orm import Session
 from app.database import get_session
-from app.auth_dependencies import require_bot_service, require_principal, BOT_HEADER, DEV_HEADER
+from app.auth_dependencies import require_bot_service, require_principal, BOT_HEADER
 from app.services import auth, telegram_auth
 from app.telegram_auth_schemas import ChallengeCreate, BrowserChallenge, BotChallenge, BotApproval
 
@@ -9,7 +9,7 @@ router = APIRouter(prefix="/auth/telegram", tags=["auth"])
 
 
 def browser_principal(request: Request, session):
-    if request.headers.getlist(BOT_HEADER) or request.headers.getlist(DEV_HEADER):
+    if request.headers.getlist(BOT_HEADER):
         raise auth.AuthError()
     return require_principal(request, session) if request.headers.getlist("authorization") else None
 

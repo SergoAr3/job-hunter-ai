@@ -255,13 +255,12 @@ def test_browser_cancel_owned_login_is_terminal_without_session(approved):
         assert db.query(AuthSession).count() == 0 and db.query(User).count() == 0
         assert db.get(TelegramChallenge, auth.token_hash(body['token'])).outcome == 'cancelled'
 
-@pytest.mark.parametrize('variant', ['binding', 'purpose', 'bot', 'dev', 'bearer'])
+@pytest.mark.parametrize('variant', ['binding', 'purpose', 'bot', 'bearer'])
 def test_browser_cancel_requires_login_binding_and_browser_boundary(variant):
     body = challenge(); payload = body.copy(); headers = {}
     if variant == 'binding': payload['binding'] = secrets.token_urlsafe(32)
     if variant == 'purpose': payload['purpose'] = 'link'
     if variant == 'bot': headers = BOT
-    if variant == 'dev': headers = {'X-Web-Dev-Api-Token': 'not-browser-auth'}
     if variant == 'bearer':
         register('cancel@example.com'); headers = bearer(login('cancel@example.com')['session_token'])
     assert client.post('/auth/telegram/cancel', json=payload, headers=headers).status_code in (400, 401)
@@ -285,3 +284,12 @@ def test_browser_cancel_database_failure_rolls_back(monkeypatch):
     with TestSessionLocal() as db:
         assert db.get(TelegramChallenge, auth.token_hash(body['token'])).outcome is None
         assert db.query(AuthSession).count() == 0
+
+
+def test_removed_web_credential_is_only_an_ignored_header_not_identity():
+    body = challenge()
+    headers = {"X-Web-Dev-Api-Token": "obsolete-not-authentication"}
+    assert client.post('/auth/telegram/cancel', json=body | {"binding":secrets.token_urlsafe(32)}, headers=headers).status_code == 400
+    assert client.post('/auth/telegram/cancel', json=body, headers=headers).status_code == 200
+    with TestSessionLocal() as db:
+        assert db.query(AuthSession).count() == 0 and db.query(User).count() == 0

@@ -1,7 +1,10 @@
 // @vitest-environment node
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 vi.mock("server-only", () => ({}));
-import { getConfig } from "../lib/server/config";
+vi.mock("../lib/server/auth", async () => ({
+  getDomainIdentity: vi.fn((await import("./session-fixture")).sessionIdentity),
+}));
+import { getApiBase } from "../lib/server/config";
 import { getApplication, publicDetail, saveJob } from "../lib/server/api";
 import { GET } from "../app/api/discover/route";
 import { POST } from "../app/api/discover/save/route";
@@ -10,29 +13,30 @@ import { saved } from "./fixtures";
 beforeEach(() => {
   vi.stubEnv("WEB_PUBLIC_ORIGIN", "http://localhost");
   vi.stubEnv("APP_ENV", "development");
-  vi.stubEnv("AUTH_ROLLOUT_MODE", "legacy-development");
-  vi.stubEnv("WEB_DEV_API_TOKEN", "web-tests-server-only-dev-token-123456");
-  vi.stubEnv("WEB_DEV_USER_ID", "987");
   vi.stubEnv("API_BASE_URL", "http://127.0.0.1:8000");
 });
 afterEach(() => {
   vi.unstubAllEnvs();
   vi.unstubAllGlobals();
 });
-it("points make dev configuration errors to the root .env", () => {
-  expect(errorMessage(new WebError("configuration"))).toContain(
-    "Для make dev укажите корректный WEB_DEV_USER_ID в корневом .env",
-  );
+it("configuration errors describe deployment settings only", () => {
+  expect(errorMessage(new WebError("configuration"))).toContain("API_BASE_URL");
 });
-it.each([undefined, "", "0", "-1", "1.5", "abc", "9007199254740993"])(
-  "rejects missing/invalid configured ID %s without a fallback",
-  (value) => {
-    vi.stubEnv("WEB_DEV_USER_ID", value);
-    expect(() => getConfig()).toThrow("configuration");
-  },
-);
-it("returns configuration error from transport before calling upstream", async () => {
-  vi.stubEnv("WEB_DEV_USER_ID", "");
+it.each([
+  undefined,
+  "",
+  "not-a-url",
+  "ftp://api",
+  "https://user:secret@api",
+  "https://api/path",
+  "https://api?q=x",
+  "https://api#x",
+])("rejects invalid API base %s", (value) => {
+  vi.stubEnv("API_BASE_URL", value);
+  expect(() => getApiBase()).toThrow("configuration");
+});
+it("returns deployment configuration error before calling upstream", async () => {
+  vi.stubEnv("API_BASE_URL", "");
   const fetcher = vi.fn();
   vi.stubGlobal("fetch", fetcher);
   const result = await GET(
@@ -58,7 +62,7 @@ it("strips internal IDs from detail responses", () => {
   expect(result.application).not.toHaveProperty("user_id");
   expect(JSON.stringify(result)).not.toContain("987");
 });
-it("routes through configured user and forwards only identity on Save", async () => {
+it("routes through authenticated user and forwards only identity on Save", async () => {
   const fetcher = vi.fn().mockResolvedValue(Response.json(saved));
   vi.stubGlobal("fetch", fetcher);
   const identity = { source: "trudvsem", source_scope: "c", external_id: "v" };

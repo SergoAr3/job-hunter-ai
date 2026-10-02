@@ -14,11 +14,9 @@ it("keeps logout available on server outage without presenting dev identity", as
   expect(screen.getByRole("button", { name: "Выйти" })).toBeInTheDocument();
   expect(screen.queryByText("Локальный dev-аккаунт")).not.toBeInTheDocument();
 });
-it("no real cookie retains the explicit development account affordance", async () => {
+it("no session offers login without presenting an account", async () => {
   resolver.mockResolvedValue({ kind: "unauthenticated", present: false });
   render(await WorkspaceLayout({ children: <p>Профиль</p> }));
-  expect(screen.getByText("Локальный dev-аккаунт")).toBeInTheDocument();
-  expect(
-    screen.getByRole("link", { name: "Войти по email" }),
-  ).toBeInTheDocument();
+  expect(screen.queryByText("Локальный dev-аккаунт")).not.toBeInTheDocument();
+  expect(screen.getByRole("link", { name: "Войти" })).toBeInTheDocument();
 });

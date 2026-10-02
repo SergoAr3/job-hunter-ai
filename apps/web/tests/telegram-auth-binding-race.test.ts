@@ -123,7 +123,6 @@ function terminalResponse(kind: Case) {
 beforeEach(() => {
   vi.stubEnv("NODE_ENV", "development");
   vi.stubEnv("APP_ENV", "development");
-  vi.stubEnv("AUTH_ROLLOUT_MODE", "enforced");
   vi.stubEnv("API_BASE_URL", "http://127.0.0.1:8000");
   vi.stubEnv("WEB_PUBLIC_ORIGIN", "http://localhost:3100");
   upstream.mockReset();

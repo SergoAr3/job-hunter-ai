@@ -37,7 +37,7 @@ pending/approved/expired/cancelled/conflict/consumed. Completion alone issues a
 session; polling cannot create one.
 
 Bot-only POST `/auth/telegram/bot/{inspect,approve,cancel}` requires Bot service
-auth, rejects Bearer/dev/anonymous credentials, and receives identity only from
+auth, rejects Bearer/anonymous credentials, and receives identity only from
 Telegram update/callback `from_user`. Ordinary `/start` is unchanged. Auth routing
 runs first, never calls `/users/telegram` before deciding link. Confirmation is
 private-chat only, with explicit approve/cancel buttons. Callback data contains
@@ -78,7 +78,8 @@ support future cleanup. No background cleanup worker is added; expired/terminal
 rows can be removed by later maintenance.
 
 Safe-next and normal session cookies are shared with email auth. Telegram-created
-real sessions outrank explicit legacy dev identity; bad sessions never fall back.
+Slice 5 removed the staged development fallback; real sessions are now the only
+Web identity in all environments.
 Email/password auth, logout, CSRF and 503 semantics stay unchanged.
 
 ## Limits and rollout
@@ -94,7 +95,7 @@ identity smoke needs a second Telegram account that is not already linked. With
 one Telegram account, use existing-account login/conflict live smoke and isolated
 fixtures for the remaining scenarios, recording the limitation.
 
-Slice 5 removes transitional dev identity. Slice 6 covers email verification,
+Slice 5 removed the transitional identity used during staged rollout. Slice 6 covers email verification,
 password reset and rollout hardening/rate limiting. Merge/disconnect/change identity,
 OAuth/MFA/passkeys and Redis are out of scope. Auth v1 is not declared complete.
 

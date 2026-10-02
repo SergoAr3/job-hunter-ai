@@ -50,9 +50,6 @@ function challengeCookie(purpose = "login") {
 beforeEach(() => {
   vi.stubEnv("NODE_ENV", "development");
   vi.stubEnv("APP_ENV", "development");
-  vi.stubEnv("AUTH_ROLLOUT_MODE", "legacy-development");
-  vi.stubEnv("WEB_DEV_USER_ID", "987");
-  vi.stubEnv("WEB_DEV_API_TOKEN", "never-browser-dev-credential");
   vi.stubEnv("API_BASE_URL", "http://127.0.0.1:8000");
   vi.stubEnv("WEB_PUBLIC_ORIGIN", "http://localhost:3100");
   upstream.mockReset();

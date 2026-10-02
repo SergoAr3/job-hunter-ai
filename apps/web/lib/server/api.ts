@@ -103,7 +103,7 @@ export async function searchJobs(
     throw new WebError("api_unavailable");
   return data;
 }
-// Explicit projection prevents the configured user's ID (or extra backend fields) reaching the browser.
+// Explicit projection prevents the authenticated user's ID (or extra backend fields) reaching the browser.
 export function publicDetail(data: ApplicationDetail): ApplicationDetail {
   if (
     !Number.isSafeInteger(data?.application?.id) ||

@@ -3,7 +3,7 @@ import { cache } from "react";
 import { cookies, headers } from "next/headers";
 import { WebError } from "../errors";
 import type { CurrentUser } from "../auth";
-import { getApiBase, getConfig } from "./config";
+import { getApiBase } from "./config";
 import { cookieConfig, TOKEN_PATTERN } from "./cookie";
 
 export function projectUser(value: unknown): CurrentUser {
@@ -107,8 +107,7 @@ type DomainIdentity = {
   userId: string;
   baseUrl: string;
   headers: Record<string, string>;
-  user: CurrentUser | null;
-  mode: "session" | "development";
+  user: CurrentUser;
 };
 export async function getDomainIdentity(): Promise<DomainIdentity> {
   const state = await getCurrentUser();
@@ -118,23 +117,7 @@ export async function getDomainIdentity(): Promise<DomainIdentity> {
       baseUrl: getApiBase(),
       headers: { Authorization: `Bearer ${state.token}` },
       user: state.user,
-      mode: "session" as const,
     };
   if (state.kind === "unavailable") throw new WebError("auth_unavailable", 503);
-  if (state.present) throw new WebError("unauthenticated", 401);
-  if (
-    process.env.APP_ENV === "development" &&
-    process.env.AUTH_ROLLOUT_MODE === "legacy-development" &&
-    process.env.NODE_ENV !== "production"
-  ) {
-    const config = getConfig();
-    return {
-      userId: config.userId,
-      baseUrl: config.baseUrl,
-      headers: { "X-Web-Dev-Api-Token": config.devToken },
-      user: null,
-      mode: "development" as const,
-    };
-  }
   throw new WebError("unauthenticated", 401);
 }

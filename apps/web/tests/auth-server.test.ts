@@ -69,9 +69,6 @@ function session() {
 beforeEach(() => {
   vi.stubEnv("NODE_ENV", "development");
   vi.stubEnv("APP_ENV", "development");
-  vi.stubEnv("AUTH_ROLLOUT_MODE", "legacy-development");
-  vi.stubEnv("WEB_DEV_USER_ID", "987");
-  vi.stubEnv("WEB_DEV_API_TOKEN", "server-only-dev-credential-123456");
   vi.stubEnv("API_BASE_URL", "http://127.0.0.1:8000");
   vi.stubEnv("WEB_PUBLIC_ORIGIN", "http://localhost:3100");
   jar.values = [];
@@ -245,7 +242,7 @@ it.each([401, 503])(
     await expect(getDomainIdentity()).rejects.toMatchObject({ status });
   },
 );
-it("malformed and duplicate cookies never fall back to configured development identity", async () => {
+it("malformed and duplicate cookies never select an identity", async () => {
   for (const values of [
     [{ name: "job_hunter_session_dev", value: "bad" }],
     [
@@ -260,9 +257,7 @@ it("malformed and duplicate cookies never fall back to configured development id
   }
   expect(upstream).not.toHaveBeenCalled();
 });
-it("no cookie permits dev identity only in explicit legacy development mode", async () => {
-  expect((await getDomainIdentity()).userId).toBe("987");
-  vi.stubEnv("AUTH_ROLLOUT_MODE", "enforced");
+it("no cookie never selects an identity", async () => {
   await expect(getDomainIdentity()).rejects.toMatchObject({ status: 401 });
 });
 it.each([
@@ -273,7 +268,6 @@ it.each([
 ])(
   "server protection redirects missing session with safe next %s",
   async (path) => {
-    vi.stubEnv("AUTH_ROLLOUT_MODE", "enforced");
     await expect(pageAccess(path)).rejects.toThrow(
       `REDIRECT:/login?next=${encodeURIComponent(path)}`,
     );

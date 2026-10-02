@@ -76,15 +76,6 @@ dev_bot_api_service_token="$(
     fi
 )"
 
-# Separate Web credential, limited by the API to this configured development ID.
-inherited_web_dev_user_id=${WEB_DEV_USER_ID:-}
-dev_web_user_id="$(set +u; source .env; printf '%s' "${WEB_DEV_USER_ID:-}")"
-dev_web_user_id=${dev_web_user_id:-$inherited_web_dev_user_id}
-dev_web_api_token=""
-if [[ -n "$dev_web_user_id" ]]; then
-    dev_web_api_token="$(apps/api/.venv/bin/python -c 'import secrets; print(secrets.token_urlsafe(32))')"
-fi
-
 run_api() (
     cd apps/api
     # shellcheck disable=SC1091
@@ -93,7 +84,7 @@ run_api() (
     # shellcheck disable=SC1091
     source ../../.env
     set +a
-    APP_ENV=development AUTH_ROLLOUT_MODE=legacy-development BOT_API_SERVICE_TOKEN="$dev_bot_api_service_token" WEB_DEV_USER_ID="$dev_web_user_id" WEB_DEV_API_TOKEN="$dev_web_api_token" exec python -m uvicorn app.main:app --reload --host 127.0.0.1 --no-proxy-headers
+    APP_ENV=development BOT_API_SERVICE_TOKEN="$dev_bot_api_service_token" exec python -m uvicorn app.main:app --reload --host 127.0.0.1 --no-proxy-headers
 )
 
 run_bot() (
@@ -104,7 +95,6 @@ run_bot() (
     # shellcheck disable=SC1091
     source ../../.env
     set +a
-    unset WEB_DEV_API_TOKEN
     APP_ENV=development API_BASE_URL=http://127.0.0.1:8000 BOT_API_SERVICE_TOKEN="$dev_bot_api_service_token" exec python ../../scripts/bot_dev.py
 )
 
@@ -112,9 +102,7 @@ run_web() (
     cd apps/web
     unset BOT_API_SERVICE_TOKEN
 
-    export WEB_DEV_USER_ID="$dev_web_user_id"
-    export WEB_DEV_API_TOKEN="$dev_web_api_token"
-    export APP_ENV=development AUTH_ROLLOUT_MODE=legacy-development
+    export APP_ENV=development
 
     export API_BASE_URL=http://127.0.0.1:8000
     exec npm run dev -- -p 3100
@@ -142,7 +130,7 @@ wait_for_web() {
             wait "$web_pid" || true
             return 1
         fi
-        if curl --silent --fail --max-time 1 http://127.0.0.1:3100/discover | grep '<title>Job Hunter AI</title>' >/dev/null; then
+        if curl --silent --fail --max-time 1 http://127.0.0.1:3100/login | grep '<title>Job Hunter AI</title>' >/dev/null; then
             return 0
         fi
         sleep 1
@@ -223,7 +211,7 @@ fi
 dev_log "Application is running"
 dev_log "API: http://127.0.0.1:8000"
 dev_log "Swagger: http://127.0.0.1:8000/docs"
-dev_log "Web: http://127.0.0.1:3100/discover"
+dev_log "Web: http://127.0.0.1:3100/login"
 
 while true; do
     if ! kill -0 "$api_pid" 2>/dev/null; then

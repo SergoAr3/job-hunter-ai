@@ -24,6 +24,7 @@ export function TelegramAuth({
   purpose: "login" | "link";
   next?: string;
 }) {
+  const [confirming, setConfirming] = useState(false);
   const [challenge, setChallenge] = useState<Challenge | null>(null);
   const [pending, setPending] = useState(false);
   const [message, setMessage] = useState("");
@@ -37,6 +38,17 @@ export function TelegramAuth({
   const completing = useRef(false);
   const [finishing, setFinishing] = useState(false);
   const linking = purpose === "link";
+  useEffect(() => {
+    if (confirming && !challenge) password.current?.focus();
+  }, [confirming, challenge]);
+  function cancelConfirmation() {
+    if (busy.current) return;
+    if (password.current) password.current.value = "";
+    setConfirming(false);
+    setError("");
+    setMessage("");
+    restoreFocus.current = true;
+  }
   async function start(event?: React.FormEvent) {
     event?.preventDefault();
     if (busy.current) return;
@@ -118,7 +130,7 @@ export function TelegramAuth({
       restoreFocus.current = false;
       loginButton.current?.focus();
     }
-  }, [challenge]);
+  }, [challenge, confirming]);
   useEffect(() => {
     if (!challenge) return;
     let active = true;
@@ -241,20 +253,44 @@ export function TelegramAuth({
             </button>
           )}
         </div>
+      ) : linking && !confirming ? (
+        <>
+          <p className="telegram-link-status">Telegram не подключён</p>
+          <button
+            ref={loginButton}
+            className="telegram-login-button"
+            type="button"
+            onClick={() => setConfirming(true)}
+            aria-expanded={false}
+          >
+            <TelegramIcon />
+            <span>Подключить Telegram</span>
+          </button>
+        </>
       ) : linking ? (
-        <form onSubmit={start}>
+        <form className="telegram-link-confirmation" onSubmit={start}>
+          <h3>Подключить Telegram</h3>
+          <p>Для безопасности подтвердите пароль аккаунта.</p>
           <label>
-            Подтвердите пароль аккаунта
+            Пароль
             <input
               ref={password}
               name="link_password"
               type="password"
               autoComplete="current-password"
               required
+              disabled={pending}
             />
           </label>
-          <button type="submit" disabled={pending}>
-            {pending ? "Подождите…" : "Подключить Telegram"}
+          <button
+            className="telegram-login-button"
+            type="submit"
+            disabled={pending}
+          >
+            {pending ? "Подтверждаем…" : "Продолжить"}
+          </button>
+          <button type="button" onClick={cancelConfirmation} disabled={pending}>
+            Отмена
           </button>
         </form>
       ) : (
@@ -266,15 +302,7 @@ export function TelegramAuth({
           disabled={pending}
           aria-busy={pending}
         >
-          <svg
-            className="telegram-icon"
-            aria-hidden="true"
-            focusable="false"
-            viewBox="0 0 24 24"
-            fill="currentColor"
-          >
-            <path d="M21.5 3.7 18.3 20c-.24 1.15-.88 1.43-1.8.89l-4.88-3.6-2.35 2.27c-.26.26-.48.48-.98.48l.35-4.97L17.7 6.62c.4-.35-.09-.55-.62-.2L5.87 13.48 1.03 11.96c-1.05-.33-1.07-1.05.22-1.55L20.18 3.1c.87-.32 1.63.2 1.32.6Z" />
-          </svg>
+          <TelegramIcon />
           <span>
             {pending
               ? "Подождите…"
@@ -287,5 +315,19 @@ export function TelegramAuth({
       {!challenge && message && <p role="status">{message}</p>}
       {error && <p role="alert">{error}</p>}
     </section>
+  );
+}
+
+function TelegramIcon() {
+  return (
+    <svg
+      className="telegram-icon"
+      aria-hidden="true"
+      focusable="false"
+      viewBox="0 0 24 24"
+      fill="currentColor"
+    >
+      <path d="M21.5 3.7 18.3 20c-.24 1.15-.88 1.43-1.8.89l-4.88-3.6-2.35 2.27c-.26.26-.48.48-.98.48l.35-4.97L17.7 6.62c.4-.35-.09-.55-.62-.2L5.87 13.48 1.03 11.96c-1.05-.33-1.07-1.05.22-1.55L20.18 3.1c.87-.32 1.63.2 1.32.6Z" />
+    </svg>
   );
 }

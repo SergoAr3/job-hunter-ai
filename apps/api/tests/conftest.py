@@ -3,7 +3,6 @@ import os
 # Explicit test-only trust configuration; never a production default.
 os.environ["BOT_API_SERVICE_TOKEN"] = "identity-tests-server-only-service-token"
 os.environ["APP_ENV"] = "test"
-os.environ["AUTH_ROLLOUT_MODE"] = "enforced"
 
 import pytest
 from fastapi.testclient import TestClient

@@ -120,9 +120,12 @@ it("link prompts password, preserves spaces, clears it and handles completion ou
     .mockResolvedValueOnce({ status: "approved" })
     .mockRejectedValueOnce(new WebError("auth_unavailable", 503));
   render(<TelegramAuth purpose="link" />);
-  const password = screen.getByLabelText("Подтвердите пароль аккаунта");
+  fireEvent.click(screen.getByRole("button", { name: "Подключить Telegram" }));
+  const password = screen.getByLabelText("Пароль");
   fireEvent.change(password, { target: { value: "  Unicode пароль 🔑  " } });
-  fireEvent.submit(screen.getByRole("button").closest("form")!);
+  fireEvent.submit(
+    screen.getByRole("button", { name: "Продолжить" }).closest("form")!,
+  );
   await waitFor(() => expect(screen.getByRole("alert")).toBeInTheDocument());
   expect(JSON.parse(transport.mock.calls[0][1].body)).toEqual({
     purpose: "link",
@@ -169,10 +172,15 @@ it.each([
       .mockResolvedValueOnce({ ok: true });
     render(<TelegramAuth purpose={purpose} next={next} />);
     if (purpose === "link") {
-      fireEvent.change(screen.getByLabelText("Подтвердите пароль аккаунта"), {
+      fireEvent.click(
+        screen.getByRole("button", { name: "Подключить Telegram" }),
+      );
+      fireEvent.change(screen.getByLabelText("Пароль"), {
         target: { value: "password confirmation" },
       });
-      fireEvent.submit(screen.getByRole("button").closest("form")!);
+      fireEvent.submit(
+        screen.getByRole("button", { name: "Продолжить" }).closest("form")!,
+      );
     } else fireEvent.click(screen.getByRole("button"));
     await waitFor(() => expect(assign).toHaveBeenCalledWith(expected));
     expect(assign).toHaveBeenCalledTimes(1);
@@ -254,10 +262,13 @@ it("linking retains manual open behavior", async () => {
     .mockResolvedValueOnce(challenge)
     .mockImplementationOnce(() => new Promise(() => {}));
   render(<TelegramAuth purpose="link" />);
-  fireEvent.change(screen.getByLabelText("Подтвердите пароль аккаунта"), {
+  fireEvent.click(screen.getByRole("button", { name: "Подключить Telegram" }));
+  fireEvent.change(screen.getByLabelText("Пароль"), {
     target: { value: "confirm password" },
   });
-  fireEvent.submit(screen.getByRole("button").closest("form")!);
+  fireEvent.submit(
+    screen.getByRole("button", { name: "Продолжить" }).closest("form")!,
+  );
   await waitFor(() =>
     expect(
       screen.getByRole("link", { name: "Открыть Telegram" }),
@@ -457,4 +468,66 @@ it("completion disables cancel and successful login stops polling", async () => 
   expect(assign).toHaveBeenCalledWith("/profile");
   expect(transport).toHaveBeenCalledTimes(3);
   expect(transport.mock.calls[2][1].signal.aborted).toBe(true);
+});
+
+it("collapsed link has no password; expand focuses and cancel clears without a challenge", () => {
+  render(<AccountMenu label="Email account" telegramLinked={false} />);
+  expect(screen.getByText("Telegram не подключён")).toBeInTheDocument();
+  expect(screen.queryByLabelText("Пароль")).not.toBeInTheDocument();
+  const button = screen.getByRole("button", { name: "Подключить Telegram" });
+  expect(button).toHaveClass("telegram-login-button");
+  fireEvent.click(button);
+  const password = screen.getByLabelText("Пароль");
+  expect(password).toHaveFocus();
+  expect(password).toHaveAttribute("type", "password");
+  expect(password).toHaveAttribute("autocomplete", "current-password");
+  fireEvent.change(password, { target: { value: "discard me" } });
+  fireEvent.click(screen.getByRole("button", { name: "Отмена" }));
+  expect(password).toHaveValue("");
+  expect(screen.queryByLabelText("Пароль")).not.toBeInTheDocument();
+  expect(
+    screen.getByRole("button", { name: "Подключить Telegram" }),
+  ).toHaveFocus();
+  expect(transport).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole("button", { name: "Подключить Telegram" }));
+  expect(screen.getByLabelText("Пароль")).toHaveValue("");
+});
+it("link pending blocks duplicate submits/cancel; wrong password retains confirmation", async () => {
+  let reject!: (error: unknown) => void;
+  transport.mockImplementationOnce(
+    () =>
+      new Promise((_, fail) => {
+        reject = fail;
+      }),
+  );
+  render(<TelegramAuth purpose="link" />);
+  fireEvent.click(screen.getByRole("button", { name: "Подключить Telegram" }));
+  const password = screen.getByLabelText("Пароль");
+  fireEvent.change(password, { target: { value: "wrong password" } });
+  const form = screen
+    .getByRole("button", { name: "Продолжить" })
+    .closest("form")!;
+  fireEvent.submit(form);
+  fireEvent.submit(form);
+  expect(transport).toHaveBeenCalledTimes(1);
+  expect(screen.getByRole("button", { name: "Подтверждаем…" })).toBeDisabled();
+  expect(screen.getByRole("button", { name: "Отмена" })).toBeDisabled();
+  await act(async () => {
+    reject(new WebError("INVALID_CREDENTIALS", 401));
+  });
+  expect(screen.getByRole("alert")).toBeInTheDocument();
+  expect(password).toHaveValue("");
+  expect(screen.getByRole("button", { name: "Продолжить" })).toBeEnabled();
+});
+it("refreshed linked account hides confirmation and linking action", () => {
+  const view = render(
+    <AccountMenu label="Email account" telegramLinked={false} />,
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Подключить Telegram" }));
+  view.rerender(<AccountMenu label="Email account" telegramLinked={true} />);
+  expect(screen.getByText("Telegram подключён")).toBeInTheDocument();
+  expect(screen.queryByLabelText("Пароль")).not.toBeInTheDocument();
+  expect(
+    screen.queryByRole("button", { name: "Подключить Telegram" }),
+  ).not.toBeInTheDocument();
 });

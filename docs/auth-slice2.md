@@ -61,7 +61,7 @@ revocable. Downgrading revision 15 drops all sessions (signs users out), preserv
 accounts/profile/application data. Downgrading Slice 1 afterwards retains its
 existing refusal of destructive identity rollback.
 
-## Authorization inventory and staged rollout
+## Authorization inventory
 
 Every matched route with `user_id` has `require_user_access`. A validated session
 produces an internal `Principal(user_id, session_hash)`, then `authorize_user`
@@ -70,7 +70,7 @@ the authorized user/profile ownership. A browser-supplied `X-User-ID` has no rol
 Bot uses a separate service credential plus the explicit target in the existing
 path; the trusted Bot takes Telegram identity from update.from_user.id.
 
-In default `enforced` mode ALL user-scoped routes below require a valid session
+In every environment ALL user-scoped routes below require a valid session
 or Bot service credential. Public utility endpoints neither read nor mutate
 user-owned resources. Auth routes never accept Bot credentials as user sessions.
 
@@ -95,27 +95,18 @@ Paths in this inventory omit the common `/users/{user_id}` prefix.
 | POST `/users/telegram` (no common prefix) | Bot-only identity resolver | mandatory service credential; Telegram ID taken from trusted Bot |
 | GET `/health`; POST `/profile/skills/normalize`, `/profile/languages/normalize`, `/cover-letter/language` | public/shared utilities | no account identity or user data access |
 
-The temporary dev path requires `APP_ENV=development`,
-`AUTH_ROLLOUT_MODE=legacy-development`, a loopback peer IP, exactly one correct
-`X-Web-Dev-Api-Token` and a path user equal to configured `WEB_DEV_USER_ID`.
-API and Next server share `WEB_DEV_API_TOKEN`; it is distinct from the Bot secret.
-There is no credential-free bypass and no generic impersonation header. Host/XFF
-alone grant nothing. A supplied Bearer selects session auth even when a dev header
-is present; invalid/malformed Bearer never falls back, valid session identity wins.
-It never permits `/users/telegram`. Production rejects dev credential configuration.
-`make dev` generates an ephemeral separate dev secret when a dev user is configured,
-binds API/Next to loopback and disables Uvicorn proxy headers. Without a configured
-ID the Web still starts and shows its existing configuration error. Next transports
-are `server-only`, fail closed outside explicit development, target only the
-configured loopback API, do not forward browser credentials, and never expose the
-secret in responses. Web never receives the Bot credential.
+## Rollout history and current authentication
 
-Slice 3 supplies Email/password Web login and server-side BFF/cookies; Slice 4
-supplies Telegram Web login and account linking;
-Slice 5 migrates all Web calls from WEB_DEV_USER_ID to session identity and removes
-the legacy-development bypass. Slice 6 supplies verification/reset and
-hardening/rate limits according to the architecture plan. No automatic matching
-of Email and Telegram accounts is performed now.
+Slice 2 introduced an explicitly configured loopback development principal for
+staged rollout. Slice 3 added Email/password Web sessions and Slice 4 added
+Telegram login/linking. Slice 5 removed that development principal, credential,
+rollout flag and all fallback branches. Current Web access requires a real
+AuthSession in every environment; Bot retains its separate service credential.
+No browser-supplied identity or service credential is trusted by Next.
+Current cutover contract: [auth-slice5.md](auth-slice5.md).
+
+Slice 6 supplies verification/reset and hardening/rate limits. No automatic
+matching of Email and Telegram accounts is performed.
 
 ## Bot credential and operational limits
 

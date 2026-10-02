@@ -1,7 +1,7 @@
 # Auth Slice 3: Email/password Web flow
 
 Slice 3 adds Next BFF and UI over Slice 2's FastAPI sessions. It does not complete
-Auth v1: Telegram login/linking is Slice 4, dev identity removal Slice 5, email
+Auth v1: Telegram login/linking is Slice 4, session-only cutover completed in Slice 5, email
 verification/password reset/rate limiting Slice 6.
 
 Browser → `/api/auth/{register,login,logout,me}` → FastAPI. FastAPI owns passwords,
@@ -36,10 +36,10 @@ allows Profile, Discover, Applications and positive-ID detail routes, with queri
 external URLs, backslashes, control characters, malformed/dangerous encoding and
 auth loops fall back to `/profile`.
 
-Real valid session B always wins over configured dev user A. A dev credential is
-used only without any session cookie, in explicit development + legacy-development
-mode, with the existing loopback restrictions. Invalid, duplicate or expired cookie
-never falls back. No browser-supplied credential or user ID is trusted. Backend
+During staged rollout, Slice 3 supported an explicit development fallback.
+Slice 5 removed that path. Current Web identity requires a valid session in all
+environments; absent, invalid, duplicate, expired or revoked cookies never select
+another identity. No browser-supplied credential or user ID is trusted. Backend
 401 becomes standardized BFF `unauthenticated`, clears cookie, and centralized
 client transport redirects once with safe next. Backend 503 preserves cookie and
 never redirects to login.

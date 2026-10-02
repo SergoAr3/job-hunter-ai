@@ -1,6 +1,9 @@
 // @vitest-environment node
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 vi.mock("server-only", () => ({}));
+vi.mock("../lib/server/auth", async () => ({
+  getDomainIdentity: vi.fn((await import("./session-fixture")).sessionIdentity),
+}));
 import { PUT } from "../app/api/applications/[applicationId]/status/route";
 import { setApplicationStatus } from "../lib/server/api";
 import { saved } from "./fixtures";
@@ -27,9 +30,6 @@ function request(
 beforeEach(() => {
   vi.stubEnv("WEB_PUBLIC_ORIGIN", "http://localhost");
   vi.stubEnv("APP_ENV", "development");
-  vi.stubEnv("AUTH_ROLLOUT_MODE", "legacy-development");
-  vi.stubEnv("WEB_DEV_API_TOKEN", "web-tests-server-only-dev-token-123456");
-  vi.stubEnv("WEB_DEV_USER_ID", "987");
   vi.stubEnv("API_BASE_URL", "http://127.0.0.1:8000");
 });
 afterEach(() => {
@@ -37,7 +37,7 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-it("sends only status to the configured user's owned Application", async () => {
+it("sends only status to the authenticated user's owned Application", async () => {
   const fetcher = vi.fn().mockResolvedValue(
     Response.json({
       ...saved,
@@ -150,7 +150,7 @@ it("marks timeout, 5xx and malformed successful response as ambiguous", async ()
 });
 
 it("keeps configuration failure separate from an attempted mutation", async () => {
-  vi.stubEnv("WEB_DEV_USER_ID", "");
+  vi.stubEnv("API_BASE_URL", "");
   const fetcher = vi.fn();
   vi.stubGlobal("fetch", fetcher);
   const response = await PUT(request({ status: "offer" }), context());

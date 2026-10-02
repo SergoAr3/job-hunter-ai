@@ -53,8 +53,7 @@ export function AccountMenu({
         </>
       ) : (
         <>
-          <span>Локальный dev-аккаунт</span>
-          <Link href="/login">Войти по email</Link>
+          <Link href="/login">Войти</Link>
         </>
       )}
       {error && <p role="alert">{error}</p>}
