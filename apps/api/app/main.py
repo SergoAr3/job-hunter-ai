@@ -1,6 +1,16 @@
+from contextlib import asynccontextmanager
+
 from datetime import date
 
-from fastapi import Depends, FastAPI, File, HTTPException, Query, UploadFile, status
+from fastapi import Depends, FastAPI, File, HTTPException, Query, UploadFile, status, Request
+from fastapi.exceptions import RequestValidationError
+from fastapi.exception_handlers import request_validation_exception_handler
+from fastapi.responses import JSONResponse
+
+from app.auth_config import get_auth_settings
+from app.auth_dependencies import require_user_access, require_bot_service
+from app.auth_routes import router as auth_router
+from app.services.auth import AuthError, get_passwords
 from starlette.concurrency import run_in_threadpool
 from sqlalchemy.orm import Session
 
@@ -102,7 +112,38 @@ from app.services.profile_experience_facts import (
 from app.services.vacancy_enrichment import VacancyEnrichmentService
 from app.services.job_ai_enrichment import JobAIEnrichmentService
 
-app = FastAPI(title="Job Hunter AI API")
+@asynccontextmanager
+async def lifespan(app):
+    get_auth_settings()  # Fail startup on missing/unsafe configuration.
+    get_passwords()  # Prepare dummy hash before serving traffic.
+    from app.services.auth_mail import get_mailer, web_origin
+    get_mailer()
+    web_origin()
+    yield
+
+
+app = FastAPI(title="Job Hunter AI API", lifespan=lifespan, dependencies=[Depends(require_user_access)])
+app.include_router(auth_router)
+from app.telegram_auth_routes import router as telegram_auth_router
+app.include_router(telegram_auth_router)
+
+
+@app.exception_handler(AuthError)
+async def auth_error_response(request: Request, error: AuthError):
+    return JSONResponse(status_code=error.status, content={"code": "rate_limited"} if error.status == 429 else {"detail": {"code": error.code}},
+                        headers={"Cache-Control": "no-store", **({"Retry-After": error.retry_after} if hasattr(error, "retry_after") else {}), **({"WWW-Authenticate": "Bearer"} if error.status == 401 else {})})
+
+
+@app.exception_handler(RequestValidationError)
+async def safe_auth_validation(request: Request, error: RequestValidationError):
+    if request.url.path.startswith("/auth/"):
+        # FastAPI's default validation response includes rejected input.
+        return JSONResponse(status_code=422, content={"detail": [
+            {"loc": list(item["loc"]), "msg": item["msg"], "type": item["type"]}
+            for item in error.errors()
+        ]}, headers={"Cache-Control": "no-store"})
+    return await request_validation_exception_handler(request, error)
+
 from app.work_experience_routes import router as work_experience_router
 app.include_router(work_experience_router)
 cover_letter_service = CoverLetterGenerationService()
@@ -166,7 +207,7 @@ def health() -> dict[str, str]:
     return {"status": "ok"}
 
 
-@app.post("/users/telegram", response_model=TelegramUserOut)
+@app.post("/users/telegram", response_model=TelegramUserOut, dependencies=[Depends(require_bot_service)])
 def create_or_get_telegram_user(
     payload: TelegramUserIn, session: Session = Depends(get_session)
 ) -> TelegramUserOut:

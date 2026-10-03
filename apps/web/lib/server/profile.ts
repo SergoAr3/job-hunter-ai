@@ -1,5 +1,5 @@
 import "server-only";
-import { getConfig } from "./config";
+import { getDomainIdentity } from "./auth";
 import { WebError } from "../errors";
 import {
   isProfileField,
@@ -75,14 +75,17 @@ async function upstream(
   method: "GET" | "PUT" = "GET",
   payload?: ProfileInput,
 ): Promise<unknown> {
-  const { userId, baseUrl } = getConfig();
+  const { userId, baseUrl, headers } = await getDomainIdentity();
   let response: Response;
   try {
     response = await fetch(`${baseUrl}/users/${userId}/${path}`, {
       method,
       cache: "no-store",
       redirect: "error",
-      headers: payload ? { "Content-Type": "application/json" } : undefined,
+      headers: {
+        ...headers,
+        ...(payload ? { "Content-Type": "application/json" } : {}),
+      },
       body: payload ? JSON.stringify(payload) : undefined,
       signal: AbortSignal.timeout(method === "PUT" ? 60000 : 35000),
     });
@@ -92,6 +95,7 @@ async function upstream(
       503,
     );
   }
+  if (response.status === 401) throw new WebError("unauthenticated", 401);
   let value: unknown;
   try {
     value = await response.json();

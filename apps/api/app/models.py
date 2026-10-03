@@ -11,14 +11,107 @@ from app.database import Base
 
 class User(Base):
     __tablename__ = "users"
+    __table_args__ = (
+        UniqueConstraint("email_canonical", name="uq_users_email_canonical"),
+        CheckConstraint(
+            "(email IS NULL AND email_canonical IS NULL AND password_hash IS NULL) OR "
+            "(email IS NOT NULL AND email_canonical IS NOT NULL AND password_hash IS NOT NULL)",
+            name="ck_users_email_credentials_complete",
+        ),
+        CheckConstraint(
+            "telegram_id IS NOT NULL OR "
+            "(email IS NOT NULL AND email_canonical IS NOT NULL AND password_hash IS NOT NULL)",
+            name="ck_users_identity_present",
+        ),
+        CheckConstraint(
+            "email IS NULL OR (email_canonical = lower(trim(email)) "
+            "AND length(trim(email)) > 0 AND length(trim(password_hash)) > 0)",
+            name="ck_users_email_canonical",
+        ),
+        CheckConstraint(
+            "email_verified_at IS NULL OR email IS NOT NULL",
+            name="ck_users_email_verification_identity",
+        ),
+        # Printable ASCII keeps lower(trim(email)) identical across databases.
+        # SMTPUTF8 addresses require a separate, explicit normalization policy.
+        CheckConstraint(
+            "email IS NULL OR (instr(email, char(0)) = 0 "
+            "AND instr(email_canonical, char(0)) = 0 AND email NOT GLOB '*[^ -~]*')",
+            name="ck_users_email_ascii",
+        ).ddl_if(dialect="sqlite"),
+        CheckConstraint(
+            "email IS NULL OR email !~ '[^ -~]'",
+            name="ck_users_email_ascii",
+        ).ddl_if(dialect="postgresql"),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    telegram_id: Mapped[int] = mapped_column(BigInteger, unique=True)
+    telegram_id: Mapped[int | None] = mapped_column(BigInteger, unique=True)
     username: Mapped[str | None] = mapped_column(String(255))
-    first_name: Mapped[str] = mapped_column(String(255))
+    first_name: Mapped[str | None] = mapped_column(String(255))
     last_name: Mapped[str | None] = mapped_column(String(255))
     language_code: Mapped[str | None] = mapped_column(String(16))
+    email: Mapped[str | None] = mapped_column(String(320))
+    email_canonical: Mapped[str | None] = mapped_column(String(320))
+    password_hash: Mapped[str | None] = mapped_column(Text)
+    email_verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    display_name: Mapped[str | None] = mapped_column(String(255))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class AuthSession(Base):
+    __tablename__ = "auth_sessions"
+    __table_args__ = (
+        CheckConstraint("expires_at > created_at", name="ck_auth_sessions_expiry"),
+        CheckConstraint("last_seen_at >= created_at", name="ck_auth_sessions_last_seen"),
+    )
+
+    token_hash: Mapped[str] = mapped_column(String(64), primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+    last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class AuthEmailToken(Base):
+    __tablename__ = "auth_email_tokens"
+    __table_args__ = (
+        CheckConstraint("purpose IN ('verify','reset')", name="ck_auth_email_tokens_purpose"),
+        CheckConstraint("expires_at > created_at", name="ck_auth_email_tokens_expiry"),
+        CheckConstraint("(consumed_at IS NULL AND outcome IS NULL) OR (consumed_at IS NOT NULL AND outcome IS NOT NULL AND outcome IN ('consumed','replaced'))", name="ck_auth_email_tokens_terminal"),
+        Index("ix_auth_email_tokens_user_purpose", "user_id", "purpose"),
+    )
+    token_digest: Mapped[str] = mapped_column(String(64), primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    purpose: Mapped[str] = mapped_column(String(8), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+    consumed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    outcome: Mapped[str | None] = mapped_column(String(8))
+
+
+class TelegramChallenge(Base):
+    __tablename__ = "auth_telegram_challenges"
+    __table_args__ = (
+        CheckConstraint("purpose IN ('login','link')", name="ck_telegram_challenge_purpose"),
+        CheckConstraint("(purpose = 'login' AND initiating_user_id IS NULL AND initiating_session_hash IS NULL) OR (purpose = 'link' AND initiating_user_id IS NOT NULL AND initiating_session_hash IS NOT NULL)", name="ck_telegram_challenge_initiator"),
+        CheckConstraint("expires_at > created_at", name="ck_telegram_challenge_expiry"),
+        CheckConstraint("(approved_at IS NULL AND approved_telegram_id IS NULL AND telegram_metadata IS NULL) OR (approved_at IS NOT NULL AND approved_telegram_id IS NOT NULL AND telegram_metadata IS NOT NULL)", name="ck_telegram_challenge_approval"),
+        CheckConstraint("(consumed_at IS NULL AND outcome IS NULL) OR (consumed_at IS NOT NULL AND outcome IS NOT NULL AND outcome IN ('completed','conflict','cancelled'))", name="ck_telegram_challenge_outcome"),
+    )
+    token_hash: Mapped[str] = mapped_column(String(64), primary_key=True)
+    binding_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    purpose: Mapped[str] = mapped_column(String(8), nullable=False)
+    initiating_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    initiating_session_hash: Mapped[str | None] = mapped_column(ForeignKey("auth_sessions.token_hash", ondelete="CASCADE"))
+    approved_telegram_id: Mapped[int | None] = mapped_column(BigInteger)
+    telegram_metadata: Mapped[dict | None] = mapped_column(JSON(none_as_null=True).with_variant(JSONB(none_as_null=True), "postgresql"))
+    approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    consumed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    outcome: Mapped[str | None] = mapped_column(String(16))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
 
 
 class ExperienceLevel(str, Enum):

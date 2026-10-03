@@ -1,3 +1,4 @@
+import os
 import re
 from datetime import date, datetime
 from typing import Protocol, TypeGuard
@@ -149,6 +150,17 @@ def _is_nonnegative_int(value: object) -> bool:
     return type(value) is int and value >= 0
 
 
+class _BotServiceAuth(httpx.Auth):
+    def __init__(self, token: str):
+        self._token = token
+
+    def auth_flow(self, request):
+        # Service credential is only for identity/domain user operations.
+        if request.url.path.startswith("/users/") or request.url.path.startswith("/auth/telegram/bot/"):
+            request.headers["X-Bot-Service-Token"] = self._token
+        yield request
+
+
 class BotApiClient(Protocol):
     async def discover_jobs(self, user_id: int, *, query: str, limit: int, offset: int) -> dict[str, object]: ...
 
@@ -160,6 +172,8 @@ class BotApiClient(Protocol):
     async def generate_cover_letter(self, user_id: int, application_id: int, language: str) -> dict[str, object]: ...
 
     async def create_or_get_user(self, telegram_user: User) -> int: ...
+    async def inspect_telegram_challenge(self, token: str) -> dict: ...
+    async def decide_telegram_challenge(self, token: str, telegram_user: User, approve: bool) -> None: ...
 
     async def save_application(self, user_id: int, source_url: str) -> dict[str, object]: ...
 
@@ -299,8 +313,35 @@ class JobHunterApiClient:
             raise httpx.DecodingError("Invalid cover letter response", request=response.request)
         return payload
 
-    def __init__(self, base_url: str) -> None:
-        self._client = httpx.AsyncClient(base_url=base_url, timeout=40.0)
+    def __init__(self, base_url: str, service_token: str | None = None) -> None:
+        token = service_token if service_token is not None else os.getenv("BOT_API_SERVICE_TOKEN", "")
+        if not 32 <= len(token) <= 512 or not token.isascii() or any(ord(char) < 33 or ord(char) > 126 for char in token):
+            raise RuntimeError("BOT_API_SERVICE_TOKEN must be configured for Bot API access")
+        # Reject deliberate examples/defaults in production, without estimating entropy.
+        unsafe = {"replace", "change", "example", "placeholder", "test", "tests", "dev", "development", "dummy", "secret", "password", "changeme"}
+        if os.getenv("APP_ENV", "production") == "production" and (
+            unsafe.intersection(re.split(r"[^a-z0-9]+", token.lower()))
+            or token.lower() in {"a" * len(token), "0" * len(token)}
+        ):
+            raise RuntimeError("BOT_API_SERVICE_TOKEN must be a random production secret")
+        self._client = httpx.AsyncClient(base_url=base_url, timeout=40.0, auth=_BotServiceAuth(token))
+
+    async def inspect_telegram_challenge(self, token: str) -> dict:
+        response = await self._client.post("/auth/telegram/bot/inspect", json={"token": token})
+        response.raise_for_status()
+        payload = _json_object(response)
+        if payload.get("purpose") not in {"login", "link"} or payload.get("status") not in {"pending", "approved", "expired", "cancelled", "conflict", "consumed"} or not re.fullmatch(r"[A-F0-9]{6}", str(payload.get("code", ""))):
+            raise httpx.DecodingError("Invalid Telegram challenge response", request=response.request)
+        return {key: payload[key] for key in ("purpose", "status", "code")}
+
+    async def decide_telegram_challenge(self, token: str, telegram_user: User, approve: bool) -> None:
+        response = await self._client.post("/auth/telegram/bot/" + ("approve" if approve else "cancel"), json={
+            "token": token, "telegram": {"telegram_id": telegram_user.id, "username": telegram_user.username,
+            "first_name": telegram_user.first_name, "last_name": telegram_user.last_name, "language_code": telegram_user.language_code},
+        })
+        response.raise_for_status()
+        if _json_object(response).get("ok") is not True:
+            raise httpx.DecodingError("Invalid Telegram decision response", request=response.request)
 
     async def create_or_get_user(self, telegram_user: User) -> int:
         response = await self._client.post(

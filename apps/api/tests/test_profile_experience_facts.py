@@ -81,7 +81,7 @@ def test_validation_duplicate_limit_and_ordinary_profile_put_does_not_touch_fact
     ).json()["items"])
 
 
-def test_concurrent_independent_facts_are_added_without_profile_replacement():
+def test_concurrent_independent_facts_are_added_without_profile_replacement(concurrent_database):
     user_id = create_user(1005)
     create_profile(user_id)
 
@@ -92,7 +92,7 @@ def test_concurrent_independent_facts_are_added_without_profile_replacement():
         statuses = list(pool.map(add, ["Разрабатывал backend на Python", "Работал с PostgreSQL"]))
     assert statuses == [201, 201]
     assert len(client.get(f"/users/{user_id}/profile/experience-facts").json()["items"]) == 2
-    with TestSessionLocal() as session:
+    with concurrent_database() as session:
         assert session.query(UserProfile).count() == 1
         assert session.query(ProfileExperienceFact).count() == 2
 

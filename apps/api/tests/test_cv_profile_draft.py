@@ -425,7 +425,7 @@ def test_cv_sync_pipeline_runs_off_event_loop(monkeypatch) -> None:
         watchdog.start()
         request_started = time.monotonic()
         try:
-            async with httpx.AsyncClient(transport=transport, base_url="http://test") as async_client:
+            async with httpx.AsyncClient(transport=transport, base_url="http://test", headers=client.headers) as async_client:
                 cv_task = asyncio.create_task(
                     async_client.post(
                         f"/users/{user_id}/profile/draft-from-cv",

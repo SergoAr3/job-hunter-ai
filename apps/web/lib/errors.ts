@@ -3,13 +3,32 @@ export class WebError extends Error {
     public code: string,
     public status = 502,
     public fieldErrors?: Record<string, string>,
+    public retryAfter?: string,
   ) {
     super(code);
   }
 }
 const messages: Record<string, string> = {
+  rate_limited: "Слишком много попыток. Подождите и попробуйте снова.",
+  EMAIL_VERIFICATION_REQUIRED: "Подтвердите email, чтобы войти.",
+  EMAIL_TOKEN_INVALID: "Ссылка недействительна. Запросите новое письмо.",
+  EMAIL_TOKEN_EXPIRED: "Срок действия ссылки истёк. Запросите новое письмо.",
+  EMAIL_TOKEN_USED:
+    "Ссылка уже использована или заменена. Войдите или запросите новое письмо.",
+  ACCOUNT_LINK_CONFLICT: "Этот Telegram уже связан с другим аккаунтом.",
+  TELEGRAM_CHALLENGE_INVALID: "Запрос Telegram недействителен. Начните заново.",
+  TELEGRAM_CHALLENGE_EXPIRED: "Время подтверждения истекло. Начните заново.",
+  TELEGRAM_CHALLENGE_CANCELLED: "Подтверждение отменено в Telegram.",
+  TELEGRAM_CHALLENGE_CONSUMED: "Запрос уже завершён. Начните заново.",
+  TELEGRAM_CHALLENGE_CONFLICT: "Этот Telegram уже связан с другим аккаунтом.",
+  TELEGRAM_CHALLENGE_PENDING: "Подтвердите запрос в Telegram.",
+  AUTH_INVALID_CREDENTIALS: "Не удалось подтвердить пароль аккаунта.",
+  unauthenticated: "Сессия завершилась. Войдите снова.",
+  auth_invalid_credentials: "Не удалось войти. Проверьте email и пароль.",
+  auth_invalid: "Проверьте введённые данные.",
+  auth_unavailable: "Вход временно недоступен. Повторите попытку позже.",
   configuration:
-    "Web не настроен. Для make dev укажите корректный WEB_DEV_USER_ID в корневом .env. При отдельном запуске Web настройте WEB_DEV_USER_ID и API_BASE_URL в apps/web/.env.local. Перезапустите Web. Это локальный режим, не авторизация.",
+    "Web не настроен. Проверьте серверный API_BASE_URL и перезапустите Web.",
   api_unavailable:
     "API временно недоступен. Проверьте его запуск и повторите запрос.",
   source_timeout:
@@ -20,9 +39,8 @@ const messages: Record<string, string> = {
   vacancy_not_found: "Вакансия больше недоступна у источника. Обновите поиск.",
   source_identity_conflict:
     "Не удалось безопасно сохранить вакансию. Обновите поиск.",
-  USER_NOT_FOUND:
-    "Настроенный пользователь не найден. Проверьте WEB_DEV_USER_ID: нужен внутренний ID существующего пользователя.",
-  APPLICATION_NOT_FOUND: "Вакансия не найдена у настроенного пользователя.",
+  USER_NOT_FOUND: "Аккаунт недоступен. Войдите снова.",
+  APPLICATION_NOT_FOUND: "Вакансия не найдена.",
   ambiguous_save:
     "Не удалось подтвердить результат сохранения. Запись могла быть создана. Можно повторить Save: API переиспользует существующую запись.",
   invalid_request: "Проверьте введённые данные и повторите запрос.",
@@ -34,8 +52,7 @@ const messages: Record<string, string> = {
   status_unconfirmed:
     "Изменение отправлено, но актуальный статус не удалось подтвердить. Обновите данные.",
   profile_missing: "Профиль ещё не создан.",
-  profile_user_not_found:
-    "Настроенный пользователь не найден. Проверьте WEB_DEV_USER_ID.",
+  profile_user_not_found: "Аккаунт недоступен. Войдите снова.",
   profile_invalid: "Проверьте поля профиля и повторите сохранение.",
   ambiguous_profile:
     "Не удалось подтвердить результат сохранения. Изменения могли сохраниться. Обновите данные.",

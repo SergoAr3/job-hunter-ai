@@ -37,6 +37,7 @@ from app.profile import (
     show_saved_profile_card,
 )
 from app.telegram_cleanup import is_message_not_modified
+from app.telegram_auth import remove_auth_keyboard
 
 logger = logging.getLogger(__name__)
 
@@ -95,6 +96,7 @@ def profile_replacement_warning_keyboard() -> InlineKeyboardMarkup:
 async def main_menu_action(
     message: Message, state: FSMContext, api_client: BotApiClient | None = None
 ) -> None:
+    await remove_auth_keyboard(message, state)
     await remove_active_profile_section_keyboard(message, state)
     await remove_active_profile_inline_keyboard(message, state)
     await remove_active_match_inline_keyboard(message, state)

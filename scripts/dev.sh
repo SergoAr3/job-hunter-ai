@@ -64,6 +64,18 @@ run_migrations() (
     exec python -m alembic upgrade head
 )
 
+# One server-only credential shared by API and Bot for this dev run.
+# It is never exported to the Web process or written to .env.
+dev_bot_api_service_token="$(
+    set +u
+    source .env
+    if [[ -n "${BOT_API_SERVICE_TOKEN:-}" ]]; then
+        printf '%s' "$BOT_API_SERVICE_TOKEN"
+    else
+        apps/api/.venv/bin/python -c 'import secrets; print(secrets.token_urlsafe(32))'
+    fi
+)"
+
 run_api() (
     cd apps/api
     # shellcheck disable=SC1091
@@ -72,7 +84,10 @@ run_api() (
     # shellcheck disable=SC1091
     source ../../.env
     set +a
-    exec python -m uvicorn app.main:app --reload
+    export AUTH_MAIL_DELIVERY=capture
+    export AUTH_MAIL_SINK_DIR="${AUTH_MAIL_SINK_DIR:-/tmp/job-hunter-auth-mail}"
+    export WEB_PUBLIC_ORIGIN=http://127.0.0.1:3100
+    APP_ENV=development BOT_API_SERVICE_TOKEN="$dev_bot_api_service_token" exec python -m uvicorn app.main:app --reload --host 127.0.0.1 --no-proxy-headers
 )
 
 run_bot() (
@@ -83,29 +98,16 @@ run_bot() (
     # shellcheck disable=SC1091
     source ../../.env
     set +a
-    API_BASE_URL=http://127.0.0.1:8000 exec python ../../scripts/bot_dev.py
+    APP_ENV=development API_BASE_URL=http://127.0.0.1:8000 BOT_API_SERVICE_TOKEN="$dev_bot_api_service_token" exec python ../../scripts/bot_dev.py
 )
 
 run_web() (
     cd apps/web
+    unset BOT_API_SERVICE_TOKEN
 
-    # Read only the Web's optional single-user setting from the root .env. The
-    # command substitution keeps unrelated API/Bot settings out of this process.
-    local inherited_web_dev_user_id=${WEB_DEV_USER_ID:-}
-    local web_dev_user_id
-    web_dev_user_id="$(
-        set +u
-        # shellcheck disable=SC1091
-        source ../../.env
-        printf '%s' "${WEB_DEV_USER_ID:-}"
-    )"
-    web_dev_user_id=${web_dev_user_id:-$inherited_web_dev_user_id}
-    if [[ -n "$web_dev_user_id" ]]; then
-        export WEB_DEV_USER_ID="$web_dev_user_id"
-    else
-        unset WEB_DEV_USER_ID
-    fi
+    export APP_ENV=development
 
+    export WEB_PUBLIC_ORIGIN=http://127.0.0.1:3100
     export API_BASE_URL=http://127.0.0.1:8000
     exec npm run dev -- -p 3100
 )
@@ -132,7 +134,7 @@ wait_for_web() {
             wait "$web_pid" || true
             return 1
         fi
-        if curl --silent --fail --max-time 1 http://127.0.0.1:3100/discover | grep '<title>Job Hunter AI</title>' >/dev/null; then
+        if curl --silent --fail --max-time 1 http://127.0.0.1:3100/login | grep '<title>Job Hunter AI</title>' >/dev/null; then
             return 0
         fi
         sleep 1
@@ -213,7 +215,7 @@ fi
 dev_log "Application is running"
 dev_log "API: http://127.0.0.1:8000"
 dev_log "Swagger: http://127.0.0.1:8000/docs"
-dev_log "Web: http://127.0.0.1:3100/discover"
+dev_log "Web: http://127.0.0.1:3100/login"
 
 while true; do
     if ! kill -0 "$api_pid" 2>/dev/null; then
