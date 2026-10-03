@@ -19,7 +19,7 @@ const terminal: Record<string, string> = {
 };
 export function TelegramAuth({
   purpose,
-  next = "/profile",
+  next = "/dashboard",
 }: {
   purpose: "login" | "link";
   next?: string;

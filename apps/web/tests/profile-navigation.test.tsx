@@ -1,17 +1,18 @@
 import { expect, it, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
-vi.mock("next/navigation", () => ({ usePathname: () => "/profile" }));
+vi.mock("next/navigation", () => ({ usePathname: () => "/dashboard" }));
 import { Navigation } from "../components/navigation";
 
-it("shows Profile first and marks the active page", () => {
+it("shows Dashboard first and marks the active page", () => {
   render(<Navigation />);
   const links = screen.getAllByRole("link");
   expect(links.map((link) => link.textContent?.trim())).toEqual([
-    "Профиль",
-    "Поиск вакансий",
+    "Dashboard",
+    "Найти вакансии",
     "Мои вакансии",
+    "Профиль",
   ]);
-  expect(screen.getByRole("link", { name: "Профиль" })).toHaveAttribute(
+  expect(screen.getByRole("link", { name: "Dashboard" })).toHaveAttribute(
     "aria-current",
     "page",
   );

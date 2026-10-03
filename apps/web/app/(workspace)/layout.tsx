@@ -11,7 +11,7 @@ export default async function WorkspaceLayout({
   return (
     <div className="app-shell">
       <aside className="sidebar">
-        <Link className="brand" href="/discover">
+        <Link className="brand" href="/dashboard">
           <span className="brand-mark" aria-hidden="true">
             JH
           </span>

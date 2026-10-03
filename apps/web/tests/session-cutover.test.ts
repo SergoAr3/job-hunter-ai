@@ -24,6 +24,7 @@ import { PUT as status } from "../app/api/applications/[applicationId]/status/ro
 import { logoutHandler } from "../lib/server/auth-handlers";
 import { pageAccess } from "../lib/server/page-access";
 import Home from "../app/page";
+import DashboardPage from "../app/(workspace)/dashboard/page";
 import { AuthUnavailable } from "../components/auth-unavailable";
 
 const token = "T".repeat(43),
@@ -151,6 +152,7 @@ it.each(
   },
 );
 it.each([
+  "/dashboard",
   "/profile",
   "/discover?q=python",
   "/applications",
@@ -170,7 +172,7 @@ it("root chooses login, real workspace or unavailable", async () => {
   await expect(Home()).rejects.toThrow("REDIRECT:/login");
   request("profile", `${cookieName}=${token}`);
   upstream.mockResolvedValue(Response.json({ user_id: 42, me }));
-  await expect(Home()).rejects.toThrow("REDIRECT:/profile");
+  await expect(Home()).rejects.toThrow("REDIRECT:/dashboard");
   upstream.mockResolvedValue(Response.json({}, { status: 503 }));
   const result = await Home();
   expect(result.type).toBe(AuthUnavailable);
@@ -208,3 +210,29 @@ it("outage preserves session and recovery resumes the same principal", async () 
   expect(recovered.status).toBe(200);
   expect(upstream.mock.calls.at(-1)![0]).toContain("/users/42/applications");
 });
+
+it.each(["absent", "malformed", "expired", "revoked", "unavailable"] as const)(
+  "Dashboard session=%s uses the real session resolver before domain loading",
+  async (state) => {
+    const cookie =
+      state === "absent"
+        ? ""
+        : `${cookieName}=${state === "malformed" ? "bad" : token}`;
+    request("profile", cookie);
+    upstream.mockResolvedValue(
+      Response.json({}, { status: state === "unavailable" ? 503 : 401 }),
+    );
+    if (state === "unavailable") {
+      expect((await DashboardPage()).type).toBe(AuthUnavailable);
+    } else {
+      await expect(DashboardPage()).rejects.toThrow(
+        "REDIRECT:/login?next=%2Fdashboard",
+      );
+    }
+    for (const [url] of upstream.mock.calls)
+      expect(url).toContain("/auth/internal/principal");
+    expect(upstream).toHaveBeenCalledTimes(
+      ["absent", "malformed"].includes(state) ? 0 : 1,
+    );
+  },
+);

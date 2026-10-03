@@ -1,15 +1,6 @@
 import type { ApplicationDetail, Preview, Reason } from "../lib/contracts";
 import { compactLocation } from "../lib/presentation";
-export const statusLabels: Record<string, string> = {
-  saved: "Сохранена",
-  applied: "Отклик отправлен",
-  recruiter_response: "Ответ рекрутера",
-  interview: "Собеседование",
-  offer: "Оффер",
-  hired: "Трудоустройство",
-  withdrawn: "Отозвана",
-  rejected: "Отказ",
-};
+export { statusLabels } from "../lib/application-presentation";
 export const workplace: Record<string, string> = {
   remote: "Удалённо",
   onsite: "В офисе",

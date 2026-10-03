@@ -149,7 +149,8 @@ it.each([false, true])(
 
 it.each([
   ["login", "/discover?q=C%2B%2B", "/discover?q=C%2B%2B"],
-  ["login", "//evil.example", "/profile"],
+  ["login", "//evil.example", "/dashboard"],
+  ["login", undefined, "/dashboard"],
   ["link", "/ignored", "/applications?q=R%26D"],
 ] as const)(
   "successful %s completion redirects safely from %s",
@@ -465,7 +466,7 @@ it("completion disables cancel and successful login stops polling", async () => 
     resolve({ ok: true });
     await vi.advanceTimersByTimeAsync(10000);
   });
-  expect(assign).toHaveBeenCalledWith("/profile");
+  expect(assign).toHaveBeenCalledWith("/dashboard");
   expect(transport).toHaveBeenCalledTimes(3);
   expect(transport.mock.calls[2][1].signal.aborted).toBe(true);
 });

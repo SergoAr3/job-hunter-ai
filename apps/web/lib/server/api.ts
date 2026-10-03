@@ -5,6 +5,7 @@ import type {
   ApplicationDetail,
   ApplicationStatusHistory,
   ApplicationsPage,
+  ApplicationsSummary,
   DiscoverPage,
   Identity,
   SaveResult,
@@ -276,4 +277,30 @@ export async function errorResponse(error: unknown) {
   return authError(
     error instanceof WebError ? error : new WebError("api_unavailable"),
   );
+}
+
+export async function getApplicationsSummary(): Promise<ApplicationsSummary> {
+  const data = (await request("applications/summary")) as ApplicationsSummary;
+  if (
+    !Number.isSafeInteger(data?.total) ||
+    data.total < 0 ||
+    !data.status_counts ||
+    Object.keys(data.status_counts).length !== applicationStatuses.length ||
+    !applicationStatuses.every(
+      (status) =>
+        Number.isSafeInteger(data.status_counts[status]) &&
+        data.status_counts[status] >= 0,
+    ) ||
+    applicationStatuses.reduce(
+      (sum, status) => sum + data.status_counts[status],
+      0,
+    ) !== data.total
+  )
+    throw new WebError("api_unavailable");
+  return {
+    total: data.total,
+    status_counts: Object.fromEntries(
+      applicationStatuses.map((status) => [status, data.status_counts[status]]),
+    ) as ApplicationsSummary["status_counts"],
+  };
 }

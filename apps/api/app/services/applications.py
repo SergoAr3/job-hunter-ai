@@ -3,7 +3,7 @@ import re
 from datetime import date, datetime, timezone
 from urllib.parse import urlsplit, urlunsplit
 
-from sqlalchemy import case, or_, select
+from sqlalchemy import case, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -425,6 +425,19 @@ def get_application_status_history(
             ApplicationStatusHistory.id.desc(),
         )
     ).all())
+
+
+def summarize_applications_for_user(session: Session, user_id: int) -> dict[ApplicationStatus, int]:
+    """Count the complete collection in one read-only query, scoped to its owner."""
+    rows = session.execute(
+        select(Application.status, func.count(Application.id))
+        .where(Application.user_id == user_id)
+        .group_by(Application.status)
+    ).all()
+    counts = {status: 0 for status in ApplicationStatus}
+    for status, count in rows:
+        counts[ApplicationStatus(status)] = count
+    return counts
 
 
 def list_applications_for_user(

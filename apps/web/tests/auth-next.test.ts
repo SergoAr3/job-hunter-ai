@@ -1,6 +1,7 @@
 import { expect, it } from "vitest";
 import { loginUrl, safeNext } from "../lib/auth";
 it.each([
+  "/dashboard",
   "/profile",
   "/discover?q=python",
   "/applications",
@@ -36,7 +37,7 @@ it.each([
   "/discover#%0d%0a",
   "/discover?q=%0d%0aLocation:evil",
 ])("rejects unsafe next %s", (path) => {
-  expect(safeNext(path)).toBe("/profile");
+  expect(safeNext(path)).toBe("/dashboard");
 });
 
 it.each([

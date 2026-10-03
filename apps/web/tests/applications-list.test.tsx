@@ -40,7 +40,7 @@ afterEach(() => vi.unstubAllGlobals());
 it("marks only the current navigation section, including detail", () => {
   testPath = "/discover";
   const { rerender } = render(<Navigation />);
-  expect(screen.getByRole("link", { name: "Поиск вакансий" })).toHaveAttribute(
+  expect(screen.getByRole("link", { name: "Найти вакансии" })).toHaveAttribute(
     "aria-current",
     "page",
   );

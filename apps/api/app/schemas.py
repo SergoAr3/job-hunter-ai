@@ -396,6 +396,11 @@ class ApplicationListItemOut(BaseModel):
     ai_enrichment_status: str
 
 
+class ApplicationsSummaryOut(BaseModel):
+    total: int
+    status_counts: dict[ApplicationStatus, int]
+
+
 class ApplicationsPageOut(BaseModel):
     items: list[ApplicationListItemOut]
     has_next: bool
