@@ -92,3 +92,8 @@ export interface ApplicationsPage {
   items: ApplicationListItem[];
   has_next: boolean;
 }
+
+export interface ApplicationsSummary {
+  total: number;
+  status_counts: Record<import("./applications").ApplicationStatus, number>;
+}

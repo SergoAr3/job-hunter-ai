@@ -75,7 +75,7 @@ it("guards duplicate submits, preserves Unicode/spaces and clears password on fa
   expect(screen.getByRole("button", { name: "Войти" })).toBeEnabled();
   expect(
     screen.getByRole("link", { name: "Зарегистрироваться" }),
-  ).toHaveAttribute("href", "/register?next=%2Fprofile");
+  ).toHaveAttribute("href", "/register?next=%2Fdashboard");
 });
 it("uses neutral registration result and discloses unconfirmed logout", () => {
   render(<AuthForm mode="login" next="/applications" registered localLogout />);
@@ -100,3 +100,45 @@ it("Telegram social login follows primary submit, with decorative icon and acces
     primary.closest("form")?.nextElementSibling,
   );
 });
+
+it.each([
+  ["login", "/dashboard", "/dashboard"],
+  ["login", "/discover?q=C%2B%2B", "/discover?q=C%2B%2B"],
+  ["login", "//evil.example", "/dashboard"],
+  ["register", "/dashboard", "/login?registered=1&next=%2Fdashboard"],
+] as const)(
+  "successful %s uses safe destination %s",
+  async (mode, next, expected) => {
+    const assign = vi.fn();
+    const originalWindow = window;
+    vi.stubGlobal(
+      "window",
+      new Proxy(originalWindow, {
+        get(target, key) {
+          if (key === "location") return { assign };
+          return Reflect.get(target, key);
+        },
+      }),
+    );
+    transport.mockResolvedValue({ ok: true });
+    try {
+      render(<AuthForm mode={mode} next={next} />);
+      fireEvent.change(screen.getByLabelText("Email"), {
+        target: { value: "test@example.com" },
+      });
+      fireEvent.change(screen.getByLabelText("Пароль"), {
+        target: { value: "secure-test-password" },
+      });
+      fireEvent.submit(
+        screen
+          .getByRole("button", {
+            name: mode === "login" ? "Войти" : "Создать аккаунт",
+          })
+          .closest("form")!,
+      );
+      await waitFor(() => expect(assign).toHaveBeenCalledWith(expected));
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  },
+);

@@ -34,6 +34,7 @@ from app.schemas import (
     ApplicationStatusHistoryOut,
     ApplicationSort,
     ApplicationsPageOut,
+    ApplicationsSummaryOut,
     CVProfileDraftOut,
     DiscoverJobSaveIn,
     DiscoverJobsPageOut,
@@ -56,6 +57,7 @@ from app.services.applications import (
     get_application_for_user,
     get_application_status_history,
     list_applications_for_user,
+    summarize_applications_for_user,
     list_application_follow_ups,
     normalize_application_search_query,
     InvalidApplicationSearchQueryError,
@@ -420,6 +422,14 @@ def save_discover_job(
         job_created=result.job_created,
         application_created=result.application_created,
     )
+
+
+@app.get("/users/{user_id}/applications/summary", response_model=ApplicationsSummaryOut)
+def read_applications_summary(
+    user_id: int, session: Session = Depends(get_session),
+) -> ApplicationsSummaryOut:
+    counts = summarize_applications_for_user(session, user_id)
+    return ApplicationsSummaryOut(total=sum(counts.values()), status_counts=counts)
 
 
 @app.get("/users/{user_id}/applications", response_model=ApplicationsPageOut)
