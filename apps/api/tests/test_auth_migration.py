@@ -14,7 +14,7 @@ from sqlalchemy.orm import Session
 from app.database import Base, get_session
 from app.main import app
 from app.models import AuthSession, User
-from app.services.auth import get_passwords
+from app.services.auth import get_passwords, utc_now
 from test_user_identity_migration import (
     API_ROOT, connection, legacy_schema, seed_graph, graph,
 )
@@ -144,7 +144,7 @@ def test_concurrent_registration_and_telegram_resolution(tmp_path, connection, m
         from argon2 import PasswordHasher, Type
         obsolete = PasswordHasher(type=Type.ID, time_cost=1, memory_cost=1024, parallelism=1).hash(winning["password"])
         with Session(engine) as session:
-            session.execute(sa.update(User).values(password_hash=obsolete))
+            session.execute(sa.update(User).values(password_hash=obsolete, email_verified_at=utc_now()))
             session.commit()
         monkeypatch.setattr(passwords, "hash", original_hash)
         original_verify = passwords.verify
@@ -191,6 +191,8 @@ def test_auth_lifecycle_on_supported_databases(connection):
     try:
         body = {"email": "Parity+tag@Example.com", "password": "  Unicode пароль 🔑  "}
         assert client.post("/auth/register", json=body).status_code == 202
+        from conftest import verify_account
+        verify_account(client, body["email"])
         response = client.post("/auth/login", json=body)
         assert response.status_code == 200
         raw = response.json()["session_token"]

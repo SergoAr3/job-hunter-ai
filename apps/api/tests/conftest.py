@@ -1,8 +1,14 @@
 import os
+import tempfile
+from pathlib import Path
+from urllib.parse import urlsplit, parse_qs
 
 # Explicit test-only trust configuration; never a production default.
 os.environ["BOT_API_SERVICE_TOKEN"] = "identity-tests-server-only-service-token"
 os.environ["APP_ENV"] = "test"
+os.environ["AUTH_MAIL_DELIVERY"] = "capture"
+os.environ["AUTH_MAIL_SINK_DIR"] = tempfile.mkdtemp(prefix="auth-tests-mail-")
+os.environ["WEB_PUBLIC_ORIGIN"] = "http://127.0.0.1:3100"
 
 import pytest
 from fastapi.testclient import TestClient
@@ -53,6 +59,11 @@ main_module.enrichment_service = StubEnrichmentService()
 
 @pytest.fixture(autouse=True)
 def reset_database():
+    from app.services import auth_limits, auth_mail
+    auth_limits.limiter.buckets.clear()
+    auth_mail.get_mailer.cache_clear()
+    for mail in Path(os.environ["AUTH_MAIL_SINK_DIR"]).glob("*.json"):
+        mail.unlink()
     Base.metadata.drop_all(engine)
     Base.metadata.create_all(engine)
 
@@ -77,3 +88,21 @@ def concurrent_database(tmp_path):
     finally:
         app.dependency_overrides[get_session] = previous
         concurrent_engine.dispose()
+
+
+def mail_token(email, purpose="verify"):
+    import json
+    matches = []
+    for path in Path(os.environ["AUTH_MAIL_SINK_DIR"]).glob("*.json"):
+        item = json.loads(path.read_text())
+        if item["to"].lower() == email.strip().lower() and item["purpose"] == purpose:
+            matches.append((path.stat().st_mtime_ns, item))
+    assert matches, "Expected captured email"
+    return parse_qs(urlsplit(max(matches, key=lambda item: item[0])[1]["link"]).fragment)["token"][0]
+
+
+def verify_account(client, email):
+    response = client.post("/auth/email/verify", json={"token": mail_token(email)})
+    assert response.status_code in {200, 400}  # Replayed proof is already terminal.
+    if response.status_code == 400:
+        assert response.json()["detail"]["code"] == "EMAIL_TOKEN_USED"

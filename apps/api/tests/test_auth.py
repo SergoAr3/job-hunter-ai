@@ -10,7 +10,7 @@ from app.auth_dependencies import require_user_access
 from app.main import app
 from app.models import AuthSession, User, UserProfile, Application, Job
 from app.services import auth
-from conftest import TestSessionLocal, client as bot_client
+from conftest import TestSessionLocal, client as bot_client, verify_account
 
 PASSWORD = "  Unicode пароль 🔑  "
 SERVICE_TOKEN = "identity-tests-server-only-service-token"
@@ -22,6 +22,11 @@ def register(email="User+tag@Example.com", password=PASSWORD, **extra):
 
 
 def login(email="user+tag@example.com", password=PASSWORD):
+    with TestSessionLocal() as db:
+        user = db.scalar(select(User).where(User.email_canonical == email.lower()))
+        needs_verification = user and user.email_verified_at is None
+    if needs_verification:
+        verify_account(plain, email)
     response = plain.post("/auth/login", json={"email": email, "password": password})
     assert response.status_code == 200
     return response.json()
@@ -51,7 +56,7 @@ def test_registration_login_me_logout_no_leaks(caplog):
     me = plain.get("/auth/me", headers=bearer(token))
     assert me.status_code == 200 and me.json() == data["me"]
     assert set(me.json()) == {"email", "email_verified", "telegram_linked", "display_name", "profile_exists", "created_at"}
-    assert not me.json()["profile_exists"] and not me.json()["email_verified"]
+    assert not me.json()["profile_exists"] and me.json()["email_verified"]
     assert encoded not in me.text and token not in me.text and me.headers["cache-control"] == "no-store"
     assert plain.post("/auth/logout", headers=bearer(token)).status_code == 204
     assert plain.post("/auth/logout", headers=bearer(token)).status_code == 204
@@ -109,7 +114,7 @@ def test_salts_verification_rehash_and_hash_concurrency_guard():
     assert not passwords.verify(a, "Wrong password here") and not passwords.needs_rehash(a)
     old = PasswordHasher(type=Type.ID, time_cost=1, memory_cost=1024, parallelism=1).hash(PASSWORD)
     with TestSessionLocal() as session:
-        session.add(User(email="user+tag@example.com", email_canonical="user+tag@example.com", password_hash=old))
+        session.add(User(email="user+tag@example.com", email_canonical="user+tag@example.com", password_hash=old, email_verified_at=auth.utc_now()))
         session.commit()
     login()
     with TestSessionLocal() as session:
@@ -125,7 +130,7 @@ def test_salts_verification_rehash_and_hash_concurrency_guard():
 def test_rehash_failure_preserves_valid_login(monkeypatch):
     old = PasswordHasher(type=Type.ID, time_cost=1, memory_cost=1024, parallelism=1).hash(PASSWORD)
     with TestSessionLocal() as session:
-        session.add(User(email="user+tag@example.com", email_canonical="user+tag@example.com", password_hash=old))
+        session.add(User(email="user+tag@example.com", email_canonical="user+tag@example.com", password_hash=old, email_verified_at=auth.utc_now()))
         session.commit()
     def fail(password):
         raise auth.AuthError("AUTH_UNAVAILABLE", 503)
@@ -301,6 +306,7 @@ def test_telegram_only_cannot_email_login_and_hybrid_me_preserves_data():
         assert user.password_hash is None and user.email is None
         user.email = user.email_canonical = "actor@example.com"
         user.password_hash = auth.get_passwords().hash(PASSWORD)
+        user.email_verified_at = auth.utc_now()
         session.add(UserProfile(user_id=uid))
         session.commit()
     data = login(email="actor@example.com")

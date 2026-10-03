@@ -84,6 +84,9 @@ run_api() (
     # shellcheck disable=SC1091
     source ../../.env
     set +a
+    export AUTH_MAIL_DELIVERY=capture
+    export AUTH_MAIL_SINK_DIR="${AUTH_MAIL_SINK_DIR:-/tmp/job-hunter-auth-mail}"
+    export WEB_PUBLIC_ORIGIN=http://127.0.0.1:3100
     APP_ENV=development BOT_API_SERVICE_TOKEN="$dev_bot_api_service_token" exec python -m uvicorn app.main:app --reload --host 127.0.0.1 --no-proxy-headers
 )
 
@@ -104,6 +107,7 @@ run_web() (
 
     export APP_ENV=development
 
+    export WEB_PUBLIC_ORIGIN=http://127.0.0.1:3100
     export API_BASE_URL=http://127.0.0.1:8000
     exec npm run dev -- -p 3100
 )

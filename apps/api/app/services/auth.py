@@ -82,16 +82,25 @@ def register(session: Session, payload: RegisterIn):
     # Hash before any DB transaction, also for duplicates (generic result).
     encoded = get_passwords().hash(payload.password.get_secret_value())
     canonical = payload.email.lower()
-    session.add(User(email=payload.email, email_canonical=canonical,
-                     password_hash=encoded, display_name=payload.display_name))
+    user = User(email=payload.email, email_canonical=canonical,
+                password_hash=encoded, display_name=payload.display_name)
+    session.add(user)
     try:
+        session.flush()
+        from app.services.email_tokens import issue
+        from app.services.auth_mail import deliver
+        raw = issue(session, user, "verify")
         session.commit()
+        deliver("verify", payload.email, raw)
     except IntegrityError:
         session.rollback()
         if session.scalar(select(User.id).where(User.email_canonical == canonical)) is None:
             raise AuthError("AUTH_UNAVAILABLE", 503) from None
         # Never update credentials/display_name of an existing account.
         session.rollback()
+    except SQLAlchemyError:
+        session.rollback()
+        raise AuthError("AUTH_UNAVAILABLE", 503) from None
 
 
 def current_user(session: Session, user_id: int) -> CurrentUserOut:
@@ -108,6 +117,14 @@ def current_user(session: Session, user_id: int) -> CurrentUserOut:
 
 
 def login(session: Session, payload: AuthCredentials) -> LoginOut:
+    try:
+        return _login(session, payload)
+    except SQLAlchemyError:
+        session.rollback()
+        raise AuthError("AUTH_UNAVAILABLE", 503) from None
+
+
+def _login(session: Session, payload: AuthCredentials) -> LoginOut:
     user = session.scalar(select(User).where(User.email_canonical == payload.email.lower()))
     user_id, encoded = (user.id, user.password_hash) if user else (None, None)
     session.rollback()  # No read transaction/DB locks during Argon2 work.
@@ -131,6 +148,21 @@ def login(session: Session, payload: AuthCredentials) -> LoginOut:
         if user.password_hash != encoded:
             encoded = user.password_hash
             session.rollback()  # No locks while rechecking the changed hash.
+            if attempt == 0 and encoded is not None:
+                continue
+            raise AuthError("AUTH_INVALID_CREDENTIALS")
+        if user.email_verified_at is None:
+            session.rollback()
+            raise AuthError("EMAIL_VERIFICATION_REQUIRED", 403)
+        # SQLite has no row-level SELECT FOR UPDATE; conditional write also
+        # prevents a reset racing old-password session issuance on that dialect.
+        guard = session.execute(update(User).where(User.id == user_id, User.password_hash == encoded).values(id=User.id))
+        if guard.rowcount != 1:
+            session.rollback()
+            # A concurrent rehash can win the conditional write on SQLite.
+            # Reverify fresh credentials, exactly as after a PostgreSQL row lock.
+            encoded = session.scalar(select(User.password_hash).where(User.id == user_id))
+            session.rollback()
             if attempt == 0 and encoded is not None:
                 continue
             raise AuthError("AUTH_INVALID_CREDENTIALS")

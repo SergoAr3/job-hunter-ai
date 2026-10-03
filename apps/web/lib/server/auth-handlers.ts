@@ -16,6 +16,8 @@ export function authError(error: unknown) {
     { status: safe.status, headers: { "Cache-Control": "no-store" } },
   );
   if (safe.code === "unauthenticated") clearSession(response);
+  if (safe.status === 429 && safe.retryAfter)
+    response.headers.set("Retry-After", safe.retryAfter);
   return response;
 }
 async function credentials(request: Request, register: boolean) {
@@ -45,8 +47,22 @@ async function credentials(request: Request, register: boolean) {
     throw new WebError("auth_invalid", 422);
   return value;
 }
-async function checked(response: Response) {
+export async function checked(response: Response) {
   if (response.ok) return;
+  checkRateLimit(response);
+  if ([400, 403].includes(response.status)) {
+    let code;
+    try {
+      code = (await response.json())?.detail?.code;
+    } catch {
+      /* safe default */
+    }
+    const allowed =
+      response.status === 403
+        ? ["EMAIL_VERIFICATION_REQUIRED"]
+        : ["EMAIL_TOKEN_INVALID", "EMAIL_TOKEN_EXPIRED", "EMAIL_TOKEN_USED"];
+    if (allowed.includes(code)) throw new WebError(code, response.status);
+  }
   if (response.status === 401)
     throw new WebError("auth_invalid_credentials", 401);
   if (response.status === 422) {
@@ -159,4 +175,66 @@ export async function meHandler() {
   return NextResponse.json(state.user, {
     headers: { "Cache-Control": "no-store" },
   });
+}
+
+export function checkRateLimit(response: Response) {
+  if (response.status !== 429) return;
+  const retry = response.headers.get("Retry-After") ?? "";
+  throw new WebError(
+    "rate_limited",
+    429,
+    undefined,
+    /^\d{1,6}$/.test(retry) && Number(retry) > 0 ? retry : undefined,
+  );
+}
+
+export async function emailHandler(
+  request: Request,
+  operation:
+    "email/resend" | "email/verify" | "password/forgot" | "password/reset",
+) {
+  try {
+    requireMutation(request);
+    const text = await request.text();
+    if (text.length > 10000) throw new WebError("auth_invalid", 422);
+    let input;
+    try {
+      input = JSON.parse(text);
+    } catch {
+      throw new WebError("auth_invalid", 422);
+    }
+    const requesting = ["email/resend", "password/forgot"].includes(operation);
+    const fields = requesting
+      ? ["email"]
+      : operation === "password/reset"
+        ? ["token", "password"]
+        : ["token"];
+    if (
+      !input ||
+      typeof input !== "object" ||
+      Array.isArray(input) ||
+      Object.keys(input).some((key) => !fields.includes(key)) ||
+      fields.some((key) => typeof input[key] !== "string")
+    )
+      throw new WebError("auth_invalid", 422);
+    const response = await authFetch(operation, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(input),
+    });
+    await checked(response);
+    if (response.status !== (requesting ? 202 : 200))
+      throw new WebError("auth_unavailable", 503);
+    const result = NextResponse.json(
+      { ok: true },
+      {
+        status: requesting ? 202 : 200,
+        headers: { "Cache-Control": "no-store" },
+      },
+    );
+    if (operation === "password/reset") clearSession(result);
+    return result;
+  } catch (error) {
+    return authError(error);
+  }
 }

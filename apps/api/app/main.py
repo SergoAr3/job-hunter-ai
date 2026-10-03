@@ -116,6 +116,9 @@ from app.services.job_ai_enrichment import JobAIEnrichmentService
 async def lifespan(app):
     get_auth_settings()  # Fail startup on missing/unsafe configuration.
     get_passwords()  # Prepare dummy hash before serving traffic.
+    from app.services.auth_mail import get_mailer, web_origin
+    get_mailer()
+    web_origin()
     yield
 
 
@@ -127,8 +130,8 @@ app.include_router(telegram_auth_router)
 
 @app.exception_handler(AuthError)
 async def auth_error_response(request: Request, error: AuthError):
-    return JSONResponse(status_code=error.status, content={"detail": {"code": error.code}},
-                        headers={"Cache-Control": "no-store", **({"WWW-Authenticate": "Bearer"} if error.status == 401 else {})})
+    return JSONResponse(status_code=error.status, content={"code": "rate_limited"} if error.status == 429 else {"detail": {"code": error.code}},
+                        headers={"Cache-Control": "no-store", **({"Retry-After": error.retry_after} if hasattr(error, "retry_after") else {}), **({"WWW-Authenticate": "Bearer"} if error.status == 401 else {})})
 
 
 @app.exception_handler(RequestValidationError)

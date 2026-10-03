@@ -42,7 +42,7 @@ make dev
 Нажмите `Ctrl+C`, чтобы завершить API, Bot и Web. Для остановки PostgreSQL
 отдельно выполните `docker compose down`.
 
-## Auth и локальный Web после Slice 5
+## Auth и локальный Web после Slice 6
 
 `make dev` использует те же правила идентификации, что production: Web требует
 настоящую AuthSession. Откройте <http://127.0.0.1:3100/> — без session вы попадёте
@@ -50,7 +50,8 @@ make dev
 не нужен, users/credentials автоматически не создаются.
 
 1. Запустите `make dev`.
-2. Зарегистрируйтесь по email на `/register` и войдите на `/login`, либо нажмите
+2. Зарегистрируйтесь по email на `/register`, откройте verification link из
+   dev mail capture, подтвердите email и войдите на `/login`. Либо нажмите
    «Войти через Telegram» и подтвердите свой код в Bot.
 3. Работайте с Profile, Discover и Applications.
 
@@ -82,8 +83,43 @@ Path=/, без Secure. Production использует Secure `__Host-job_hunter
 Локально разрешены `http://127.0.0.1:3100`, `http://localhost:3100` и явно настроенный
 `WEB_PUBLIC_ORIGIN`. Не добавляйте реальные secrets в examples или Git.
 
-Текущий контракт: [docs/auth-slice5.md](docs/auth-slice5.md). Email verification,
-password reset и public rollout hardening остаются Slice 6.
+Текущий контракт: [docs/auth-slice6.md](docs/auth-slice6.md). Email/password login
+требует подтверждения email; Telegram login независимо работает для того же
+Telegram account. Existing sessions не отзываются при verification cutover.
+
+### Local mail capture и recovery
+
+`make dev` явно выбирает development capture, trusted origin
+`http://127.0.0.1:3100` и применяет migration `20261003_17`.
+По умолчанию сообщения сохраняются в `/tmp/job-hunter-auth-mail` (0700),
+каждое письмо — отдельный JSON (0600) с purpose, to и link. Чтобы выбрать другой
+private каталог, задайте абсолютный `AUTH_MAIL_SINK_DIR` перед запуском.
+Просматривайте JSON локально и открывайте поле link в браузере; не пересылайте
+ссылки и не добавляйте capture files в Git. Raw links не печатаются в service logs.
+
+- Registration → capture purpose=verify → `/verify-email#token=...` → явное
+  «Подтвердить email» → login. Token убирается из адреса сразу; для refresh
+  откройте письмо снова.
+- Unverified login показывает resend. Новый запрос заменяет старую ссылку;
+  старую открыть безопасно, consume покажет terminal state.
+- «Забыли пароль?» → email → capture purpose=reset → `/reset-password#token=...`
+  → новый пароль дважды → login. Старый пароль и ВСЕ прежние sessions
+  (email/Telegram) перестают работать. Telegram linking и данные сохраняются.
+- Reset не подтверждает email автоматически. Verification TTL 24 часа, reset
+  30 минут. Результаты registration/resend/forgot нейтральны для неизвестных emails.
+
+Capture — только development/test. Standalone production требует
+`AUTH_MAIL_DELIVERY=smtp`, `AUTH_SMTP_HOST`, `AUTH_MAIL_FROM`, optional SMTP
+credentials, TLS port 465 и HTTPS `WEB_PUBLIC_ORIGIN`; без конфигурации API
+не стартует. `make dev` не отправляет реальные SMTP messages и не меняет `.env`.
+После smoke удаляйте capture messages по собственной retention policy.
+
+Auth rate limits действуют и локально: отправка максимум 5 запросов/hour на
+canonical email (registration/resend/forgot combined). 429 предлагает подождать;
+лимиты production не ослабляются ради smoke. Process-local limiter очищается
+при restart, для нескольких workers нужен shared enforcement. API peer-IP cap
+для BFF является общим, XFF/Forwarded не доверяются. Подробные budgets и failure
+semantics описаны в auth-slice6.md.
 
 ## Smoke-сценарий Discover → Save → Application
 

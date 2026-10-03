@@ -3,11 +3,18 @@ export class WebError extends Error {
     public code: string,
     public status = 502,
     public fieldErrors?: Record<string, string>,
+    public retryAfter?: string,
   ) {
     super(code);
   }
 }
 const messages: Record<string, string> = {
+  rate_limited: "Слишком много попыток. Подождите и попробуйте снова.",
+  EMAIL_VERIFICATION_REQUIRED: "Подтвердите email, чтобы войти.",
+  EMAIL_TOKEN_INVALID: "Ссылка недействительна. Запросите новое письмо.",
+  EMAIL_TOKEN_EXPIRED: "Срок действия ссылки истёк. Запросите новое письмо.",
+  EMAIL_TOKEN_USED:
+    "Ссылка уже использована или заменена. Войдите или запросите новое письмо.",
   ACCOUNT_LINK_CONFLICT: "Этот Telegram уже связан с другим аккаунтом.",
   TELEGRAM_CHALLENGE_INVALID: "Запрос Telegram недействителен. Начните заново.",
   TELEGRAM_CHALLENGE_EXPIRED: "Время подтверждения истекло. Начните заново.",

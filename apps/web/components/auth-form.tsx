@@ -1,5 +1,6 @@
 "use client";
 import Link from "next/link";
+import { EmailRequestForm } from "./email-recovery";
 import { TelegramAuth } from "./telegram-auth";
 import { useRef, useState } from "react";
 import { safeNext } from "../lib/auth";
@@ -21,6 +22,9 @@ export function AuthForm({
   const [error, setError] = useState("");
   const [fields, setFields] = useState<Record<string, string>>({});
   const busy = useRef(false);
+  const [verificationEmail, setVerificationEmail] = useState<string | null>(
+    null,
+  );
   async function submit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (busy.current) return;
@@ -36,6 +40,7 @@ export function AuthForm({
     setPending(true);
     setError("");
     setFields({});
+    setVerificationEmail(null);
     try {
       await webRequest(`/api/auth/${mode}`, {
         method: "POST",
@@ -57,7 +62,11 @@ export function AuthForm({
     } catch (e) {
       (form.elements.namedItem("password") as HTMLInputElement).value = "";
       setError(errorMessage(e));
-      if (e instanceof WebError) setFields(e.fieldErrors ?? {});
+      if (e instanceof WebError) {
+        setFields(e.fieldErrors ?? {});
+        if (e.code === "EMAIL_VERIFICATION_REQUIRED")
+          setVerificationEmail(String(data.get("email") ?? ""));
+      }
       busy.current = false;
       setPending(false);
     }
@@ -71,7 +80,8 @@ export function AuthForm({
       <p>Ваш профиль и вакансии — в одном месте.</p>
       {registered && (
         <p className="notice" role="status">
-          Запрос на регистрацию обработан. Теперь можно попробовать войти.
+          Запрос на регистрацию обработан. Проверьте почту и подтвердите email
+          перед входом.
         </p>
       )}
       {localLogout && (
@@ -130,6 +140,14 @@ export function AuthForm({
         </button>
       </form>
       {!registering && <TelegramAuth purpose="login" next={next} />}
+      {verificationEmail !== null && (
+        <EmailRequestForm purpose="verify" email={verificationEmail} />
+      )}
+      {!registering && (
+        <p>
+          <Link href="/forgot-password">Забыли пароль?</Link>
+        </p>
+      )}
       <p>
         {registering ? "Уже есть аккаунт? " : "Ещё нет аккаунта? "}
         <Link

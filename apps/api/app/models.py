@@ -74,6 +74,23 @@ class AuthSession(Base):
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
+class AuthEmailToken(Base):
+    __tablename__ = "auth_email_tokens"
+    __table_args__ = (
+        CheckConstraint("purpose IN ('verify','reset')", name="ck_auth_email_tokens_purpose"),
+        CheckConstraint("expires_at > created_at", name="ck_auth_email_tokens_expiry"),
+        CheckConstraint("(consumed_at IS NULL AND outcome IS NULL) OR (consumed_at IS NOT NULL AND outcome IS NOT NULL AND outcome IN ('consumed','replaced'))", name="ck_auth_email_tokens_terminal"),
+        Index("ix_auth_email_tokens_user_purpose", "user_id", "purpose"),
+    )
+    token_digest: Mapped[str] = mapped_column(String(64), primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    purpose: Mapped[str] = mapped_column(String(8), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+    consumed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    outcome: Mapped[str | None] = mapped_column(String(8))
+
+
 class TelegramChallenge(Base):
     __tablename__ = "auth_telegram_challenges"
     __table_args__ = (

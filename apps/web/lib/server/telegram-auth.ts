@@ -2,7 +2,7 @@ import "server-only";
 import { randomBytes } from "node:crypto";
 import { NextResponse } from "next/server";
 import { authFetch, getCurrentUser, namedCookie, projectUser } from "./auth";
-import { authError } from "./auth-handlers";
+import { authError, checkRateLimit } from "./auth-handlers";
 import { cookieConfig, setSession, TOKEN_PATTERN } from "./cookie";
 import { requireMutation } from "./origin";
 import { WebError } from "../errors";
@@ -79,6 +79,7 @@ async function payload(request: Request, creating: boolean) {
 }
 async function checked(response: Response) {
   if (response.ok) return response.json();
+  checkRateLimit(response);
   let code;
   try {
     code = (await response.json())?.detail?.code;

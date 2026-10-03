@@ -69,3 +69,19 @@ class InternalPrincipalOut(BaseModel):
     # Bearer-only server transport; Next never exposes this internal ID to browser.
     user_id: int
     me: CurrentUserOut
+
+
+class EmailRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)
+    email: str
+    _email = field_validator("email", mode="before")(validate_email)
+
+
+class EmailTokenIn(BaseModel):
+    model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)
+    token: SecretStr
+
+
+class ResetPasswordIn(EmailTokenIn):
+    password: SecretStr
+    _password = field_validator("password")(AuthCredentials.password_policy.__func__)
