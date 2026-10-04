@@ -1,6 +1,7 @@
 import { ProfileWorkspace } from "../../../components/profile-workspace";
 import { pageAccess, pagePath } from "../../../lib/server/page-access";
 import { AuthUnavailable } from "../../../components/auth-unavailable";
+import { ProfileImportSuccess } from "../../../components/profile-import-success";
 
 export const dynamic = "force-dynamic";
 export default async function Page({
@@ -10,5 +11,11 @@ export default async function Page({
 }) {
   if (!(await pageAccess(await pagePath("/profile", searchParams))))
     return <AuthUnavailable />;
-  return <ProfileWorkspace />;
+  const params = await searchParams;
+  return (
+    <>
+      {params?.imported === "1" && <ProfileImportSuccess />}
+      <ProfileWorkspace />
+    </>
+  );
 }

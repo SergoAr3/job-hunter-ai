@@ -3,6 +3,7 @@ import { loginUrl, safeNext } from "../lib/auth";
 it.each([
   "/dashboard",
   "/profile",
+  "/profile/import",
   "/discover?q=python",
   "/applications",
   "/applications/123",

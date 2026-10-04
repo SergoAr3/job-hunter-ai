@@ -21,7 +21,7 @@ export function safeNext(value: unknown): string {
     const url = new URL(value, "https://internal.invalid");
     if (
       url.origin !== "https://internal.invalid" ||
-      !/^\/(dashboard|profile|discover|applications(?:\/[1-9]\d*)?)$/.test(
+      !/^\/(dashboard|profile(?:\/import)?|discover|applications(?:\/[1-9]\d*)?)$/.test(
         url.pathname,
       )
     )

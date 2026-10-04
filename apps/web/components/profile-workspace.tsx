@@ -1,5 +1,8 @@
 "use client";
 
+import Link from "next/link";
+import { CVDocumentIcon } from "./cv-document-icon";
+
 import { useEffect, useRef, useState } from "react";
 import { webRequest } from "../lib/client";
 import { errorMessage, WebError } from "../lib/errors";
@@ -598,11 +601,7 @@ export function ProfileWorkspace() {
       setUncertain(false);
       setEditing(false);
       setDraft(null);
-      setFeedback(
-        afterMutation
-          ? "Профиль сохранён и подтверждён."
-          : "Показаны актуальные данные профиля.",
-      );
+      setFeedback(afterMutation ? "Профиль сохранён и подтверждён." : "");
       if (work === null && facts === null) void loadLists();
     } catch (error) {
       if (!mounted.current) return;
@@ -723,12 +722,34 @@ export function ProfileWorkspace() {
           <h1>Профиль</h1>
           <p>Эти данные используются для оценки совпадения с вакансиями.</p>
         </div>
-        {confirmed && !editing && !uncertain && (
-          <button type="button" onClick={beginEdit}>
-            Редактировать
-          </button>
-        )}
+        <div className="profile-header-actions">
+          {confirmed && !editing && !uncertain && (
+            <button type="button" onClick={beginEdit}>
+              Редактировать
+            </button>
+          )}
+        </div>
       </div>
+      {!editing && (
+        <section
+          className="profile-import-card"
+          aria-labelledby="profile-import-heading"
+        >
+          <span className="cv-document-icon">
+            <CVDocumentIcon />
+          </span>
+          <div>
+            <h2 id="profile-import-heading">Заполнить профиль из резюме</h2>
+            <p>
+              Загрузите PDF или DOCX — мы извлечём данные и покажем изменения
+              перед сохранением.
+            </p>
+          </div>
+          <Link className="button-link" href="/profile/import">
+            Импортировать резюме
+          </Link>
+        </section>
+      )}
       {feedback && !editing && !uncertain && confirmed !== undefined && (
         <p className="profile-feedback" role="status">
           {feedback}

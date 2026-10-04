@@ -1,4 +1,8 @@
 from contextlib import asynccontextmanager
+import asyncio
+import logging
+import sqlite3
+from contextlib import suppress
 
 from datetime import date
 
@@ -121,13 +125,29 @@ async def lifespan(app):
     from app.services.auth_mail import get_mailer, web_origin
     get_mailer()
     web_origin()
-    yield
+    from app.services.cv_import_state import get_import_store
+    async def expire_cv_previews():
+        while True:
+            try:
+                await run_in_threadpool(get_import_store().cleanup)
+            except (OSError, sqlite3.Error):
+                logging.getLogger(__name__).warning("CV import temporary store unavailable")
+            await asyncio.sleep(60)
+    cleanup = asyncio.create_task(expire_cv_previews())
+    try:
+        yield
+    finally:
+        cleanup.cancel()
+        with suppress(asyncio.CancelledError):
+            await cleanup
 
 
 app = FastAPI(title="Job Hunter AI API", lifespan=lifespan, dependencies=[Depends(require_user_access)])
 app.include_router(auth_router)
 from app.telegram_auth_routes import router as telegram_auth_router
 app.include_router(telegram_auth_router)
+from app.cv_import_routes import router as cv_import_router
+app.include_router(cv_import_router)
 
 
 @app.exception_handler(AuthError)
@@ -178,6 +198,7 @@ app.add_middleware(CVUploadBodyLimitMiddleware)
 enrichment_service = VacancyEnrichmentService()
 ai_enrichment_service = JobAIEnrichmentService()
 cv_profile_draft_ai_service = CVProfileDraftAIService()
+app.state.cv_import_ai_service = cv_profile_draft_ai_service
 trudvsem_client = TrudvsemClient()
 
 CV_DRAFT_ERROR_STATUS = {
