@@ -75,7 +75,8 @@ def _is_cv_upload_request(scope: Scope) -> bool:
         and parts[0] == ""
         and parts[1] == "users"
         and bool(parts[2])
-        and parts[3:] == ["profile", "draft-from-cv"]
+        and parts[3] == "profile"
+        and parts[4] in {"draft-from-cv", "cv-import"}
     )
 
 

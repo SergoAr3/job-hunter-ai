@@ -25,6 +25,7 @@ import { logoutHandler } from "../lib/server/auth-handlers";
 import { pageAccess } from "../lib/server/page-access";
 import Home from "../app/page";
 import DashboardPage from "../app/(workspace)/dashboard/page";
+import CVImportPage from "../app/(workspace)/profile/import/page";
 import { AuthUnavailable } from "../components/auth-unavailable";
 
 const token = "T".repeat(43),
@@ -231,6 +232,30 @@ it.each(["absent", "malformed", "expired", "revoked", "unavailable"] as const)(
     }
     for (const [url] of upstream.mock.calls)
       expect(url).toContain("/auth/internal/principal");
+    expect(upstream).toHaveBeenCalledTimes(
+      ["absent", "malformed"].includes(state) ? 0 : 1,
+    );
+  },
+);
+
+it.each(["absent", "malformed", "expired", "revoked", "unavailable"] as const)(
+  "CV Import session=%s preserves protected workspace semantics",
+  async (state) => {
+    request(
+      "profile/import",
+      state === "absent"
+        ? ""
+        : `${cookieName}=${state === "malformed" ? "bad" : token}`,
+    );
+    upstream.mockResolvedValue(
+      Response.json({}, { status: state === "unavailable" ? 503 : 401 }),
+    );
+    if (state === "unavailable")
+      expect((await CVImportPage()).type).toBe(AuthUnavailable);
+    else
+      await expect(CVImportPage()).rejects.toThrow(
+        "REDIRECT:/login?next=%2Fprofile%2Fimport",
+      );
     expect(upstream).toHaveBeenCalledTimes(
       ["absent", "malformed"].includes(state) ? 0 : 1,
     );

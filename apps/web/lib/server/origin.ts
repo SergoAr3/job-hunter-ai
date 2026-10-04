@@ -1,6 +1,9 @@
 import "server-only";
 import { WebError } from "../errors";
-export function requireMutation(request: Request) {
+export function requireMutation(
+  request: Request,
+  contentType: "json" | "multipart" = "json",
+) {
   const allowed = new Set<string>();
   const configured = process.env.WEB_PUBLIC_ORIGIN;
   if (configured) {
@@ -34,9 +37,11 @@ export function requireMutation(request: Request) {
   )
     throw new WebError("invalid_request", 403);
   if (
-    !/^application\/json(?:\s*;.*)?$/i.test(
-      request.headers.get("content-type") ?? "",
-    )
+    !(
+      contentType === "json"
+        ? /^application\/json(?:\s*;.*)?$/i
+        : /^multipart\/form-data\s*;.*boundary=/i
+    ).test(request.headers.get("content-type") ?? "")
   )
     throw new WebError("invalid_request", 400);
 }

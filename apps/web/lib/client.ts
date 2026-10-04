@@ -25,7 +25,9 @@ export async function webRequest<T>(
       throw new WebError(
         typeof value?.code === "string" ? value.code : "api_unavailable",
         response.status,
-        ["profile_invalid", "auth_invalid"].includes(value?.code) &&
+        ["profile_invalid", "auth_invalid", "cv_import_edit_invalid"].includes(
+          value?.code,
+        ) &&
           value?.fieldErrors &&
           typeof value.fieldErrors === "object" &&
           !Array.isArray(value.fieldErrors)

@@ -50,6 +50,30 @@ from app.schemas import UserProfilePutIn
 from conftest import TestSessionLocal, client
 
 
+def test_distinct_project_and_freelance_blocks_preserve_local_context_and_roles():
+    source = "Additional experience\nAtlas Tools | Backend Developer\nCurrent personal project\nProject development and freelance | Python Developer"
+    entries = [
+        {"company": "Atlas Tools", "position": "Backend Developer", "is_current": True, "engagement_kind": "unknown"},
+        {"company": "Project development and freelance", "position": "Python Developer", "engagement_kind": "freelance"},
+    ]
+    class Responses:
+        def parse(self, **kwargs):
+            prompt = kwargs["input"][0]["content"]
+            assert "Keep each distinct source block as a separate entry" in prompt
+            assert "heading/context into company and its own role into position" in prompt
+            assert "only from the same block" in prompt
+            assert "qualify the preceding heading/role" in prompt
+            assert kwargs["input"][1]["content"] == f"<cv_text>\n{source}\n</cv_text>"
+            return SimpleNamespace(output_parsed=AIProfileDraftTransport(target_roles=["Backend Developer"], suggested_work_experience=entries))
+    result = CVProfileDraftAIService(client=SimpleNamespace(responses=Responses())).create_draft(source)
+    assert len(result.suggested_work_experience) == 2
+    assert [(x.company, x.position, x.engagement_kind, x.is_current) for x in result.suggested_work_experience] == [
+        ("Atlas Tools", "Backend Developer", "unknown", True),
+        ("Project development and freelance", "Python Developer", "freelance", None),
+    ]
+    assert all(x.start_year is None and x.end_year is None for x in result.suggested_work_experience)
+
+
 def create_user(telegram_id: int = 444001) -> int:
     response = client.post(
         "/users/telegram", json={"telegram_id": telegram_id, "first_name": "CV User"}
@@ -686,6 +710,51 @@ def ai_draft(**changes: object) -> AIProfileDraftTransport:
     }
     values.update(changes)
     return AIProfileDraftTransport.model_validate(values)
+
+
+@pytest.mark.parametrize("recover", [True, False])
+def test_invalid_work_period_retries_once_with_same_input_and_schema(recover, caplog) -> None:
+    calls = []
+    invalid = ai_draft().model_dump()
+    invalid["suggested_work_experience"] = [
+        {"company": "Synthetic Company", "end_year": 2020, "is_current": None}
+    ]
+
+    class Responses:
+        def parse(self, **kwargs):
+            calls.append(kwargs)
+            if len(calls) == 1 or not recover:
+                # Match SDK parse: cross-field Pydantic failure after HTTP 200.
+                AIProfileDraftTransport.model_validate(invalid)
+            return SimpleNamespace(output_parsed=ai_draft())
+
+    service = CVProfileDraftAIService(client=SimpleNamespace(responses=Responses()))
+    with caplog.at_level("INFO", logger="uvicorn.error"):
+        if recover:
+            assert service.create_draft("Python Engineer").target_roles == ["Python Engineer"]
+        else:
+            with pytest.raises(CVProfileDraftError, match=ERROR_INVALID_AI_OUTPUT):
+                service.create_draft("Python Engineer")
+    assert len(calls) == 2
+    assert calls[0] == calls[1]
+    assert "Synthetic Company" not in caplog.text
+    assert "Python Engineer" not in caplog.text
+    assert "validation_location=suggested_work_experience.0" in caplog.text
+
+
+@pytest.mark.parametrize("error_code", [ERROR_AI_TIMEOUT, ERROR_AI_PROVIDER, ERROR_INSUFFICIENT_JOB_INFORMATION])
+def test_extraction_retry_does_not_repeat_other_failures(monkeypatch, error_code) -> None:
+    service = CVProfileDraftAIService(api_key=None)
+    calls = []
+
+    def fail(text):
+        calls.append(text)
+        raise CVProfileDraftError(error_code)
+
+    monkeypatch.setattr(service, "_create_draft_once", fail)
+    with pytest.raises(CVProfileDraftError, match=error_code):
+        service.create_draft("Synthetic input")
+    assert calls == ["Synthetic input"]
 
 
 def test_ai_service_uses_structured_output_and_treats_cv_as_untrusted() -> None:

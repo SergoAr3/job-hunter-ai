@@ -8,6 +8,7 @@ import {
   waitFor,
 } from "@testing-library/react";
 import { ProfileWorkspace } from "../components/profile-workspace";
+import { ProfileImportSuccess } from "../components/profile-import-success";
 import type { Profile } from "../lib/profile";
 
 const profile: Profile = {
@@ -60,6 +61,31 @@ beforeEach(() => {
 });
 afterEach(() => {
   vi.unstubAllGlobals();
+  vi.useRealTimers();
+});
+
+it("dismisses the import toast after 4.5 seconds under StrictMode without moving focus", () => {
+  vi.useFakeTimers();
+  window.history.replaceState(null, "", "/profile?imported=1");
+  render(
+    <StrictMode>
+      <button>Existing control</button>
+      <ProfileImportSuccess />
+    </StrictMode>,
+  );
+  const control = screen.getByRole("button", { name: "Existing control" });
+  control.focus();
+  expect(screen.getByRole("status")).toHaveAttribute("aria-live", "polite");
+  expect(window.location.search).toBe("");
+  act(() => vi.advanceTimersByTime(4499));
+  expect(screen.getByRole("status")).toHaveTextContent(
+    "Данные резюме применены к профилю.",
+  );
+  expect(control).toHaveFocus();
+  act(() => vi.advanceTimersByTime(1));
+  expect(screen.queryByRole("status")).not.toBeInTheDocument();
+  expect(control).toHaveFocus();
+  window.history.replaceState(null, "", "/");
 });
 
 it("renders a lightweight read page with nullable states and read-only experience", async () => {
@@ -80,6 +106,50 @@ it("renders a lightweight read page with nullable states and read-only experienc
   ).not.toBeInTheDocument();
   expect(fetcher.mock.calls[0][0]).toBe("/api/profile");
   expect(fetcher).toHaveBeenCalledTimes(3);
+  expect(
+    screen.queryByText("Показаны актуальные данные профиля."),
+  ).not.toBeInTheDocument();
+  expect(
+    screen.getByRole("heading", { name: "Заполнить профиль из резюме" }),
+  ).toBeInTheDocument();
+  expect(
+    screen.getByRole("link", { name: "Импортировать резюме" }),
+  ).toHaveAttribute("href", "/profile/import");
+  expect(
+    screen.queryByText("Данные резюме применены к профилю."),
+  ).not.toBeInTheDocument();
+});
+
+it("shows one import success and consumes only its query flag; refresh has no success banner", async () => {
+  stubProfile();
+  window.history.replaceState(
+    { retained: true },
+    "",
+    "/profile?imported=1&source=cv#skills",
+  );
+  const view = render(
+    <StrictMode>
+      <ProfileImportSuccess />
+      <ProfileWorkspace />
+    </StrictMode>,
+  );
+  await screen.findByText("Built an API");
+  expect(
+    screen.getAllByText("Данные резюме применены к профилю."),
+  ).toHaveLength(1);
+  expect(screen.getAllByRole("status")).toHaveLength(1);
+  expect(
+    window.location.pathname + window.location.search + window.location.hash,
+  ).toBe("/profile?source=cv#skills");
+  expect(window.history.state).toEqual({ retained: true });
+  view.unmount();
+  // A fresh server render uses the cleaned URL, so it omits ProfileImportSuccess.
+  render(<ProfileWorkspace />);
+  await screen.findByText("Built an API");
+  expect(
+    screen.queryByText("Данные резюме применены к профилю."),
+  ).not.toBeInTheDocument();
+  window.history.replaceState(null, "", "/");
 });
 
 it("loads the profile and read-only lists once under StrictMode effect replay", async () => {

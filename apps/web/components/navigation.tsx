@@ -66,7 +66,11 @@ export function Navigation() {
       </Link>
       <Link
         href="/profile"
-        aria-current={pathname === "/profile" ? "page" : undefined}
+        aria-current={
+          ["/profile", "/profile/import"].includes(pathname)
+            ? "page"
+            : undefined
+        }
       >
         <svg
           aria-hidden="true"

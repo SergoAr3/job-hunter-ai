@@ -1,0 +1,46 @@
+import type { CVPreview } from "../lib/cv-import";
+
+export const cvPreview: CVPreview = {
+  token: "T".repeat(43),
+  revision: 1,
+  work_experience_mode: "replace",
+  current_work_experience_count: 3,
+  experience_facts_mode: "replace",
+  current_experience_fact_count: 4,
+  expires_at: 2000000000,
+  current: {
+    target_roles: ["Developer"],
+    skills: ["Git"],
+    location: ["Yerevan"],
+    experience: "middle",
+    workplace_preference: "remote",
+    salary_min: null,
+    salary_currency: null,
+    salary_period: "unknown",
+    languages: [],
+  },
+  proposed: {
+    target_roles: ["Developer", "Engineer"],
+    skills: ["Git", "Python"],
+    location: ["Yerevan"],
+    experience: "senior",
+    workplace_preference: "remote",
+    salary_min: null,
+    salary_currency: null,
+    salary_period: "unknown",
+    languages: [{ language: "English", level: "B2" }],
+  },
+  work_experience: [
+    {
+      company: "Acme",
+      position: "Engineer",
+      engagement_kind: "employment",
+      start_year: 2020,
+      start_month: null,
+      end_year: null,
+      end_month: null,
+      is_current: true,
+    },
+  ],
+  experience_facts: ["Built an API"],
+};
