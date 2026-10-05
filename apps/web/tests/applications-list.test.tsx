@@ -103,8 +103,12 @@ it("renders real list fields, nullable fallbacks and unique short links", async 
   expect(
     screen.queryByText(/salary|next_action|description/),
   ).not.toBeInTheDocument();
-  expect(screen.getByLabelText("Статус")).toBeInTheDocument();
-  expect(screen.getByLabelText("Сортировка")).toBeInTheDocument();
+  expect(
+    screen.getByRole("combobox", { name: /^Статус / }),
+  ).toBeInTheDocument();
+  expect(
+    screen.getByRole("combobox", { name: /^Сортировка / }),
+  ).toBeInTheDocument();
 });
 
 it("keeps an unusually long source title out of the full accessible name", async () => {
@@ -146,11 +150,13 @@ it("submits search, clears it, and resets offset when changing filter or sort", 
   expect(push).toHaveBeenLastCalledWith(
     "/applications?status=offer&sort=oldest",
   );
-  fireEvent.change(screen.getByLabelText("Статус"), { target: { value: "" } });
+  fireEvent.click(screen.getByRole("combobox", { name: /^Статус / }));
+  fireEvent.click(screen.getByRole("option", { name: "Все статусы" }));
   expect(push).toHaveBeenLastCalledWith("/applications?q=Old&sort=oldest");
-  fireEvent.change(screen.getByLabelText("Сортировка"), {
-    target: { value: "next_action" },
-  });
+  fireEvent.click(screen.getByRole("combobox", { name: /^Сортировка / }));
+  fireEvent.click(
+    screen.getByRole("option", { name: "По следующему действию" }),
+  );
   expect(push).toHaveBeenLastCalledWith(
     "/applications?q=Old&status=offer&sort=next_action",
   );

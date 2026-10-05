@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { WorkExperienceList } from "./work-experience-editor";
 import { CVDocumentIcon } from "./cv-document-icon";
 
 import { useEffect, useRef, useState } from "react";
@@ -24,7 +25,7 @@ import {
   type ProfileDraft,
   type ProfileField,
   type ProfileFieldErrors,
-  type WorkExperience,
+  type WorkExperienceEntry,
 } from "../lib/profile";
 
 const fields: ProfileField[] = [
@@ -52,13 +53,6 @@ function valueList(items: string[], empty: string) {
   ) : (
     <p className="profile-empty">{empty}</p>
   );
-}
-
-function period(year: number | null, month: number | null) {
-  if (year === null) return "Не указано";
-  return month === null
-    ? String(year)
-    : `${String(month).padStart(2, "0")}.${year}`;
 }
 
 function ProfileRead({ profile }: { profile: Profile }) {
@@ -558,7 +552,7 @@ export function ProfileWorkspace() {
   const [formError, setFormError] = useState("");
   const [fieldErrors, setFieldErrors] = useState<ProfileFieldErrors>({});
   const [feedback, setFeedback] = useState("");
-  const [work, setWork] = useState<WorkExperience[] | null>(null);
+  const [work, setWork] = useState<WorkExperienceEntry[] | null>(null);
   const [facts, setFacts] = useState<ExperienceFact[] | null>(null);
   const [workError, setWorkError] = useState(false);
   const [factsError, setFactsError] = useState(false);
@@ -570,7 +564,9 @@ export function ProfileWorkspace() {
   async function loadLists() {
     setListsLoading(true);
     const [workResult, factsResult] = await Promise.allSettled([
-      webRequest<{ items: WorkExperience[] }>("/api/profile/work-experiences"),
+      webRequest<{ items: WorkExperienceEntry[] }>(
+        "/api/profile/work-experiences",
+      ),
       webRequest<{ items: ExperienceFact[] }>("/api/profile/experience-facts"),
     ]);
     if (!mounted.current) return;
@@ -814,29 +810,15 @@ export function ProfileWorkspace() {
                     Повторить
                   </button>
                 </div>
-              ) : work?.length ? (
-                <ul className="profile-records">
-                  {work.map((entry, index) => (
-                    <li key={index}>
-                      <strong>{entry.position || entry.company}</strong>
-                      {entry.position && entry.company && (
-                        <span>{entry.company}</span>
-                      )}
-                      <small>
-                        {period(entry.start_year, entry.start_month)} —{" "}
-                        {entry.is_current === true
-                          ? "Сейчас"
-                          : period(entry.end_year, entry.end_month)}
-                        {entry.duration_months !== null
-                          ? ` · ${entry.duration_months} мес.`
-                          : ""}
-                      </small>
-                    </li>
-                  ))}
-                </ul>
-              ) : (
-                <p className="profile-empty">Опыт работы пока не добавлен.</p>
-              )}
+              ) : work !== null ? (
+                <WorkExperienceList
+                  items={work}
+                  onChange={(update) =>
+                    setWork((current) => update(current ?? []))
+                  }
+                  disabled={uncertain}
+                />
+              ) : null}
             </section>
             <section
               className="profile-section"

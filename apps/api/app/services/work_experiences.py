@@ -1,10 +1,12 @@
 from datetime import date
 
 from sqlalchemy import select
+from sqlalchemy.exc import SQLAlchemyError
+from pydantic import ValidationError
 from sqlalchemy.orm import Session
 
 from app.models import UserProfile, WorkExperience
-from app.work_experience_schema import WorkExperienceIn, WorkExperienceOut
+from app.work_experience_schema import WorkExperienceIn, WorkExperienceOut, WorkExperiencePatch
 
 MAX_WORK_EXPERIENCES = 20
 
@@ -49,12 +51,21 @@ def output(entry):
     return result.model_copy(update={"duration_months": duration_months(entry)})
 
 
-def save(session: Session, user_id: int, payload: WorkExperienceIn, entry_id: int | None = None):
+def save(session: Session, user_id: int, payload: WorkExperienceIn | WorkExperiencePatch, entry_id: int | None = None):
     profile = profile_for_user(session, user_id, lock=True)
     entries = list_for_profile(session, profile.id)
     entry = next((item for item in entries if item.id == entry_id), None)
     if entry_id is not None and entry is None:
         raise WorkExperienceError("WORK_EXPERIENCE_NOT_FOUND", 404)
+    if isinstance(payload, WorkExperiencePatch):
+        # Lock the profile before reading/merging, as CV snapshot replacement does.
+        # Revalidate all invariants against persisted state, never against defaults.
+        values = {key: getattr(entry, key) for key in WorkExperienceIn.model_fields}
+        values.update(payload.model_dump(exclude_unset=True))
+        try:
+            payload = WorkExperienceIn.model_validate(values)
+        except ValidationError:
+            raise WorkExperienceError("WORK_EXPERIENCE_INVALID", 422) from None
     if any(item.id != entry_id and identity(item) == identity(payload) for item in entries):
         raise WorkExperienceError("DUPLICATE_WORK_EXPERIENCE", 422)
     if entry is None:
@@ -64,8 +75,12 @@ def save(session: Session, user_id: int, payload: WorkExperienceIn, entry_id: in
         session.add(entry)
     for key, value in payload.model_dump().items():
         setattr(entry, key, value)
-    session.commit()
-    session.refresh(entry)
+    try:
+        session.commit()
+        session.refresh(entry)
+    except SQLAlchemyError:
+        session.rollback()
+        raise WorkExperienceError("WORK_EXPERIENCE_UNCONFIRMED", 503) from None
     return entry
 
 
@@ -76,5 +91,9 @@ def delete(session: Session, user_id: int, entry_id: int):
     ))
     if entry is None:
         raise WorkExperienceError("WORK_EXPERIENCE_NOT_FOUND", 404)
-    session.delete(entry)
-    session.commit()
+    try:
+        session.delete(entry)
+        session.commit()
+    except SQLAlchemyError:
+        session.rollback()
+        raise WorkExperienceError("WORK_EXPERIENCE_UNCONFIRMED", 503) from None

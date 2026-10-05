@@ -3,7 +3,7 @@ from sqlalchemy.orm import Session
 
 from app.database import get_session
 from app.services import work_experiences as service
-from app.work_experience_schema import WorkExperienceIn, WorkExperienceOut, WorkExperiencesOut
+from app.work_experience_schema import WorkExperienceIn, WorkExperienceOut, WorkExperiencesOut, WorkExperiencePatch
 
 router = APIRouter(prefix="/users/{user_id}/profile/work-experiences")
 
@@ -37,5 +37,13 @@ def update(user_id: int, experience_id: int, payload: WorkExperienceIn, session:
 def delete(user_id: int, experience_id: int, session: Session = Depends(get_session)):
     try:
         service.delete(session, user_id, experience_id)
+    except service.WorkExperienceError as error:
+        raise HTTPException(error.status, detail={"code": error.code}) from None
+
+
+@router.patch("/{experience_id}", response_model=WorkExperienceOut)
+def patch(user_id: int, experience_id: int, payload: WorkExperiencePatch, session: Session = Depends(get_session)):
+    try:
+        return service.output(service.save(session, user_id, payload, experience_id))
     except service.WorkExperienceError as error:
         raise HTTPException(error.status, detail={"code": error.code}) from None

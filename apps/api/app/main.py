@@ -167,6 +167,13 @@ async def safe_auth_validation(request: Request, error: RequestValidationError):
             status_code=422, content={"detail": {"code": "APPLICATION_INVALID"}},
             headers={"Cache-Control": "no-store"},
         )
+    if (request.method == "PATCH" and
+            getattr(request.scope.get("route"), "path", None) ==
+            "/users/{user_id}/profile/work-experiences/{experience_id}"):
+        return JSONResponse(
+            status_code=422, content={"detail": {"code": "WORK_EXPERIENCE_INVALID"}},
+            headers={"Cache-Control": "no-store"},
+        )
     if request.url.path.startswith("/auth/"):
         # FastAPI's default validation response includes rejected input.
         return JSONResponse(status_code=422, content={"detail": [

@@ -49,3 +49,35 @@ def test_concurrent_posts_serialize_duplicate_and_limit(near_limit):
             session.flush()
             session.delete(session.get(User, user_id))
             session.commit()
+
+
+@pytest.mark.skipif(os.getenv("RUN_WORK_HISTORY_POSTGRES") != "1", reason="requires migrated local PostgreSQL")
+def test_concurrent_patches_preserve_unrelated_fields():
+    from app.work_experience_schema import WorkExperiencePatch
+    with SessionLocal() as session:
+        user = User(telegram_id=-(uuid.uuid4().int % (2**62)), first_name="Work patch integration test")
+        session.add(user)
+        session.flush()
+        profile = UserProfile(user_id=user.id, target_roles=["Developer"])
+        session.add(profile)
+        session.commit()
+        user_id, profile_id = user.id, profile.id
+    try:
+        with SessionLocal() as session:
+            entry_id = save(session, user_id, WorkExperienceIn(company="Initial", position="Engineer")).id
+        barrier = Barrier(2)
+        def patch(values):
+            with SessionLocal() as session:
+                barrier.wait(timeout=5)
+                save(session, user_id, WorkExperiencePatch(**values), entry_id)
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            list(pool.map(patch, [{"company": "Latest company"}, {"position": "Latest position"}]))
+        with SessionLocal() as session:
+            entry = session.get(WorkExperience, entry_id)
+            assert (entry.company, entry.position) == ("Latest company", "Latest position")
+    finally:
+        with SessionLocal() as session:
+            session.delete(session.get(UserProfile, profile_id))
+            session.flush()
+            session.delete(session.get(User, user_id))
+            session.commit()

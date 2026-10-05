@@ -77,6 +77,9 @@ export interface WorkExperience {
   is_current: boolean | null;
   duration_months: number | null;
 }
+export interface WorkExperienceEntry extends WorkExperience {
+  id: number;
+}
 export interface ExperienceFact {
   text: string;
 }

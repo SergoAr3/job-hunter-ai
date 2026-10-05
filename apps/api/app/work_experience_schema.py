@@ -52,5 +52,12 @@ class WorkExperienceOut(WorkExperienceIn):
     duration_months: int | None = None
 
 
+class WorkExperiencePatch(WorkExperienceIn):
+    """Validate field types now, and the complete period after merging in service."""
+    @model_validator(mode="after")
+    def validate_period(self):
+        return self
+
+
 class WorkExperiencesOut(BaseModel):
     items: list[WorkExperienceOut]
