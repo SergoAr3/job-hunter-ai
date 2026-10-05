@@ -56,6 +56,7 @@ it("uses one list request for the authenticated user and projects list fields", 
     items: [
       {
         app_id: 42,
+        next_action: null,
         status: "interview",
         created_at: item.created_at,
         title: item.title,

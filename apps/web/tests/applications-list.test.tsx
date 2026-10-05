@@ -259,3 +259,25 @@ it("canonicalizes invalid URL values before making a request", async () => {
   await waitFor(() => expect(replace).toHaveBeenCalledWith("/applications"));
   expect(fetcher).not.toHaveBeenCalled();
 });
+
+it("shows only compact next action when present and keeps full notes off list rows", async () => {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn().mockResolvedValue(
+      respond([
+        {
+          ...row,
+          next_action: "Написать рекрутеру",
+          note: "Private detail-only note",
+        },
+      ]),
+    ),
+  );
+  render(<ApplicationsList />);
+  expect(await screen.findByText("Следующее: Написать рекрутеру")).toHaveClass(
+    "application-row-next-action",
+  );
+  expect(
+    screen.queryByText("Private detail-only note"),
+  ).not.toBeInTheDocument();
+});

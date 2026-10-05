@@ -18,7 +18,7 @@ from app.models import (
     UserProfile,
 )
 from app.models import IngestionMethod, ParsingStatus
-from app.schemas import ApplicationSort, FollowUpDueState
+from app.schemas import ApplicationPatchIn, ApplicationSort, FollowUpDueState
 from app.services.application_match_snapshots import prepare_match_snapshot
 from app.services.job_ai_enrichment import (
     AIEnrichmentResult,
@@ -537,6 +537,40 @@ def list_application_follow_ups(
         (application, job, FollowUpDueState(state))
         for application, job, state in rows
     ]
+
+
+def patch_application(
+    session: Session, user_id: int, application_id: int, payload: ApplicationPatchIn,
+) -> tuple[Application, Job] | None:
+    """Write only supplied CRM fields; legacy action dates remain user-owned."""
+    try:
+        application = session.scalar(
+            select(Application)
+            .where(Application.id == application_id, Application.user_id == user_id)
+            .with_for_update()
+        )
+        if application is None:
+            return None
+        job = session.get(Job, application.job_id)
+        if job is None:
+            return None
+        changes = payload.model_dump(exclude_unset=True)
+        changed = False
+        for field, value in changes.items():
+            if getattr(application, field) != value:
+                setattr(application, field, value)
+                changed = True
+        if "next_action" in changes and changes["next_action"] is None:
+            if application.next_action_due_on is not None:
+                application.next_action_due_on = None
+                changed = True
+        if changed:
+            session.commit()
+            session.refresh(application)
+        return application, job
+    except Exception:
+        session.rollback()
+        raise
 
 
 def set_application_note(

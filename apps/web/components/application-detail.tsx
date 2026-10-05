@@ -5,11 +5,13 @@ export function ApplicationView({
   detail,
   statusControl,
   historySection,
+  notesControl,
   statusUnconfirmed = false,
 }: {
   detail: ApplicationDetail;
   statusControl?: ReactNode;
   historySection?: ReactNode;
+  notesControl?: ReactNode;
   statusUnconfirmed?: boolean;
 }) {
   const { job, application } = detail;
@@ -32,36 +34,34 @@ export function ApplicationView({
       <div className="save-area">
         <SourceLink url={job.source_url} />
       </div>
-      {(application.note || application.next_action) && (
-        <section className="crm-notes">
-          <h2>Ваши записи</h2>
-          {application.note && (
-            <>
-              <h3>Заметка</h3>
-              <p className="source-text">{application.note}</p>
-            </>
-          )}
-          {application.next_action && (
-            <>
-              <h3>Следующее действие</h3>
-              <p className="source-text">{application.next_action}</p>
-              {application.next_action_due_on && (
-                <p>
-                  Дата:{" "}
-                  <time dateTime={application.next_action_due_on}>
-                    {application.next_action_due_on}
-                  </time>
-                </p>
-              )}
-            </>
-          )}
-        </section>
-      )}
+      {notesControl ??
+        ((application.note || application.next_action) && (
+          <section className="crm-notes">
+            <h2>Ваши записи</h2>
+            {application.note && (
+              <>
+                <h3>Заметка</h3>
+                <p className="source-text">{application.note}</p>
+              </>
+            )}
+            {application.next_action && (
+              <>
+                <h3>Следующее действие</h3>
+                <p className="source-text">{application.next_action}</p>
+                {application.next_action_due_on && (
+                  <p>
+                    Дата:{" "}
+                    <time dateTime={application.next_action_due_on}>
+                      {application.next_action_due_on}
+                    </time>
+                  </p>
+                )}
+              </>
+            )}
+          </section>
+        ))}
       <JobText job={job} />
       {historySection}
-      <p className="muted read-only-note">
-        Заметку и следующее действие можно изменить в Telegram.
-      </p>
     </article>
   );
 }

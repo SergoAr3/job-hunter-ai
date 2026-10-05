@@ -57,7 +57,7 @@ def test_revision17_real_upgrade_downgrade_preserves_domain_and_metadata(email_e
         conn.execute(sa.insert(UserProfile),{"user_id":42,"target_roles":["Keep"]})
         before=conn.execute(sa.select(User.__table__)).mappings().all()
         profile=conn.execute(sa.select(UserProfile.__table__)).mappings().all()
-    command.upgrade(config,"head")
+    command.upgrade(config,"20261003_17")
     with email_engine.connect() as conn:
         assert conn.scalar(sa.text("SELECT version_num FROM alembic_version"))=="20261003_17"
         inspector=sa.inspect(conn)
@@ -87,7 +87,7 @@ def test_revision17_real_upgrade_downgrade_preserves_domain_and_metadata(email_e
         assert "auth_email_tokens" not in sa.inspect(conn).get_table_names()
         assert conn.execute(sa.select(User.__table__)).mappings().all()==before
         assert conn.execute(sa.select(UserProfile.__table__)).mappings().all()==profile
-    command.upgrade(config,"head")
+    command.upgrade(config,"20261003_17")
     with email_engine.begin() as conn:
         conn.execute(sa.insert(AuthEmailToken),row)
         conn.execute(sa.delete(UserProfile).where(UserProfile.user_id==42))
@@ -213,11 +213,11 @@ def test_revision17_ddl_failure_rolls_back_to_parent(email_engine,monkeypatch):
         return original(name,*args,**kwargs)
     with monkeypatch.context() as patch:
         patch.setattr(op,"create_index",fail)
-        with pytest.raises(RuntimeError,match="injected DDL"): command.upgrade(config,"head")
+        with pytest.raises(RuntimeError,match="injected DDL"): command.upgrade(config,"20261003_17")
     with email_engine.connect() as conn:
         assert "auth_email_tokens" not in sa.inspect(conn).get_table_names()
         assert conn.scalar(sa.text("SELECT version_num FROM alembic_version"))=="20261002_16"
-    command.upgrade(config,"head")
+    command.upgrade(config,"20261003_17")
     with email_engine.connect() as conn:
         assert conn.scalar(sa.text("SELECT version_num FROM alembic_version"))=="20261003_17"
 

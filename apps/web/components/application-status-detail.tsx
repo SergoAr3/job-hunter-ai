@@ -10,6 +10,7 @@ import { webRequest } from "../lib/client";
 import { errorMessage, WebError } from "../lib/errors";
 import { ApplicationView } from "./application-detail";
 import { ApplicationHistory } from "./application-history";
+import { ApplicationNotesEditor } from "./application-notes-editor";
 import { StatusSelect } from "./status-select";
 
 export function ApplicationStatusDetail({
@@ -109,7 +110,14 @@ export function ApplicationStatusDetail({
       )
         throw new WebError("api_unavailable");
       if (!mounted.current) return false;
-      setDetail(fresh);
+      // This read confirms status, not CRM fields saved while it was in flight.
+      setDetail((current) => ({
+        ...current,
+        application: {
+          ...current.application,
+          status: fresh.application.status,
+        },
+      }));
       setSelected(fresh.application.status as ApplicationStatus);
       setUncertain(false);
       setError("");
@@ -205,6 +213,23 @@ export function ApplicationStatusDetail({
     <ApplicationView
       detail={detail}
       statusUnconfirmed={uncertain}
+      notesControl={
+        <ApplicationNotesEditor
+          application={detail.application}
+          onSaved={(application, field) =>
+            setDetail((current) => ({
+              ...current,
+              application: {
+                ...current.application,
+                [field]: application[field],
+                ...(field === "next_action"
+                  ? { next_action_due_on: application.next_action_due_on }
+                  : {}),
+              },
+            }))
+          }
+        />
+      }
       historySection={
         <ApplicationHistory
           open={historyOpen}

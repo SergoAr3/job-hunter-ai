@@ -272,6 +272,11 @@ function ApplicationsContent({
                     className="application-row"
                     href={`/applications/${item.app_id}?from=${encodeURIComponent(currentUrl)}`}
                     aria-label={rowName(item, page.items)}
+                    aria-describedby={
+                      item.next_action
+                        ? `application-next-action-${item.app_id}`
+                        : undefined
+                    }
                     key={item.app_id}
                   >
                     <span className="application-row-main">
@@ -281,6 +286,15 @@ function ApplicationsContent({
                       <span className="company">
                         {item.company?.trim() || "Компания не указана"}
                       </span>
+                      {item.next_action && (
+                        <span
+                          id={`application-next-action-${item.app_id}`}
+                          className="application-row-next-action"
+                          title={item.next_action}
+                        >
+                          Следующее: {item.next_action}
+                        </span>
+                      )}
                     </span>
                     <span className="application-row-meta">
                       {location && (
