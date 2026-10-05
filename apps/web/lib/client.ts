@@ -25,9 +25,12 @@ export async function webRequest<T>(
       throw new WebError(
         typeof value?.code === "string" ? value.code : "api_unavailable",
         response.status,
-        ["profile_invalid", "auth_invalid", "cv_import_edit_invalid"].includes(
-          value?.code,
-        ) &&
+        [
+          "profile_invalid",
+          "auth_invalid",
+          "cv_import_edit_invalid",
+          "work_invalid",
+        ].includes(value?.code) &&
           value?.fieldErrors &&
           typeof value.fieldErrors === "object" &&
           !Array.isArray(value.fieldErrors)
@@ -40,15 +43,19 @@ export async function webRequest<T>(
     if (url.startsWith("/api/auth/"))
       throw new WebError("auth_unavailable", 503);
     throw new WebError(
-      init?.method === "PATCH"
-        ? "ambiguous_application"
-        : init?.method === "POST"
-          ? "ambiguous_save"
-          : init?.method === "PUT"
-            ? url === "/api/profile"
-              ? "ambiguous_profile"
-              : "ambiguous_status"
-            : "api_unavailable",
+      url.startsWith("/api/profile/work-experiences") &&
+        init?.method &&
+        init.method !== "GET"
+        ? "work_unconfirmed"
+        : init?.method === "PATCH"
+          ? "ambiguous_application"
+          : init?.method === "POST"
+            ? "ambiguous_save"
+            : init?.method === "PUT"
+              ? url === "/api/profile"
+                ? "ambiguous_profile"
+                : "ambiguous_status"
+              : "api_unavailable",
     );
   }
 }

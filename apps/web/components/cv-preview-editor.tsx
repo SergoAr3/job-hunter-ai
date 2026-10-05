@@ -1,5 +1,8 @@
 "use client";
 
+import { ListboxSelect } from "./listbox-select";
+import { engagementKinds, engagementLabels } from "../lib/work-experiences";
+
 import { useEffect, useRef, useState } from "react";
 import type { CVEdit, CVPreview } from "../lib/cv-import";
 import {
@@ -166,26 +169,26 @@ export function CVPreviewEditor({
               />
               {error("company")}
             </label>
-            <label>
-              Тип занятости
-              <select
+            <div className="cv-select-field">
+              <label id="cv-engagement_kind-label" htmlFor="cv-engagement_kind">
+                Тип занятости
+              </label>
+              <ListboxSelect
+                id="cv-engagement_kind"
+                labelId="cv-engagement_kind-label"
                 value={work.engagement_kind}
-                onChange={(e) =>
-                  setWork({
-                    ...work,
-                    engagement_kind: e.target
-                      .value as typeof work.engagement_kind,
-                  })
+                options={engagementKinds}
+                labels={engagementLabels}
+                disabled={pending}
+                onChange={(value) =>
+                  setWork({ ...work, engagement_kind: value })
                 }
-                {...aria("engagement_kind")}
-              >
-                <option value="unknown">Не указан</option>
-                <option value="employment">Работа</option>
-                <option value="internship">Стажировка</option>
-                <option value="freelance">Фриланс</option>
-              </select>
+                invalid={Boolean(errors["engagement_kind"])}
+                describedBy={aria("engagement_kind")["aria-describedby"]}
+              />
+
               {error("engagement_kind")}
-            </label>
+            </div>
             {(["start", "end"] as const).map((part) => (
               <div key={part} className="cv-date-fields">
                 <span>{part === "start" ? "Начало" : "Окончание"}</span>
@@ -271,51 +274,57 @@ export function CVPreviewEditor({
                   }
                 />
                 {error("target_roles")}
-                <label>
-                  Уровень опыта
-                  <select
+                <div className="cv-select-field">
+                  <label id="cv-experience-label" htmlFor="cv-experience">
+                    Уровень опыта
+                  </label>
+                  <ListboxSelect
+                    id="cv-experience"
+                    labelId="cv-experience-label"
                     value={profile.experience}
-                    onChange={(e) =>
-                      setProfile({
-                        ...profile,
-                        experience: e.target.value as typeof profile.experience,
-                      })
+                    options={experienceLevels}
+                    labels={experienceLabels}
+                    disabled={pending}
+                    onChange={(value) =>
+                      setProfile({ ...profile, experience: value })
                     }
-                  >
-                    {experienceLevels.map((x) => (
-                      <option key={x} value={x}>
-                        {experienceLabels[x]}
-                      </option>
-                    ))}
-                  </select>
+                    invalid={Boolean(errors["experience"])}
+                    describedBy={aria("experience")["aria-describedby"]}
+                  />
+
                   {error("experience")}
-                </label>
+                </div>
                 <Tokens
                   label="Локации"
                   values={profile.location}
                   onChange={(location) => setProfile({ ...profile, location })}
                 />
                 {error("location")}
-                <label>
-                  Формат работы
-                  <select
-                    value={profile.workplace_preference}
-                    onChange={(e) =>
-                      setProfile({
-                        ...profile,
-                        workplace_preference: e.target
-                          .value as typeof profile.workplace_preference,
-                      })
-                    }
+                <div className="cv-select-field">
+                  <label
+                    id="cv-workplace_preference-label"
+                    htmlFor="cv-workplace_preference"
                   >
-                    {workplacePreferences.map((x) => (
-                      <option key={x} value={x}>
-                        {workplaceLabels[x]}
-                      </option>
-                    ))}
-                  </select>
+                    Формат работы
+                  </label>
+                  <ListboxSelect
+                    id="cv-workplace_preference"
+                    labelId="cv-workplace_preference-label"
+                    value={profile.workplace_preference}
+                    options={workplacePreferences}
+                    labels={workplaceLabels}
+                    disabled={pending}
+                    onChange={(value) =>
+                      setProfile({ ...profile, workplace_preference: value })
+                    }
+                    invalid={Boolean(errors["workplace_preference"])}
+                    describedBy={
+                      aria("workplace_preference")["aria-describedby"]
+                    }
+                  />
+
                   {error("workplace_preference")}
-                </label>
+                </div>
                 <label>
                   Зарплата от
                   <input
@@ -346,26 +355,26 @@ export function CVPreviewEditor({
                   />
                   {error("salary_currency")}
                 </label>
-                <label>
-                  Период
-                  <select
+                <div className="cv-select-field">
+                  <label id="cv-salary_period-label" htmlFor="cv-salary_period">
+                    Период
+                  </label>
+                  <ListboxSelect
+                    id="cv-salary_period"
+                    labelId="cv-salary_period-label"
                     value={profile.salary_period}
-                    onChange={(e) =>
-                      setProfile({
-                        ...profile,
-                        salary_period: e.target
-                          .value as typeof profile.salary_period,
-                      })
+                    options={salaryPeriods}
+                    labels={periodLabels}
+                    disabled={pending}
+                    onChange={(value) =>
+                      setProfile({ ...profile, salary_period: value })
                     }
-                  >
-                    {salaryPeriods.map((x) => (
-                      <option key={x} value={x}>
-                        {periodLabels[x]}
-                      </option>
-                    ))}
-                  </select>
+                    invalid={Boolean(errors["salary_period"])}
+                    describedBy={aria("salary_period")["aria-describedby"]}
+                  />
+
                   {error("salary_period")}
-                </label>
+                </div>
               </>
             )}
             {target.field === "skills" && (
@@ -400,24 +409,34 @@ export function CVPreviewEditor({
                           }
                         />
                       </label>
-                      <label>
-                        Уровень
-                        <input
+                      <div className="cv-select-field">
+                        <label
+                          id={`cv-level-${index}-label`}
+                          htmlFor={`cv-level-${index}`}
+                        >
+                          Уровень
+                        </label>
+                        <ListboxSelect<string>
+                          id={`cv-level-${index}`}
+                          labelId={`cv-level-${index}-label`}
                           value={item.level}
-                          list="cv-language-levels"
+                          options={languageLevels}
+                          labels={Object.fromEntries(
+                            languageLevels.map((level) => [level, level]),
+                          )}
+                          disabled={pending}
+                          editable
                           maxLength={100}
-                          onChange={(e) =>
+                          onChange={(value) =>
                             setProfile({
                               ...profile,
                               languages: profile.languages.map((x, i) =>
-                                i === index
-                                  ? { ...x, level: e.target.value }
-                                  : x,
+                                i === index ? { ...x, level: value } : x,
                               ),
                             })
                           }
                         />
-                      </label>
+                      </div>
                       <button
                         type="button"
                         aria-label={`Удалить язык ${item.language}`}
@@ -435,11 +454,7 @@ export function CVPreviewEditor({
                     </div>
                   ))}
                 </div>
-                <datalist id="cv-language-levels">
-                  {languageLevels.map((x) => (
-                    <option key={x} value={x} />
-                  ))}
-                </datalist>
+
                 <button
                   type="button"
                   onClick={() =>

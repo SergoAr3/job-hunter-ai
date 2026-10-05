@@ -1,4 +1,5 @@
 "use client";
+import { ListboxSelect } from "./listbox-select";
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
@@ -179,44 +180,37 @@ function ApplicationsContent({
           </div>
         </form>
         <div className="applications-control">
-          <label htmlFor="applications-status">Статус</label>
-          <select
+          <label id="applications-status-label" htmlFor="applications-status">
+            Статус
+          </label>
+          <ListboxSelect<string>
             id="applications-status"
+            labelId="applications-status-label"
             value={state.status ?? ""}
-            onChange={(event) =>
+            options={["", ...applicationStatuses]}
+            labels={Object.assign({ "": "Все статусы" }, statusLabels)}
+            disabled={false}
+            onChange={(value) =>
               navigate({
-                status: (event.target.value ||
-                  null) as ApplicationsState["status"],
+                status: (value || null) as ApplicationsState["status"],
                 offset: 0,
               })
             }
-          >
-            <option value="">Все статусы</option>
-            {applicationStatuses.map((status) => (
-              <option value={status} key={status}>
-                {statusLabels[status]}
-              </option>
-            ))}
-          </select>
+          />
         </div>
         <div className="applications-control">
-          <label htmlFor="applications-sort">Сортировка</label>
-          <select
+          <label id="applications-sort-label" htmlFor="applications-sort">
+            Сортировка
+          </label>
+          <ListboxSelect
             id="applications-sort"
+            labelId="applications-sort-label"
             value={state.sort}
-            onChange={(event) =>
-              navigate({
-                sort: event.target.value as ApplicationsState["sort"],
-                offset: 0,
-              })
-            }
-          >
-            {Object.entries(sortLabels).map(([value, label]) => (
-              <option value={value} key={value}>
-                {label}
-              </option>
-            ))}
-          </select>
+            options={Object.keys(sortLabels) as ApplicationsState["sort"][]}
+            labels={sortLabels}
+            disabled={false}
+            onChange={(value) => navigate({ sort: value, offset: 0 })}
+          />
         </div>
       </div>
       {loading && (

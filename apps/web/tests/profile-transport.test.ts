@@ -217,7 +217,7 @@ it("reads both lists under the authenticated user and strips backend-only fields
   vi.stubGlobal("fetch", fetcher);
   const work = await getWork(new Request(`${url}/work-experiences`));
   const facts = await getFacts(new Request(`${url}/experience-facts`));
-  expect((await work.json()).items[0]).not.toHaveProperty("id");
+  expect((await work.json()).items[0]).toHaveProperty("id", 4);
   expect(await facts.json()).toEqual({ items: [{ text: "Built APIs" }] });
   expect(fetcher.mock.calls.map((call) => call[0])).toEqual([
     "http://127.0.0.1:8000/users/987/profile/work-experiences",

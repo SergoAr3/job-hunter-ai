@@ -80,7 +80,7 @@ Paths in this inventory omit the common `/users/{user_id}` prefix.
 | --- | --- | --- |
 | GET/PUT `/profile` | shared Web/Bot | authorized User → profile |
 | GET `/profile/work-experiences` | shared Web/Bot | authorized User → profile → entries |
-| POST `/profile/work-experiences`; PUT/DELETE `/profile/work-experiences/{experience_id}` | Bot-only | authorized profile; entry must belong to it |
+| POST `/profile/work-experiences`; PATCH/PUT/DELETE `/profile/work-experiences/{experience_id}` | shared Web/Bot (PUT retained for Bot) | authorized profile; entry must belong to it |
 | GET `/profile/experience-facts` | shared Web/Bot | authorized profile |
 | POST `/profile/experience-facts`; PUT/DELETE `/profile/experience-facts/{fact_id}` | Bot-only | authorized profile; fact must belong to it |
 | POST `/profile/draft-from-cv` | Bot-only | authorized User; CV draft, no cross-user reads |

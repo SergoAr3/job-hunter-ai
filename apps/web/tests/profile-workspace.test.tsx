@@ -27,6 +27,7 @@ const profile: Profile = {
 const work = {
   items: [
     {
+      id: 4,
       company: "Acme",
       position: "Engineer",
       engagement_kind: "employment",
@@ -88,7 +89,7 @@ it("dismisses the import toast after 4.5 seconds under StrictMode without moving
   window.history.replaceState(null, "", "/");
 });
 
-it("renders a lightweight read page with nullable states and read-only experience", async () => {
+it("renders a lightweight read page with nullable states and experience read mode with actions", async () => {
   const fetcher = stubProfile();
   render(<ProfileWorkspace />);
   expect(
@@ -101,9 +102,7 @@ it("renders a lightweight read page with nullable states and read-only experienc
   expect(screen.getByText(/2500.25 USD в месяц/)).toBeInTheDocument();
   expect(await screen.findByText("Built an API")).toBeInTheDocument();
   expect(screen.getByText("Engineer")).toBeInTheDocument();
-  expect(
-    screen.queryByRole("button", { name: /Удалить/ }),
-  ).not.toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Удалить" })).toBeInTheDocument();
   expect(fetcher.mock.calls[0][0]).toBe("/api/profile");
   expect(fetcher).toHaveBeenCalledTimes(3);
   expect(

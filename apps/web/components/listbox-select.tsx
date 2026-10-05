@@ -13,6 +13,8 @@ export function ListboxSelect<T extends string>({
   describedBy,
   onChange,
   className = "",
+  editable = false,
+  maxLength,
 }: {
   id: string;
   labelId: string;
@@ -24,16 +26,20 @@ export function ListboxSelect<T extends string>({
   describedBy?: string;
   onChange: (value: T) => void;
   className?: string;
+  /** Free-form suggestions, used by the CV language-level editor. */
+  editable?: boolean;
+  maxLength?: number;
 }) {
-  const [open, setOpen] = useState(false);
+  const [isOpen, setOpen] = useState(false);
+  const open = isOpen && !disabled;
   const [activeIndex, setActiveIndex] = useState(0);
   const [above, setAbove] = useState(false);
   const [maxHeight, setMaxHeight] = useState(320);
   const rootRef = useRef<HTMLDivElement>(null);
-  const triggerRef = useRef<HTMLButtonElement>(null);
+  const triggerRef = useRef<HTMLButtonElement | HTMLInputElement>(null);
   const optionRefs = useRef<Array<HTMLButtonElement | null>>([]);
   const listboxId = useId();
-  const selectedIndex = options.indexOf(value);
+  const selectedIndex = Math.max(0, options.indexOf(value));
 
   useEffect(() => {
     if (!open) return;
@@ -41,7 +47,10 @@ export function ListboxSelect<T extends string>({
       if (!rootRef.current?.contains(event.target as Node)) setOpen(false);
     }
     document.addEventListener("pointerdown", closeOutside);
-    return () => document.removeEventListener("pointerdown", closeOutside);
+
+    return () => {
+      document.removeEventListener("pointerdown", closeOutside);
+    };
   }, [open]);
 
   useEffect(() => {
@@ -55,7 +64,8 @@ export function ListboxSelect<T extends string>({
     if (rect) {
       const below = window.innerHeight - rect.bottom - 8;
       const aboveSpace = rect.top - 8;
-      const opensAbove = below < 290 && aboveSpace > below;
+      const needed = Math.min(320, options.length * 44 + 12);
+      const opensAbove = below < needed && aboveSpace > below;
       setAbove(opensAbove);
       setMaxHeight(
         Math.max(80, Math.min(320, (opensAbove ? aboveSpace : below) - 8)),
@@ -66,16 +76,20 @@ export function ListboxSelect<T extends string>({
   }
 
   function choose(index: number) {
+    if (disabled || options[index] === undefined) return;
     onChange(options[index]);
     setOpen(false);
     triggerRef.current?.focus();
   }
 
-  function handleKeyDown(event: React.KeyboardEvent<HTMLButtonElement>) {
+  function handleKeyDown(
+    event: React.KeyboardEvent<HTMLButtonElement | HTMLInputElement>,
+  ) {
     if (disabled) return;
     switch (event.key) {
       case "Enter":
       case " ":
+        if (editable && event.key === " ") return;
         event.preventDefault();
         if (open) choose(activeIndex);
         else openAt(selectedIndex);
@@ -95,6 +109,7 @@ export function ListboxSelect<T extends string>({
       }
       case "Home":
       case "End":
+        if (editable && !open) return;
         event.preventDefault();
         if (!open) openAt(event.key === "Home" ? 0 : options.length - 1);
         else setActiveIndex(event.key === "Home" ? 0 : options.length - 1);
@@ -116,33 +131,68 @@ export function ListboxSelect<T extends string>({
     <div
       className={`status-select${className ? ` ${className}` : ""}`}
       ref={rootRef}
+      onBlur={(event) => {
+        if (!event.currentTarget.contains(event.relatedTarget)) setOpen(false);
+      }}
     >
-      <button
-        id={id}
-        ref={triggerRef}
-        type="button"
-        role="combobox"
-        aria-labelledby={`${labelId} ${listboxId}-value`}
-        aria-haspopup="listbox"
-        aria-expanded={open}
-        aria-controls={listboxId}
-        aria-activedescendant={
-          open ? `${listboxId}-option-${activeIndex}` : undefined
-        }
-        aria-invalid={invalid || undefined}
-        aria-describedby={describedBy}
-        className="status-select-trigger"
-        disabled={disabled}
-        onKeyDown={handleKeyDown}
-        onClick={(event) => {
-          if (!open) openAt(selectedIndex);
-          else if (event.detail > 0) setOpen(false);
-          else choose(activeIndex);
-        }}
-      >
-        <span id={`${listboxId}-value`}>{labels[value]}</span>
-        <span className="status-select-chevron" aria-hidden="true" />
-      </button>
+      {editable ? (
+        <input
+          id={id}
+          ref={(node) => {
+            triggerRef.current = node;
+          }}
+          role="combobox"
+          aria-labelledby={labelId}
+          aria-autocomplete="list"
+          aria-haspopup="listbox"
+          aria-expanded={open}
+          aria-controls={listboxId}
+          aria-activedescendant={
+            open ? `${listboxId}-option-${activeIndex}` : undefined
+          }
+          aria-invalid={invalid || undefined}
+          aria-describedby={describedBy}
+          className="status-select-trigger"
+          value={value}
+          maxLength={maxLength}
+          disabled={disabled}
+          onChange={(event) => {
+            onChange(event.target.value as T);
+            setOpen(false);
+          }}
+          onClick={() => openAt(selectedIndex)}
+          onKeyDown={handleKeyDown}
+        />
+      ) : (
+        <button
+          id={id}
+          ref={(node) => {
+            triggerRef.current = node;
+          }}
+          type="button"
+          role="combobox"
+          aria-labelledby={`${labelId} ${listboxId}-value`}
+          aria-haspopup="listbox"
+          aria-expanded={open}
+          aria-controls={listboxId}
+          aria-activedescendant={
+            open ? `${listboxId}-option-${activeIndex}` : undefined
+          }
+          aria-invalid={invalid || undefined}
+          aria-describedby={describedBy}
+          className="status-select-trigger"
+          disabled={disabled}
+          onKeyDown={handleKeyDown}
+          onClick={(event) => {
+            if (!open) openAt(selectedIndex);
+            else if (event.detail > 0) setOpen(false);
+            else choose(activeIndex);
+          }}
+        >
+          <span id={`${listboxId}-value`}>{labels[value]}</span>
+          <span className="status-select-chevron" aria-hidden="true" />
+        </button>
+      )}
       <div
         id={listboxId}
         role="listbox"
@@ -163,7 +213,7 @@ export function ListboxSelect<T extends string>({
             aria-selected={option === value}
             tabIndex={-1}
             className={`status-select-option${index === activeIndex ? " is-active" : ""}`}
-            onMouseDown={(event) => event.preventDefault()}
+            onPointerDown={(event) => event.preventDefault()}
             onClick={() => choose(index)}
           >
             <span>{labels[option]}</span>

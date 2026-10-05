@@ -1,4 +1,5 @@
 import "server-only";
+import { readWorkExperience } from "./work-experiences";
 import { getDomainIdentity } from "./auth";
 import { WebError } from "../errors";
 import {
@@ -9,7 +10,7 @@ import {
   salaryPeriods,
   type Profile,
   type ProfileInput,
-  type WorkExperience,
+  type WorkExperienceEntry,
   type ExperienceFact,
   type ProfileFieldErrors,
   type ProfileField,
@@ -150,44 +151,12 @@ export async function putProfile(payload: ProfileInput): Promise<{ ok: true }> {
 }
 
 export async function getWorkExperiences(): Promise<{
-  items: WorkExperience[];
+  items: WorkExperienceEntry[];
 }> {
   const value = await upstream("profile/work-experiences");
   if (!record(value) || !Array.isArray(value.items))
     throw new WebError("api_unavailable");
-  return {
-    items: value.items.map((item): WorkExperience => {
-      if (
-        !record(item) ||
-        !(item.company === null || typeof item.company === "string") ||
-        !(item.position === null || typeof item.position === "string") ||
-        !["employment", "internship", "freelance", "unknown"].includes(
-          String(item.engagement_kind),
-        ) ||
-        ![
-          item.start_year,
-          item.start_month,
-          item.end_year,
-          item.end_month,
-          item.duration_months,
-        ].every((part) => part === null || Number.isSafeInteger(part)) ||
-        !(item.is_current === null || typeof item.is_current === "boolean")
-      )
-        throw new WebError("api_unavailable");
-      return {
-        company: item.company as string | null,
-        position: item.position as string | null,
-        engagement_kind:
-          item.engagement_kind as WorkExperience["engagement_kind"],
-        start_year: item.start_year as number | null,
-        start_month: item.start_month as number | null,
-        end_year: item.end_year as number | null,
-        end_month: item.end_month as number | null,
-        is_current: item.is_current as boolean | null,
-        duration_months: item.duration_months as number | null,
-      };
-    }),
-  };
+  return { items: value.items.map(readWorkExperience) };
 }
 
 export async function getExperienceFacts(): Promise<{
