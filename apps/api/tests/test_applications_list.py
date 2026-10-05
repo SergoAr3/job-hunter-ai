@@ -47,7 +47,7 @@ def test_applications_page_is_newest_first_and_compact() -> None:
     payload = response.json()
     assert payload["has_next"] is True
     assert payload["items"][0]["app_id"] == newer
-    assert set(payload["items"][0]) == {"app_id", "status", "job_id", "created_at", "title", "company", "location", "workplace_type", "parsing_status", "ai_enrichment_status"}
+    assert set(payload["items"][0]) == {"app_id", "status", "job_id", "created_at", "title", "company", "location", "workplace_type", "parsing_status", "ai_enrichment_status", "next_action"}
     assert client.get(f"/users/{user_id}/applications?limit=1&offset=1").json()["items"][0]["app_id"] == older
 
 
@@ -148,7 +148,7 @@ def test_sort_precedes_pagination_and_remains_user_scoped() -> None:
     assert second.json()["has_next"] is False
     assert set(first.json()["items"][0]) == {
         "app_id", "status", "job_id", "created_at", "title", "company", "location",
-        "workplace_type", "parsing_status", "ai_enrichment_status",
+        "workplace_type", "parsing_status", "ai_enrichment_status", "next_action",
     }
 
 

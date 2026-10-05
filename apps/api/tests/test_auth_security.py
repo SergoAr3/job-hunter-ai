@@ -47,7 +47,7 @@ def test_real_session_cannot_be_overridden_by_obsolete_headers(existing_telegram
     assert plain.get(f"/users/{existing_telegram}/applications", headers=headers).status_code == 404
 
 
-def test_all_32_operations_reject_anonymous_and_obsolete_credential(existing_telegram):
+def test_all_33_operations_reject_anonymous_and_obsolete_credential(existing_telegram):
     import re
     local = TestClient(app, client=("127.0.0.1", 50000)); count = 0
     for route in app.routes:
@@ -58,7 +58,7 @@ def test_all_32_operations_reject_anonymous_and_obsolete_credential(existing_tel
             count += 1
             assert local.request(method,path).status_code == 401
             assert local.request(method,path,headers={OBSOLETE_HEADER:OBSOLETE_TOKEN}).status_code == 401
-    assert count == 32
+    assert count == 33
 
 @pytest.mark.parametrize("token", ["", " "*40, "short", "replace-with-a-secure-random-service-token", "identity-tests-server-only-service-token", "explicit-server-only-test-token-123456", "development-only-placeholder-token-123456", "a"*43])
 def test_production_rejects_unsafe_bot_secrets(token):

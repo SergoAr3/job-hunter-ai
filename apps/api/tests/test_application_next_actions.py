@@ -40,7 +40,7 @@ def test_lifecycle_and_unchanged_related_data():
     assert result["application"]["note"] == "Keep note"
     assert client.get(url + "/status-history").json() == history
     assert client.get(url + "/match").json() == match
-    assert "next_action" not in client.get(f"/users/{owner}/applications").json()["items"][0]
+    assert client.get(f"/users/{owner}/applications").json()["items"][0]["next_action"] is None
 
 
 @pytest.mark.parametrize("changes", [
@@ -97,7 +97,7 @@ def test_rollback_and_noop(monkeypatch, action, due_on):
         assert (application.next_action, application.next_action_due_on) == ("Old", date(2020, 1, 1))
 
 
-@pytest.mark.parametrize("action,due_on", [("Partial", None), (None, date(2026, 9, 12))])
+@pytest.mark.parametrize("action,due_on", [(None, date(2026, 9, 12))])
 def test_database_pair_constraint(action, due_on):
     owner = create_user(907)
     app_id, _ = create_application(owner)

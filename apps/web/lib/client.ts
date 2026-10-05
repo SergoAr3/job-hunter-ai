@@ -40,13 +40,15 @@ export async function webRequest<T>(
     if (url.startsWith("/api/auth/"))
       throw new WebError("auth_unavailable", 503);
     throw new WebError(
-      init?.method === "POST"
-        ? "ambiguous_save"
-        : init?.method === "PUT"
-          ? url === "/api/profile"
-            ? "ambiguous_profile"
-            : "ambiguous_status"
-          : "api_unavailable",
+      init?.method === "PATCH"
+        ? "ambiguous_application"
+        : init?.method === "POST"
+          ? "ambiguous_save"
+          : init?.method === "PUT"
+            ? url === "/api/profile"
+              ? "ambiguous_profile"
+              : "ambiguous_status"
+            : "api_unavailable",
     );
   }
 }

@@ -1394,8 +1394,9 @@ def _application_detail_content(
     suffix = f"\n\nСтатус: {STATUS_LABELS.get(str(status), 'Не указан')}"
     action = application.get("next_action") if isinstance(application, dict) else None
     due_on = application.get("next_action_due_on") if isinstance(application, dict) else None
-    if isinstance(action, str) and isinstance(due_on, str):
-        suffix += f"\n\n📅 Следующее действие:\n{_display_due_on(due_on)} — {action}"
+    if isinstance(action, str) and action:
+        action_text = f"{_display_due_on(due_on)} — {action}" if isinstance(due_on, str) else action
+        suffix += f"\n\n📅 Следующее действие:\n{action_text}"
     if note:
         suffix += f"\n\n📝 Заметка:\n{note}"
     # Count UTF-16 units conservatively, including astral emoji.
@@ -1827,9 +1828,12 @@ async def _next_action_operation(
         assert isinstance(application, dict)
         current, current_date = application.get("next_action"), application.get("next_action_due_on")
         text = "Что нужно сделать дальше?\n\nНапример: «Написать HR»"
-        if isinstance(current, str) and isinstance(current_date, str):
-            text = (f"📅 Текущее следующее действие:\n{_display_due_on(current_date)} — {current}\n\n"
-                    "Отправь новое действие.\n\n⚠️ Текущее действие и дата будут полностью заменены.")
+        if isinstance(current, str) and current:
+            current_text = f"{_display_due_on(current_date)} — {current}" if isinstance(current_date, str) else current
+            replacement = ("Текущее действие и дата будут полностью заменены."
+                           if isinstance(current_date, str) else "Текущее действие будет полностью заменено.")
+            text = (f"📅 Текущее следующее действие:\n{current_text}\n\n"
+                    f"Отправь новое действие.\n\n⚠️ {replacement}")
         token = secrets.token_hex(4)
         await state.set_state(ApplicationsStates.waiting_for_next_action)
         await state.update_data({APPLICATIONS_VIEW: "next_action_input", APPLICATIONS_NEXT_ACTION_TOKEN: token})

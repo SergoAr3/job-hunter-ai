@@ -79,6 +79,7 @@ export interface SaveResult extends ApplicationDetail {
 }
 export interface ApplicationListItem {
   app_id: number;
+  next_action?: string | null;
   status: string;
   created_at: string;
   title: string | null;

@@ -20,12 +20,17 @@ import {
 
 async function request(
   path: string,
-  body?: Identity | { status: ApplicationStatus },
-  method: "POST" | "PUT" = "POST",
+  body?: Identity | { status: ApplicationStatus } | ApplicationPatch,
+  method: "POST" | "PUT" | "PATCH" = "POST",
 ): Promise<unknown> {
   const { userId, baseUrl, headers } = await getDomainIdentity();
   const mutation = body ? method : "GET";
-  const ambiguous = method === "PUT" ? "ambiguous_status" : "ambiguous_save";
+  const ambiguous =
+    method === "PATCH"
+      ? "ambiguous_application"
+      : method === "PUT"
+        ? "ambiguous_status"
+        : "ambiguous_save";
   let response: Response;
   try {
     response = await fetch(`${baseUrl}/users/${userId}/${path}`, {
@@ -67,13 +72,17 @@ async function request(
         : body && response.status >= 500
           ? ambiguous
           : response.status === 422
-            ? method === "PUT"
-              ? "status_invalid"
-              : "invalid_request"
+            ? method === "PATCH"
+              ? "application_invalid"
+              : method === "PUT"
+                ? "status_invalid"
+                : "invalid_request"
             : body
-              ? method === "PUT"
-                ? "status_failed"
-                : "save_failed"
+              ? method === "PATCH"
+                ? "application_failed"
+                : method === "PUT"
+                  ? "status_failed"
+                  : "save_failed"
               : "api_unavailable",
       response.status,
     );
@@ -218,6 +227,39 @@ export async function setApplicationStatus(
     throw error;
   }
 }
+export interface ApplicationPatch {
+  note?: string | null;
+  next_action?: string | null;
+}
+
+export async function patchApplication(id: string, changes: ApplicationPatch) {
+  if (!/^[1-9]\d*$/.test(id) || !Number.isSafeInteger(Number(id)))
+    throw new WebError("APPLICATION_NOT_FOUND", 404);
+  try {
+    const detail = publicDetail(
+      (await request(
+        `applications/${id}`,
+        changes,
+        "PATCH",
+      )) as ApplicationDetail,
+    );
+    if (
+      detail.application.id !== Number(id) ||
+      ![
+        detail.application.note,
+        detail.application.next_action,
+        detail.application.next_action_due_on,
+      ].every((value) => value === null || typeof value === "string")
+    )
+      throw new WebError("ambiguous_application");
+    return detail;
+  } catch (error) {
+    if (!(error instanceof WebError) || error.code === "api_unavailable")
+      throw new WebError("ambiguous_application");
+    throw error;
+  }
+}
+
 export async function listApplications(
   state: ApplicationsState,
 ): Promise<ApplicationsPage> {
@@ -258,6 +300,9 @@ export async function listApplications(
         parsing_status,
         ai_enrichment_status,
       } = item;
+      const next_action = item.next_action ?? null;
+      if (typeof next_action !== "string" && next_action !== null)
+        throw new WebError("api_unavailable");
       return {
         app_id,
         status,
@@ -268,6 +313,7 @@ export async function listApplications(
         workplace_type,
         parsing_status,
         ai_enrichment_status,
+        next_action,
       };
     }),
   };

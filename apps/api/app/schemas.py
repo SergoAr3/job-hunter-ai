@@ -297,6 +297,22 @@ class JobOut(BaseModel):
     updated_at: datetime
 
 
+class ApplicationPatchIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    note: str | None = Field(default=None, strict=True, max_length=1000)
+    next_action: str | None = Field(default=None, strict=True, max_length=500)
+
+    @field_validator("note", "next_action", mode="before")
+    @classmethod
+    def normalize_text(cls, value: object) -> object:
+        if isinstance(value, str):
+            if "\u0000" in value:
+                raise ValueError("text must not contain NUL")
+            return value.strip() or None
+        return value
+
+
 class ApplicationNotePutIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -385,6 +401,7 @@ class ApplicationListItemOut(BaseModel):
     """Small application representation intended for the Telegram list."""
 
     app_id: int
+    next_action: str | None = None
     status: ApplicationStatus
     job_id: int
     created_at: datetime

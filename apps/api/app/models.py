@@ -355,8 +355,7 @@ class Application(Base):
             name="ck_applications_status",
         ),
         CheckConstraint(
-            "(next_action IS NULL AND next_action_due_on IS NULL) OR "
-            "(next_action IS NOT NULL AND next_action_due_on IS NOT NULL)",
+            "next_action_due_on IS NULL OR next_action IS NOT NULL",
             name="ck_applications_next_action_block",
         ),
     )

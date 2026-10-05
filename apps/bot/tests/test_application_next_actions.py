@@ -12,6 +12,7 @@ from app.applications import (
     APPLICATIONS_OFFSET, APPLICATIONS_FILTER_STATUS, APPLICATIONS_NEXT_ACTION_DRAFT,
     APPLICATIONS_NEXT_ACTION_TOKEN,
     APPLICATIONS_SORT,
+    _application_detail_content,
 )
 from test_application_notes import note_setup, text_update
 
@@ -60,6 +61,42 @@ def run(monkeypatch, scenario, initial=None):
             await state.clear()
             await ui.bot.session.close()
     asyncio.run(wrapped())
+
+
+@pytest.mark.parametrize("action,due_on", [("Call recruiter", "2026-10-10"), ("Call recruiter", None), (None, None)])
+def test_detail_renders_dated_undated_and_absent_action(action, due_on):
+    detail = {"application": {"status": "saved", "note": "Keep note", "next_action": action, "next_action_due_on": due_on},
+              "job": {"title": "Test vacancy", "company": "Test company", "source_url": "https://example.invalid/action"}}
+    text, markup = _application_detail_content(detail, 1, 0)
+    assert "Keep note" in text
+    assert ("📅 Следующее действие:" in text) == bool(action)
+    assert ("Call recruiter" in text) == bool(action)
+    assert ("10.10.2026 — Call recruiter" in text) == bool(due_on)
+    assert any(button.text == "🗑 Удалить следующее действие" for row in markup.inline_keyboard for button in row) == bool(action)
+
+
+@pytest.mark.parametrize("delete", [False, True])
+def test_undated_action_current_prompt_cancel_edit_and_delete(monkeypatch, delete):
+    async def scenario(ui, api, state):
+        await ui.click("📅 Следующее действие")
+        assert "Текущее следующее действие:\nUndated action" in ui.text
+        assert "Текущее действие будет полностью заменено." in ui.text
+        await ui.click("Отмена")
+        assert "Следующее действие:\nUndated action" in ui.text
+        assert api.action_puts == []
+        if delete:
+            await ui.click("🗑 Удалить следующее действие")
+            assert api.actions is None
+            assert "📅 Следующее действие:" not in ui.text
+        else:
+            await ui.click("📅 Следующее действие")
+            await text_update(ui, "Replacement")
+            await text_update(ui, "10.10.2026")
+            assert api.actions == ("Replacement", "2026-10-10")
+            assert "10.10.2026 — Replacement" in ui.text
+        assert api.note_puts == []
+        assert api.puts == []
+    run(monkeypatch, scenario, ("Undated action", None))
 
 
 def test_create_replace_delete_canonical_and_stale(monkeypatch):

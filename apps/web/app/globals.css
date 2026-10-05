@@ -2955,3 +2955,109 @@ summary {
     gap: 6px 10px;
   }
 }
+
+.application-notes-editor {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  padding: 18px 20px;
+}
+.application-note-section + .application-note-section {
+  border-top: 1px solid var(--border);
+  margin-top: 14px;
+  padding-top: 14px;
+}
+.application-note-section h2 {
+  margin: 0;
+}
+.application-note-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+  padding: 4px 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  text-align: left;
+  font-size: 14px;
+  font-weight: 650;
+}
+.application-note-toggle:hover:not(:disabled) {
+  background: transparent;
+  color: var(--accent);
+}
+.application-note-toggle[aria-expanded="true"] .application-note-chevron {
+  transform: rotate(180deg);
+}
+.application-note-chevron {
+  flex: 0 0 auto;
+  color: var(--muted);
+}
+.application-note-summary {
+  margin: 4px 0 0;
+  color: var(--muted);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.application-note-excerpt {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+}
+.application-note-section form {
+  margin-top: 10px;
+}
+.application-notes-editor .muted {
+  margin: 6px 0 0;
+}
+.application-notes-editor textarea {
+  display: block;
+  width: 100%;
+  min-width: 0;
+  resize: vertical;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--ink);
+  font: inherit;
+  font-size: 14px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+.application-notes-editor textarea:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.application-notes-editor textarea[aria-invalid="true"] {
+  border-color: #bd3446;
+}
+.application-notes-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 14px;
+}
+.application-row-next-action {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  font-size: 12px;
+  color: var(--muted);
+  margin-top: 5px;
+}
+@media (max-width: 600px) {
+  .application-notes-editor {
+    padding: 16px 14px;
+  }
+  .application-notes-editor textarea {
+    font-size: 16px;
+  }
+  .application-notes-actions > button {
+    flex: 1 1 140px;
+  }
+}

@@ -32,6 +32,7 @@ from app.schemas import (
     ApplicationListItemOut,
     ApplicationOut,
     ApplicationNotePutIn,
+    ApplicationPatchIn,
     ApplicationNextActionPutIn,
     ApplicationStatusPutIn,
     ApplicationStatusHistoryItemOut,
@@ -68,6 +69,7 @@ from app.services.applications import (
     save_application_for_user,
     set_application_status,
     set_application_note,
+    patch_application,
     set_application_next_action,
 )
 from app.services.application_learning import build_application_learning_summary
@@ -158,6 +160,13 @@ async def auth_error_response(request: Request, error: AuthError):
 
 @app.exception_handler(RequestValidationError)
 async def safe_auth_validation(request: Request, error: RequestValidationError):
+    if (request.method == "PATCH" and
+            getattr(request.scope.get("route"), "path", None) ==
+            "/users/{user_id}/applications/{application_id}"):
+        return JSONResponse(
+            status_code=422, content={"detail": {"code": "APPLICATION_INVALID"}},
+            headers={"Cache-Control": "no-store"},
+        )
     if request.url.path.startswith("/auth/"):
         # FastAPI's default validation response includes rejected input.
         return JSONResponse(status_code=422, content={"detail": [
@@ -474,6 +483,7 @@ def read_applications(
         items=[
             ApplicationListItemOut(
                 app_id=application.id,
+                next_action=application.next_action,
                 status=ApplicationStatus(application.status),
                 job_id=job.id,
                 created_at=application.created_at,
@@ -552,6 +562,20 @@ def read_application(
     job = session.get(Job, application.job_id)
     if job is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail={"code": "APPLICATION_NOT_FOUND"})
+    return ApplicationDetailOut(
+        application=ApplicationOut.model_validate(application), job=JobOut.model_validate(job)
+    )
+
+
+@app.patch("/users/{user_id}/applications/{application_id}", response_model=ApplicationDetailOut)
+def update_application(
+    user_id: int, application_id: int, payload: ApplicationPatchIn,
+    session: Session = Depends(get_session),
+) -> ApplicationDetailOut:
+    result = patch_application(session, user_id, application_id, payload)
+    if result is None:
+        raise HTTPException(status_code=404, detail={"code": "APPLICATION_NOT_FOUND"})
+    application, job = result
     return ApplicationDetailOut(
         application=ApplicationOut.model_validate(application), job=JobOut.model_validate(job)
     )

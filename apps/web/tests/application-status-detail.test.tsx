@@ -1,5 +1,12 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import {
+  act,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import { ApplicationStatusDetail } from "../components/application-status-detail";
 import { saved } from "./fixtures";
 
@@ -164,3 +171,61 @@ it("shows neutral not-found and safe 422 feedback", async () => {
     await screen.findByRole("heading", { name: "Вакансия не найдена" }),
   ).toBeInTheDocument();
 });
+
+it.each([
+  { field: "note", value: "Fresh note", due: "2026-10-01" },
+  { field: "next_action", value: "Fresh action", due: "2026-10-01" },
+  { field: "next_action", value: "", due: null },
+] as const)(
+  "keeps confirmed $field=$value and date when an older status GET completes",
+  async ({ field, value, due }) => {
+    let finishGet!: (response: Response) => void;
+    const pendingGet = new Promise<Response>((resolve) => {
+      finishGet = resolve;
+    });
+    const fetcher = vi.fn().mockImplementation((_url, init) => {
+      if (init?.method === "PUT")
+        return Promise.resolve(response({ ok: true }));
+      if (init?.method === "PATCH")
+        return Promise.resolve(
+          response({
+            ...saved,
+            application: {
+              ...saved.application,
+              status: "applied",
+              [field]: value || null,
+              next_action_due_on: due,
+            },
+          }),
+        );
+      return pendingGet;
+    });
+    vi.stubGlobal("fetch", fetcher);
+    render(<ApplicationStatusDetail detail={saved} />);
+    chooseStatus("Отклик отправлен");
+    fireEvent.click(screen.getByRole("button", { name: "Сохранить статус" }));
+    await waitFor(() => expect(fetcher).toHaveBeenCalledTimes(2));
+    const name = field === "note" ? "Заметки" : "Следующее действие";
+    const region = within(screen.getByRole("region", { name }));
+    fireEvent.click(region.getByRole("button", { name }));
+    fireEvent.change(region.getByRole("textbox", { name }), {
+      target: { value },
+    });
+    fireEvent.click(region.getByRole("button", { name: "Сохранить" }));
+    const summary = value || "Не задано";
+    await region.findByText(summary, {
+      selector: "p.application-note-summary",
+    });
+    await act(async () => finishGet(response(detail("applied"))));
+    expect(
+      region.getByText(summary, { selector: "p.application-note-summary" }),
+    ).toBeInTheDocument();
+    expect(statusControl()).toHaveTextContent("Отклик отправлен");
+    expect(
+      screen.getByRole("heading", { name: saved.job.title! }),
+    ).toBeInTheDocument();
+    if (due)
+      expect(screen.getByText(/Существующая дата/)).toHaveTextContent(due);
+    else expect(screen.queryByText(/Существующая дата/)).toBeNull();
+  },
+);
