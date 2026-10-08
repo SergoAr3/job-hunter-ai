@@ -91,6 +91,44 @@ button:disabled {
   text-decoration: none;
   text-align: center;
 }
+/* Secondary actions mutate local UI; navigation keeps its link styles. */
+button.text-action {
+  -webkit-appearance: none;
+  appearance: none;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--accent);
+  box-shadow: none;
+  outline: none;
+  padding: 8px 10px;
+  min-height: 44px;
+  max-width: 100%;
+  text-align: left;
+  text-decoration: none;
+  white-space: normal;
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
+}
+button.text-action:hover:not(:disabled) {
+  color: var(--accent-hover);
+  background: var(--accent-subtle);
+}
+button.text-action:active:not(:disabled) {
+  color: var(--accent-hover);
+  background: rgb(91 92 240 / 16%);
+}
+button.text-action:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+button.text-action:disabled {
+  color: var(--muted);
+  background: transparent;
+  cursor: not-allowed;
+}
+
 .app-shell {
   display: grid;
   grid-template-columns: minmax(0, 208px) minmax(0, 1fr);
@@ -3031,7 +3069,8 @@ summary {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
-.application-notes-editor textarea[aria-invalid="true"] {
+.application-notes-editor textarea[aria-invalid="true"],
+.reminder-inputs input[aria-invalid="true"] {
   border-color: #bd3446;
 }
 .application-notes-actions {
@@ -3039,6 +3078,108 @@ summary {
   flex-wrap: wrap;
   gap: 10px;
   margin-top: 14px;
+}
+
+.application-notes-editor .reminder-delivery {
+  display: block;
+}
+
+.reminder-inputs {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 12px;
+  max-width: 480px;
+}
+.reminder-inputs input {
+  width: 100%;
+  min-width: 0;
+  min-height: 44px;
+  padding: 8px 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--ink);
+  font: inherit;
+}
+.reminder-inputs input:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.action-suggestions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 4px 0 12px;
+}
+.action-suggestions button {
+  white-space: normal;
+  text-align: left;
+  padding: 8px 10px;
+  min-height: 40px;
+  background: var(--accent-subtle);
+  color: var(--accent-hover);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 12px;
+}
+.reminder-summary {
+  display: block;
+  font-size: 12px;
+  margin-top: 8px;
+  overflow-wrap: anywhere;
+}
+.reminder-summary > span:not(.muted) {
+  display: block;
+}
+.reminder-summary > .reminder-delivery {
+  display: block;
+  margin-top: 2px;
+}
+.reminder-summary > .status-error,
+.reminder-summary > .reminder-attention {
+  display: block;
+  margin-top: 3px;
+}
+.reminder-attention {
+  color: var(--accent);
+}
+.dashboard-follow-ups {
+  margin-bottom: 24px;
+}
+.follow-up-groups {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 20px;
+  margin-top: 16px;
+}
+.follow-up-groups h3 {
+  font-size: 14px;
+  margin: 0 0 10px;
+}
+.follow-up-groups ul {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+.follow-up-groups li {
+  border-top: 1px solid var(--border);
+  padding: 12px 0;
+  overflow-wrap: anywhere;
+}
+.follow-up-groups a > span {
+  display: block;
+  font-size: 12px;
+  margin-top: 4px;
+}
+@media (max-width: 768px) {
+  .follow-up-groups {
+    grid-template-columns: 1fr;
+  }
+}
+@media (max-width: 420px) {
+  .reminder-inputs {
+    grid-template-columns: 1fr;
+  }
 }
 .application-row-next-action {
   display: -webkit-box;

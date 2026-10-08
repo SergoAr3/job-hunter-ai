@@ -9,3 +9,4 @@ SQLAlchemy==2.0.52
 starlette==0.47.2
 uvicorn[standard]==0.34.0
 argon2-cffi==25.1.0
+httpx==0.28.1

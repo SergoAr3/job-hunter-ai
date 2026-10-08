@@ -24,7 +24,7 @@ make dev
 ```
 
 Команда поднимает PostgreSQL, ждёт его готовности, применяет Alembic migrations,
-затем запускает FastAPI, Telegram Bot и Next.js Web в dev mode. Web использует
+затем запускает FastAPI, Telegram Bot, Next.js Web и отдельный Reminder worker. Web использует
 `npm run dev -- -p 3100`, поэтому изменения в `.tsx`, `.ts` и CSS применяются
 через Fast Refresh. Зависимости Web автоматически не устанавливаются. Если
 `apps/web/node_modules` отсутствует, runner завершится с инструкцией запустить
@@ -39,8 +39,15 @@ make dev
 - API health: <http://127.0.0.1:8000/health>
 - API Swagger: <http://127.0.0.1:8000/docs>
 
-Нажмите `Ctrl+C`, чтобы завершить API, Bot и Web. Для остановки PostgreSQL
+Нажмите `Ctrl+C`, чтобы завершить API, Bot, Web и Reminder worker. Для остановки PostgreSQL
 отдельно выполните `docker compose down`.
+
+Reminder worker использует существующие `DATABASE_URL` и `TELEGRAM_BOT_TOKEN`,
+trusted local Web origin и PostgreSQL. Он не запускает Bot polling и не reload-ится
+на code changes: restart во время send создаёт неопределённый результат доставки.
+Для worker changes завершите единственный dev runner и запустите его снова;
+не поднимайте второй worker/stack. Политика delivery, retry и diagnostics:
+[Follow-ups / Reminders v1](docs/follow-up-reminders-v1.md).
 
 ## Auth и локальный Web после Slice 6
 

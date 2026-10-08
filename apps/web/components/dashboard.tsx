@@ -1,3 +1,4 @@
+import { DashboardFollowUps } from "./dashboard-follow-ups";
 import Link from "next/link";
 import { applicationStatuses } from "../lib/applications";
 import { statusLabels } from "../lib/application-presentation";
@@ -104,10 +105,12 @@ export function Dashboard({
   summary,
   recent,
   profile,
+  telegramLinked,
 }: {
   summary: ApplicationsSummary;
   recent: ApplicationListItem[];
   profile: Profile | null;
+  telegramLinked?: boolean;
 }) {
   const maximum = Math.max(
     1,
@@ -129,6 +132,7 @@ export function Dashboard({
           </Link>
         </div>
       </header>
+      <DashboardFollowUps telegramLinked={telegramLinked} />
       {summary.total === 0 ? (
         <div className="dashboard-columns">
           <section className="dashboard-card dashboard-empty">

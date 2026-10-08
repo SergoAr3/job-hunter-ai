@@ -230,7 +230,7 @@ it("delete requires inline confirmation, cancel is read only, failure retains co
     "work-delete",
   );
   expect(screen.getByRole("button", { name: "Отмена" })).toHaveClass(
-    "work-text-action",
+    "text-action",
   );
   expect(fetcher).not.toHaveBeenCalled();
   fireEvent.click(screen.getByRole("button", { name: "Отмена" }));

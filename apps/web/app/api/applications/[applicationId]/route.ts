@@ -43,7 +43,13 @@ export async function PATCH(
       typeof value !== "object" ||
       Array.isArray(value) ||
       Object.keys(value).some(
-        (key) => !["note", "next_action"].includes(key),
+        (key) =>
+          ![
+            "note",
+            "next_action",
+            "next_action_remind_at",
+            "next_action_timezone",
+          ].includes(key),
       ) ||
       Object.values(value).some(
         (field) => field !== null && typeof field !== "string",

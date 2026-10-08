@@ -112,6 +112,17 @@ run_web() (
     exec npm run dev -- -p 3100
 )
 
+run_reminder_worker() (
+    cd apps/api
+    source .venv/bin/activate
+    set -a
+    source ../../.env
+    set +a
+    export APP_ENV=development
+    export WEB_PUBLIC_ORIGIN=http://127.0.0.1:3100
+    exec python -m app.workers.reminders
+)
+
 wait_for_api() {
     local attempt
     for attempt in {1..30}; do
@@ -147,7 +158,7 @@ cleanup() {
     trap - EXIT INT TERM
 
     dev_log "Shutting down..."
-    stop_dev_process_groups "$api_pid" "$bot_pid" "$web_pid"
+    stop_dev_process_groups "$api_pid" "$bot_pid" "$web_pid" "$reminder_pid"
 
     exit "$exit_status"
 }
@@ -173,6 +184,7 @@ dev_log "Migrations complete"
 api_pid=""
 bot_pid=""
 web_pid=""
+reminder_pid=""
 # Give each managed background job its own process group. $! is its PGID;
 # killing only the shell wrapper would leave service grandchildren running.
 set -m
@@ -212,12 +224,29 @@ if ! wait_for_web; then
     exit 1
 fi
 
+dev_log "Starting reminder worker..."
+begin_dev_service_start
+run_reminder_worker > >(prefix_logs REMINDERS) 2>&1 &
+reminder_pid=$!
+finish_dev_service_start
+sleep 1
+if ! kill -0 "$reminder_pid" 2>/dev/null; then
+    wait "$reminder_pid" || true
+    dev_error "Reminder worker exited during startup (check for an existing worker)"
+    exit 1
+fi
+
 dev_log "Application is running"
 dev_log "API: http://127.0.0.1:8000"
 dev_log "Swagger: http://127.0.0.1:8000/docs"
 dev_log "Web: http://127.0.0.1:3100/login"
 
 while true; do
+    if ! kill -0 "$reminder_pid" 2>/dev/null; then
+        wait "$reminder_pid" || true
+        dev_error "Reminder worker exited unexpectedly"
+        exit 1
+    fi
     if ! kill -0 "$api_pid" 2>/dev/null; then
         wait "$api_pid" || true
         dev_error "API exited unexpectedly"

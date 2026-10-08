@@ -15,8 +15,10 @@ import { StatusSelect } from "./status-select";
 
 export function ApplicationStatusDetail({
   detail: initial,
+  telegramLinked,
 }: {
   detail: ApplicationDetail;
+  telegramLinked?: boolean;
 }) {
   const [detail, setDetail] = useState(initial);
   const [selected, setSelected] = useState(
@@ -116,6 +118,7 @@ export function ApplicationStatusDetail({
         application: {
           ...current.application,
           status: fresh.application.status,
+          next_action_suggestions: fresh.application.next_action_suggestions,
         },
       }));
       setSelected(fresh.application.status as ApplicationStatus);
@@ -216,6 +219,7 @@ export function ApplicationStatusDetail({
       notesControl={
         <ApplicationNotesEditor
           application={detail.application}
+          telegramLinked={telegramLinked}
           onSaved={(application, field) =>
             setDetail((current) => ({
               ...current,
@@ -223,7 +227,16 @@ export function ApplicationStatusDetail({
                 ...current.application,
                 [field]: application[field],
                 ...(field === "next_action"
-                  ? { next_action_due_on: application.next_action_due_on }
+                  ? {
+                      next_action_due_on: application.next_action_due_on,
+                      next_action_remind_at: application.next_action_remind_at,
+                      next_action_timezone: application.next_action_timezone,
+                      reminder_delivery_state:
+                        application.reminder_delivery_state,
+                      reminder_sent_at: application.reminder_sent_at,
+                      reminder_failure_reason:
+                        application.reminder_failure_reason,
+                    }
                   : {}),
               },
             }))

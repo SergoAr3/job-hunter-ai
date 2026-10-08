@@ -5,11 +5,12 @@ from urllib.parse import urlsplit, urlunsplit
 
 from sqlalchemy import case, func, or_, select
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, contains_eager
 
 from app.models import (
     AIEnrichmentStatus,
     Application,
+    ApplicationReminder,
     ApplicationMatchSnapshot,
     ApplicationStatus,
     ApplicationStatusHistory,
@@ -454,6 +455,8 @@ def list_applications_for_user(
     query = (
         select(Application, Job)
         .join(Job, Job.id == Application.job_id)
+        .outerjoin(ApplicationReminder, ApplicationReminder.application_id == Application.id)
+        .options(contains_eager(Application.reminder))
         .where(Application.user_id == user_id)
     )
     if status is not None:
@@ -476,7 +479,10 @@ def list_applications_for_user(
             Application.id.asc(),
         ),
         ApplicationSort.NEXT_ACTION: (
-            case((Application.next_action_due_on.is_(None), 1), else_=0).asc(),
+            case((ApplicationReminder.application_id.is_not(None), 0),
+                 (Application.next_action_due_on.is_not(None), 1),
+                 (Application.next_action.is_not(None), 2), else_=3).asc(),
+            ApplicationReminder.remind_at.asc(),
             Application.next_action_due_on.asc(),
             Application.created_at.desc(),
             Application.id.desc(),
@@ -497,46 +503,37 @@ def current_utc_date() -> date:
 
 
 def list_application_follow_ups(
-    session: Session,
-    user_id: int,
-    *,
-    limit: int,
-    offset: int,
-    today_utc: date | None = None,
+    session: Session, user_id: int, *, limit: int, offset: int,
+    today_utc: date | None = None, timezone_name: str = "UTC", bucket: str = "all", now: datetime | None = None,
 ) -> list[tuple[Application, Job, FollowUpDueState]]:
-    """Return user-authored next actions grouped by their UTC calendar due state."""
-    today = today_utc or current_utc_date()
+    from datetime import time, timedelta
+    from app.services.reminders import zone, utc_now
+    tz = zone(timezone_name)
+    now = now or utc_now()
+    today = today_utc or (current_utc_date() if timezone_name == "UTC" else now.astimezone(tz).date())
+    tomorrow = datetime.combine(today + timedelta(days=1), time.min, tzinfo=tz).astimezone(timezone.utc)
+    exact = ApplicationReminder.application_id.is_not(None)
     due_state = case(
+        (exact & (ApplicationReminder.remind_at <= now), FollowUpDueState.OVERDUE.value),
+        (exact & (ApplicationReminder.remind_at < tomorrow), FollowUpDueState.TODAY.value),
+        (exact, FollowUpDueState.UPCOMING.value),
         (Application.next_action_due_on < today, FollowUpDueState.OVERDUE.value),
         (Application.next_action_due_on == today, FollowUpDueState.TODAY.value),
         else_=FollowUpDueState.UPCOMING.value,
     )
-    bucket = case(
-        (Application.next_action_due_on < today, 0),
-        (Application.next_action_due_on == today, 1),
-        else_=2,
-    )
-    rows = session.execute(
-        select(Application, Job, due_state.label("due_state"))
+    rank = case((due_state == "overdue", 0), (due_state == "today", 1), else_=2)
+    query = (select(Application, Job, due_state.label("due_state"))
         .join(Job, Job.id == Application.job_id)
-        .where(
-            Application.user_id == user_id,
-            Application.next_action.is_not(None),
-            Application.next_action_due_on.is_not(None),
-        )
-        .order_by(
-            bucket.asc(),
-            Application.next_action_due_on.asc(),
-            Application.created_at.desc(),
-            Application.id.desc(),
-        )
-        .offset(offset)
-        .limit(limit + 1)
-    ).all()
-    return [
-        (application, job, FollowUpDueState(state))
-        for application, job, state in rows
-    ]
+        .outerjoin(ApplicationReminder, ApplicationReminder.application_id == Application.id)
+        .options(contains_eager(Application.reminder))
+        .where(Application.user_id == user_id, Application.next_action.is_not(None),
+               or_(exact, Application.next_action_due_on.is_not(None))))
+    if bucket != "all":
+        query = query.where(due_state == bucket)
+    rows = session.execute(query.order_by(rank, ApplicationReminder.remind_at.asc(),
+        Application.next_action_due_on.asc(), Application.created_at.desc(), Application.id.desc())
+        .offset(offset).limit(limit + 1)).all()
+    return [(application, job, FollowUpDueState(state)) for application, job, state in rows]
 
 
 def patch_application(
@@ -548,6 +545,7 @@ def patch_application(
             select(Application)
             .where(Application.id == application_id, Application.user_id == user_id)
             .with_for_update()
+            .execution_options(populate_existing=True)
         )
         if application is None:
             return None
@@ -557,13 +555,14 @@ def patch_application(
         changes = payload.model_dump(exclude_unset=True)
         changed = False
         for field, value in changes.items():
+            if field not in ("note", "next_action"):
+                continue
             if getattr(application, field) != value:
                 setattr(application, field, value)
                 changed = True
-        if "next_action" in changes and changes["next_action"] is None:
-            if application.next_action_due_on is not None:
-                application.next_action_due_on = None
-                changed = True
+        from app.services.reminders import apply_schedule
+        if any(key != "note" for key in changes):
+            changed = apply_schedule(session, application, changes) or changed
         if changed:
             session.commit()
             session.refresh(application)
@@ -598,15 +597,22 @@ def set_application_next_action(
     action: str | None, due_on: date | None,
 ) -> tuple[Application, Job] | None:
     try:
-        application = get_application_for_user(session, user_id, application_id)
+        application = session.scalar(select(Application).where(Application.id == application_id,
+            Application.user_id == user_id).with_for_update().execution_options(populate_existing=True))
         if application is None:
             return None
         job = session.get(Job, application.job_id)
         if job is None:
             return None
+        from app.services.reminders import ReminderError, apply_schedule
+        reminder = session.scalar(select(ApplicationReminder).where(ApplicationReminder.application_id == application_id).with_for_update())
+        if reminder is not None and action is not None:
+            raise ReminderError("REMINDER_LEGACY_CONFLICT", 409)
         if (application.next_action, application.next_action_due_on) != (action, due_on):
             application.next_action = action
             application.next_action_due_on = due_on
+            if action is None:
+                apply_schedule(session, application, {"next_action": None})
             session.commit()
             session.refresh(application)
         return application, job

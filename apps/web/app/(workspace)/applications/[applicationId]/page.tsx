@@ -17,8 +17,10 @@ export default async function Page({
   searchParams: Promise<{ from?: string | string[] }>;
 }) {
   const { applicationId } = await params;
-  if (!(await pageAccess(`/applications/${encodeURIComponent(applicationId)}`)))
-    return <AuthUnavailable />;
+  const identity = await pageAccess(
+    `/applications/${encodeURIComponent(applicationId)}`,
+  );
+  if (!identity) return <AuthUnavailable />;
   const backUrl = safeApplicationsReturn((await searchParams).from);
   let detail;
   try {
@@ -43,7 +45,10 @@ export default async function Page({
       <Link className="back-link" href={backUrl}>
         ← К моим вакансиям
       </Link>
-      <ApplicationStatusDetail detail={detail} />
+      <ApplicationStatusDetail
+        detail={detail}
+        telegramLinked={identity.user?.telegram_linked}
+      />
     </>
   );
 }

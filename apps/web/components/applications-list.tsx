@@ -1,4 +1,5 @@
 "use client";
+import { ReminderSummary } from "./reminder-summary";
 import { ListboxSelect } from "./listbox-select";
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
@@ -46,7 +47,11 @@ function savedDate(value: string) {
   return Number.isNaN(date.getTime()) ? null : date.toLocaleDateString("ru-RU");
 }
 
-export function ApplicationsList() {
+export function ApplicationsList({
+  telegramLinked,
+}: {
+  telegramLinked?: boolean;
+}) {
   const router = useRouter();
   const searchParams = useSearchParams();
   const rollbackRef = useRef<EmptyPageRollback | null>(null);
@@ -77,6 +82,7 @@ export function ApplicationsList() {
       state={state}
       currentUrl={currentUrl}
       rollbackRef={rollbackRef}
+      telegramLinked={telegramLinked}
     />
   );
 }
@@ -85,10 +91,12 @@ function ApplicationsContent({
   state,
   currentUrl,
   rollbackRef,
+  telegramLinked,
 }: {
   state: ApplicationsState;
   currentUrl: string;
   rollbackRef: { current: EmptyPageRollback | null };
+  telegramLinked?: boolean;
 }) {
   const router = useRouter();
   const { q, status, sort, offset } = state;
@@ -289,6 +297,11 @@ function ApplicationsContent({
                           Следующее: {item.next_action}
                         </span>
                       )}
+                      <ReminderSummary
+                        telegramLinked={telegramLinked}
+                        value={item}
+                        legacy={item.next_action_due_on}
+                      />
                     </span>
                     <span className="application-row-meta">
                       {location && (

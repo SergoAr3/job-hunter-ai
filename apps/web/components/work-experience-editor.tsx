@@ -453,7 +453,7 @@ export function WorkExperienceList({
                       </button>
                       <button
                         type="button"
-                        className="work-text-action"
+                        className="text-action"
                         disabled={pending}
                         onClick={() => {
                           setDeleting(null);
@@ -469,7 +469,7 @@ export function WorkExperienceList({
                     <button
                       type="button"
                       aria-label="Редактировать опыт"
-                      className="work-text-action"
+                      className="text-action"
                       ref={(node) => {
                         if (node) buttons.current.set(entry.id, node);
                       }}

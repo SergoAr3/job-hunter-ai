@@ -2,18 +2,28 @@
 import { useEffect, useRef, useState } from "react";
 import type { ApplicationDetail } from "../lib/contracts";
 import { webRequest } from "../lib/client";
+import { localParts, reminderInput } from "../lib/reminder-time";
+import { ReminderSummary, ReminderDeliveryStatus } from "./reminder-summary";
+import {
+  useBrowserTimezone,
+  useAvailableTimezones,
+} from "../lib/browser-timezone";
+import { ListboxSelect } from "./listbox-select";
 import { errorMessage, WebError } from "../lib/errors";
 
 type Application = ApplicationDetail["application"];
 type Field = "note" | "next_action";
+type ErrorOwner = "action" | "date" | "time" | "reminder" | "zone" | "form";
 type Saved = (application: Application, field: Field) => void;
 
 export function ApplicationNotesEditor({
   application,
   onSaved,
+  telegramLinked,
 }: {
   application: Application;
   onSaved: Saved;
+  telegramLinked?: boolean;
 }) {
   return (
     <div className="crm-notes application-notes-editor">
@@ -24,6 +34,7 @@ export function ApplicationNotesEditor({
       />
       <ApplicationFieldEditor
         field="next_action"
+        telegramLinked={telegramLinked}
         application={application}
         onSaved={onSaved}
       />
@@ -35,10 +46,12 @@ function ApplicationFieldEditor({
   field,
   application,
   onSaved,
+  telegramLinked,
 }: {
   field: Field;
   application: Application;
   onSaved: Saved;
+  telegramLinked?: boolean;
 }) {
   const title = field === "note" ? "Заметки" : "Следующее действие";
   const limit = field === "note" ? 1000 : 500;
@@ -49,12 +62,66 @@ function ApplicationFieldEditor({
   const [busy, setBusy] = useState(false);
   const [uncertain, setUncertain] = useState(false);
   const [error, setError] = useState("");
+  const [errorOwner, setErrorOwner] = useState<ErrorOwner>("form");
+  const actionInvalid = !!error && errorOwner === "action";
+  const reminderError =
+    !!error && ["date", "time", "reminder", "zone"].includes(errorOwner);
   const [feedback, setFeedback] = useState("");
   const [previousApplication, setPreviousApplication] = useState(application);
   const locked = useRef(false);
   const mounted = useRef(true);
   const header = useRef<HTMLButtonElement>(null);
-  const dirty = value !== (confirmed[field] ?? "");
+  const dateInput = useRef<HTMLInputElement>(null);
+  const focusDateAfterReveal = useRef(false);
+  const initialZone = application.next_action_timezone || "";
+  const initialParts =
+    application.next_action_remind_at && initialZone
+      ? localParts(application.next_action_remind_at, initialZone)
+      : { date: "", time: "" };
+  const [date, setDate] = useState(initialParts.date);
+  const [time, setTime] = useState(initialParts.time);
+  const [reminderRevealed, setReminderRevealed] = useState(
+    !!application.next_action_remind_at,
+  );
+  const reminderVisible = reminderRevealed || !!confirmed.next_action_remind_at;
+  useEffect(() => {
+    if (reminderVisible && focusDateAfterReveal.current) {
+      focusDateAfterReveal.current = false;
+      dateInput.current?.focus();
+    }
+  }, [reminderVisible]);
+  const detectedZone = useBrowserTimezone();
+  const [selectedZone, setZone] = useState(initialZone);
+  const zone = selectedZone || detectedZone;
+  const zones = useAvailableTimezones();
+  const intended = useRef<Record<string, string | null> | null>(null);
+  const savedParts =
+    confirmed.next_action_remind_at && confirmed.next_action_timezone
+      ? localParts(
+          confirmed.next_action_remind_at,
+          confirmed.next_action_timezone,
+        )
+      : { date: "", time: "" };
+  const reminderDirty =
+    field === "next_action" &&
+    (date !== savedParts.date ||
+      time !== savedParts.time ||
+      (!!(date || time) &&
+        !!confirmed.next_action_timezone &&
+        zone !== confirmed.next_action_timezone));
+  const dirty = value !== (confirmed[field] ?? "") || reminderDirty;
+
+  function resetReminder(fresh: Application) {
+    const name = fresh.next_action_timezone || zone;
+    const parts =
+      fresh.next_action_remind_at && name
+        ? localParts(fresh.next_action_remind_at, name)
+        : { date: "", time: "" };
+    setReminderRevealed(!!fresh.next_action_remind_at);
+    setDate(parts.date);
+    setTime(parts.time);
+    setZone(name);
+  }
 
   useEffect(() => {
     mounted.current = true;
@@ -72,17 +139,26 @@ function ApplicationFieldEditor({
   if (
     previousApplication[field] !== application[field] ||
     (field === "next_action" &&
-      previousApplication.next_action_due_on !== application.next_action_due_on)
+      (previousApplication.next_action_due_on !==
+        application.next_action_due_on ||
+        previousApplication.next_action_remind_at !==
+          application.next_action_remind_at ||
+        previousApplication.reminder_delivery_state !==
+          application.reminder_delivery_state ||
+        previousApplication.next_action_timezone !==
+          application.next_action_timezone))
   ) {
     setPreviousApplication(application);
     if (!dirty && !busy && !uncertain) {
       setConfirmed(application);
       setValue(application[field] ?? "");
+      if (field === "next_action") resetReminder(application);
     }
   }
 
   function accept(fresh: Application) {
     setConfirmed(fresh);
+    if (field === "next_action") resetReminder(fresh);
     setValue(fresh[field] ?? "");
     setUncertain(false);
     setOpen(false);
@@ -102,14 +178,73 @@ function ApplicationFieldEditor({
       throw new WebError("ambiguous_application");
   }
 
-  async function save(event: React.FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    if (locked.current || uncertain || !dirty) return;
+  function fail(message: string, owner: ErrorOwner) {
+    setError(message);
+    setErrorOwner(owner);
+    setOpen(true);
+  }
+
+  function failureOwner(failure: unknown): ErrorOwner {
+    if (failure instanceof WebError) {
+      if (
+        failure.code === "REMINDER_ACTION_REQUIRED" ||
+        failure.code === "application_invalid"
+      )
+        return "action";
+      if (failure.code === "REMINDER_TIMEZONE_INVALID") return "zone";
+      if (failure.code.startsWith("REMINDER_")) return "reminder";
+    }
+    return "form";
+  }
+
+  async function save(event?: React.FormEvent<HTMLFormElement>, done = false) {
+    event?.preventDefault();
+    if (locked.current || uncertain || (!done && !dirty) || (done && dirty))
+      return;
     if ([...value.trim()].length > limit || value.includes("\0")) {
-      setError(`${title}: до ${limit} символов. Удалите недопустимые символы.`);
-      setOpen(true);
+      fail(
+        `${title}: до ${limit} символов. Удалите недопустимые символы.`,
+        "action",
+      );
       return;
     }
+    if (field === "next_action" && !done && (date || time)) {
+      if (!value.trim()) {
+        fail(errorMessage(new WebError("REMINDER_ACTION_REQUIRED")), "action");
+        return;
+      }
+      if (!date) {
+        fail("Укажите дату напоминания.", "date");
+        return;
+      }
+      if (!time) {
+        fail("Укажите время напоминания.", "time");
+        return;
+      }
+      if (!zone) {
+        fail(errorMessage(new WebError("REMINDER_TIMEZONE_INVALID")), "zone");
+        return;
+      }
+    }
+    const changes: Record<string, string | null> = {
+      [field]: done ? null : value.trim() || null,
+    };
+    if (
+      field === "next_action" &&
+      changes.next_action &&
+      !done &&
+      reminderDirty
+    ) {
+      try {
+        changes.next_action_remind_at =
+          date || time ? reminderInput(date, time, zone) : null;
+        if (changes.next_action_remind_at) changes.next_action_timezone = zone;
+      } catch (failure) {
+        fail(errorMessage(failure), failureOwner(failure));
+        return;
+      }
+    }
+    intended.current = changes;
     locked.current = true;
     setBusy(true);
     setError("");
@@ -120,16 +255,18 @@ function ApplicationFieldEditor({
         {
           method: "PATCH",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ [field]: value.trim() || null }),
+          body: JSON.stringify(changes),
         },
       );
       validateResponse(fresh);
       if (!mounted.current) return;
       accept(fresh.application);
       setFeedback(
-        field === "note"
-          ? "Заметки сохранены."
-          : "Следующее действие сохранено.",
+        done
+          ? "Действие выполнено."
+          : field === "note"
+            ? "Заметки сохранены."
+            : "Следующее действие сохранено.",
       );
     } catch (failure) {
       if (!mounted.current) return;
@@ -138,8 +275,7 @@ function ApplicationFieldEditor({
         failure.code === "ambiguous_application"
       )
         setUncertain(true);
-      setError(errorMessage(failure));
-      setOpen(true);
+      fail(errorMessage(failure), failureOwner(failure));
     } finally {
       if (mounted.current) setBusy(false);
       locked.current = false;
@@ -148,6 +284,7 @@ function ApplicationFieldEditor({
 
   async function checkSaved() {
     if (locked.current) return;
+    setErrorOwner("form");
     locked.current = true;
     setBusy(true);
     try {
@@ -156,6 +293,25 @@ function ApplicationFieldEditor({
       );
       validateResponse(fresh);
       if (!mounted.current) return;
+      const matches = Object.entries(intended.current || {}).every(
+        ([key, value]) => {
+          const saved = fresh.application[key as keyof Application];
+          return key === "next_action_remind_at" &&
+            value !== null &&
+            typeof saved === "string"
+            ? Date.parse(value) === Date.parse(saved)
+            : saved === value;
+        },
+      );
+      if (!matches) {
+        setConfirmed(fresh.application);
+        setUncertain(false);
+        onSaved(fresh.application, field);
+        setError(
+          "Сохранённое значение отличается от отправленного. Проверьте черновик и сохраните снова.",
+        );
+        return;
+      }
       accept(fresh.application);
       setError("");
       setFeedback("Показано актуальное значение из API.");
@@ -227,8 +383,8 @@ function ApplicationFieldEditor({
             placeholder={
               field === "next_action" ? "Написать рекрутеру" : undefined
             }
-            aria-describedby={`${id}-hint${error ? ` ${id}-error` : ""}`}
-            aria-invalid={!!error}
+            aria-describedby={`${id}-hint${actionInvalid ? ` ${id}-error` : ""}`}
+            aria-invalid={actionInvalid}
             onChange={(event) => {
               setValue(event.target.value);
               setError("");
@@ -236,8 +392,187 @@ function ApplicationFieldEditor({
             }}
           />
           <p id={`${id}-hint`} className="muted">
+            {field === "note"
+              ? "Детали разговоров, условия, вопросы, ссылки и договорённости по вакансии."
+              : "Что сделать дальше по этой вакансии. Напоминание можно добавить отдельно."}{" "}
             До {limit} символов.
           </p>
+          {actionInvalid && (
+            <p id={`${id}-error`} className="status-error" role="alert">
+              {error}
+            </p>
+          )}
+          {field === "next_action" && (
+            <>
+              {!!application.next_action_suggestions?.length && (
+                <div
+                  className="action-suggestions"
+                  aria-label="Примеры следующих действий"
+                >
+                  {application.next_action_suggestions.map((suggestion) => (
+                    <button
+                      key={suggestion.id}
+                      type="button"
+                      disabled={busy || uncertain}
+                      onClick={() => {
+                        setValue(suggestion.action_text);
+                        setError("");
+                        setFeedback("");
+                      }}
+                    >
+                      {suggestion.label}
+                    </button>
+                  ))}
+                </div>
+              )}
+              {!reminderVisible && (
+                <button
+                  type="button"
+                  className="text-action"
+                  aria-expanded={false}
+                  aria-controls={`${id}-reminder`}
+                  disabled={busy || uncertain}
+                  onClick={() => {
+                    focusDateAfterReveal.current = true;
+                    setReminderRevealed(true);
+                  }}
+                >
+                  + Добавить напоминание
+                </button>
+              )}
+              <div id={`${id}-reminder`} hidden={!reminderVisible}>
+                {reminderVisible && (
+                  <>
+                    <div className="reminder-inputs">
+                      <div>
+                        <label htmlFor={`${id}-date`}>Дата напоминания</label>
+                        <input
+                          ref={dateInput}
+                          type="date"
+                          id={`${id}-date`}
+                          value={date}
+                          disabled={busy || uncertain}
+                          aria-describedby={
+                            error &&
+                            (errorOwner === "date" || errorOwner === "reminder")
+                              ? `${id}-reminder-error`
+                              : undefined
+                          }
+                          aria-invalid={
+                            !!error &&
+                            (errorOwner === "date" || errorOwner === "reminder")
+                          }
+                          onChange={(e) => {
+                            setDate(e.target.value);
+                            setError("");
+                          }}
+                        />
+                      </div>
+                      <div>
+                        <label htmlFor={`${id}-time`}>Время напоминания</label>
+                        <input
+                          type="time"
+                          step="60"
+                          id={`${id}-time`}
+                          value={time}
+                          disabled={busy || uncertain}
+                          aria-describedby={
+                            error &&
+                            (errorOwner === "time" || errorOwner === "reminder")
+                              ? `${id}-reminder-error`
+                              : undefined
+                          }
+                          aria-invalid={
+                            !!error &&
+                            (errorOwner === "time" || errorOwner === "reminder")
+                          }
+                          onChange={(e) => {
+                            setTime(e.target.value);
+                            setError("");
+                          }}
+                        />
+                      </div>
+                    </div>
+                    {reminderError && (
+                      <p
+                        id={`${id}-reminder-error`}
+                        className="status-error"
+                        role="alert"
+                      >
+                        {error}
+                      </p>
+                    )}
+                    {zone && !(error && errorOwner === "zone") ? (
+                      <p className="muted">Часовой пояс: {zone}</p>
+                    ) : (
+                      <div>
+                        <span id={`${id}-zone-label`}>
+                          Выберите часовой пояс
+                        </span>
+                        <ListboxSelect
+                          invalid={!!error && errorOwner === "zone"}
+                          describedBy={
+                            error && errorOwner === "zone"
+                              ? `${id}-reminder-error`
+                              : undefined
+                          }
+                          id={`${id}-zone`}
+                          labelId={`${id}-zone-label`}
+                          value={zone}
+                          options={zones}
+                          labels={Object.fromEntries(
+                            zones.map((name) => [name, name]),
+                          )}
+                          disabled={busy || uncertain}
+                          onChange={(name) => {
+                            setZone(name);
+                            setError("");
+                          }}
+                        />
+                      </div>
+                    )}
+                    {confirmed.next_action_due_on && (date || time) && (
+                      <p className="muted">
+                        Точное напоминание заменит существующую дату.
+                      </p>
+                    )}
+                    {telegramLinked !== undefined && (
+                      <p className="muted">
+                        {telegramLinked ? (
+                          "Уведомление придёт в Telegram."
+                        ) : (
+                          <>
+                            Без Telegram это напоминание будет видно только в
+                            Job Hunter AI.
+                            <br />
+                            Подключите Telegram, чтобы получать уведомления.
+                          </>
+                        )}
+                      </p>
+                    )}
+                    {confirmed.next_action_remind_at &&
+                      ["sent", "failed"].includes(
+                        confirmed.reminder_delivery_state || "",
+                      ) && <ReminderDeliveryStatus value={confirmed} editing />}
+                    {confirmed.next_action_remind_at && (
+                      <button
+                        className="text-action"
+                        type="button"
+                        disabled={busy || uncertain}
+                        onClick={() => {
+                          setDate("");
+                          setTime("");
+                          setError("");
+                        }}
+                      >
+                        Убрать напоминание
+                      </button>
+                    )}
+                  </>
+                )}
+              </div>
+            </>
+          )}
           <div className="application-notes-actions">
             <button
               type="submit"
@@ -251,6 +586,7 @@ function ApplicationFieldEditor({
               disabled={busy || uncertain}
               onClick={() => {
                 setValue(confirmed[field] ?? "");
+                if (field === "next_action") resetReminder(confirmed);
                 setError("");
                 setFeedback("");
                 setOpen(false);
@@ -259,8 +595,17 @@ function ApplicationFieldEditor({
             >
               Отмена
             </button>
+            {field === "next_action" && confirmed.next_action && (
+              <button
+                type="button"
+                disabled={busy || uncertain || dirty}
+                onClick={() => void save(undefined, true)}
+              >
+                Выполнено
+              </button>
+            )}
           </div>
-          {error && (
+          {error && errorOwner === "form" && (
             <div id={`${id}-error`} className="status-error" role="alert">
               <p>{error}</p>
               {uncertain && (
@@ -278,12 +623,19 @@ function ApplicationFieldEditor({
       </div>
       {field === "next_action" && confirmed.next_action_due_on && (
         <p className="muted">
-          Существующая дата:{" "}
+          Дата без уведомления. Существующая дата:{" "}
           <time dateTime={confirmed.next_action_due_on}>
             {confirmed.next_action_due_on}
           </time>
           .
         </p>
+      )}
+      {field === "next_action" && !open && confirmed.next_action_remind_at && (
+        <ReminderSummary
+          value={confirmed}
+          browserTimezone={false}
+          telegramLinked={telegramLinked}
+        />
       )}
       {(busy || feedback || dirty) && (
         <p

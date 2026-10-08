@@ -809,9 +809,13 @@ def _truncate_utf16(value: str, maximum: int) -> str:
 
 
 def _follow_up_due_label(item: dict[str, object]) -> str:
-    due_on = item["next_action_due_on"]
-    assert isinstance(due_on, str)
-    parsed = date.fromisoformat(due_on)
+    exact = item.get("next_action_remind_at")
+    tz = item.get("next_action_timezone")
+    if isinstance(exact, str) and isinstance(tz, str):
+        from zoneinfo import ZoneInfo
+        parsed = datetime.fromisoformat(exact.replace("Z", "+00:00")).astimezone(ZoneInfo(tz))
+        return f"{parsed:%d.%m %H:%M} ({tz})"
+    parsed = date.fromisoformat(str(item["next_action_due_on"]))
     return f"{parsed.day:02d}.{parsed.month:02d}"
 
 
@@ -1395,7 +1399,8 @@ def _application_detail_content(
     action = application.get("next_action") if isinstance(application, dict) else None
     due_on = application.get("next_action_due_on") if isinstance(application, dict) else None
     if isinstance(action, str) and action:
-        action_text = f"{_display_due_on(due_on)} — {action}" if isinstance(due_on, str) else action
+        exact, tz = application.get("next_action_remind_at"), application.get("next_action_timezone")
+        action_text = f"{_follow_up_due_label(application)} — {action}" if isinstance(exact, str) and isinstance(tz, str) else (f"{_display_due_on(due_on)} — {action}" if isinstance(due_on, str) else action)
         suffix += f"\n\n📅 Следующее действие:\n{action_text}"
     if note:
         suffix += f"\n\n📝 Заметка:\n{note}"
@@ -1820,12 +1825,18 @@ async def _next_action_operation(
         token = secrets.token_hex(4)
         await state.update_data({APPLICATIONS_VIEW: "next_action_error", APPLICATIONS_NEXT_ACTION_TOKEN: token})
         await _replace_or_send(message, state,
-            "Не удалось подтвердить актуальные данные. Открой вакансию, чтобы проверить следующее действие.",
+            ("Точное напоминание настроено в Web. Измени действие и время там: дата в Bot не заменяет уведомление."
+             if isinstance(error, httpx.HTTPStatusError) and error.response.status_code == 409 else
+             "Не удалось подтвердить актуальные данные. Открой вакансию, чтобы проверить следующее действие."),
             _next_action_keyboard(token, recovery=True), canonical_target=True)
         return
     if action == "next_action":
         application = detail["application"]
         assert isinstance(application, dict)
+        if application.get("next_action_remind_at"):
+            await _render_application_detail(message, state, detail, application_id, offset)
+            await message.answer("Точное напоминание настроено в Web. Измени действие и время там или удали действие здесь.")
+            return
         current, current_date = application.get("next_action"), application.get("next_action_due_on")
         text = "Что нужно сделать дальше?\n\nНапример: «Написать HR»"
         if isinstance(current, str) and current:
