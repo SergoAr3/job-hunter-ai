@@ -32,6 +32,13 @@ Browser  → Web ─┘       ├→ OpenAI API
 
 `apps/api` содержит бизнес-логику, matching, интеграции с источниками и доступ к данным. `apps/bot` и `apps/web` — клиенты API; Web использует серверный транспорт Next.js. Миграции БД находятся в `apps/api/alembic`, проектная документация — в `docs`.
 
+Matching Foundation v1 добавляет внутренний derived слой `Skill`/`SkillAlias` и
+связи `UserSkill`/`JobSkill` поверх сохранённых semantic JSON skills. Profile PUT,
+CV Apply и Job AI enrichment синхронизируют связи атомарно. Текущий matcher
+`job-match-v2.1` продолжает читать прежние поля; Match UI ещё не добавлен.
+[Matching Foundation v1](docs/matching-foundation-v1.md) описывает normalization,
+migration, bounded backfill и rollback.
+
 ## Технологии
 
 Python, FastAPI, SQLAlchemy, Alembic, PostgreSQL, aiogram, Next.js, React, TypeScript, OpenAI API и Docker Compose. Для проверок используются pytest, Vitest и React Testing Library.

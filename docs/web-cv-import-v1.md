@@ -103,8 +103,12 @@ Record limits are per collection, not one shared profile-record count: work has
 counts only the final incoming snapshots, never existing + incoming. Existing
 collections at their caps do not block a valid replacement. Limits remain in
 place; profile list and scalar policies are unchanged. There are no
-description/technology fields on WorkExperience, source migration or relational
-skill tables.
+description/technology fields on WorkExperience or source migration. Matching
+Foundation v1 derives UserSkill associations from final persisted Profile skills
+during Apply, inside the same transaction as Profile/work/facts. Extraction,
+preview edits and Cancel do not write taxonomy. Preview still contains strings;
+the union policy and token lifecycle are unchanged. See
+[Matching Foundation v1](matching-foundation-v1.md).
 
 Profile, work deletion/insertion and facts are committed together. Failure before
 commit rolls back replacement and retains old work and facts. Insert order

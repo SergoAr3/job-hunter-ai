@@ -17,6 +17,8 @@ from app.auth_routes import router as auth_router
 from app.services.auth import AuthError, get_passwords
 from starlette.concurrency import run_in_threadpool
 from sqlalchemy.orm import Session
+from sqlalchemy.exc import SQLAlchemyError
+from app.services.skill_taxonomy import SkillAliasConflict
 
 from app.database import get_session
 from app.services.cover_letter import CoverLetterGenerationService, CoverLetterOut, CoverLetterError, build_context
@@ -297,6 +299,9 @@ def replace_user_profile(
         profile = put_user_profile(session, user_id, payload)
     except ProfileUserNotFoundError as error:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found") from error
+    except (SQLAlchemyError, SkillAliasConflict):
+        # SQLAlchemy exception strings can include user-derived SQL parameters.
+        raise HTTPException(status_code=503, detail="Profile temporarily unavailable") from None
     return UserProfileOut.model_validate(profile)
 
 
