@@ -1,4 +1,5 @@
 import re
+from typing import Literal
 from datetime import date, datetime, timezone
 from decimal import Decimal
 from enum import Enum
@@ -302,6 +303,17 @@ class ApplicationPatchIn(BaseModel):
 
     note: str | None = Field(default=None, strict=True, max_length=1000)
     next_action: str | None = Field(default=None, strict=True, max_length=500)
+    next_action_remind_at: datetime | None = None
+    next_action_timezone: str | None = Field(default=None, strict=True, max_length=128)
+
+    @field_validator("next_action_remind_at", mode="before")
+    @classmethod
+    def exact_datetime(cls, value):
+        if value is None:
+            return value
+        if not isinstance(value, str) or re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\.[0-9]{1,6})?(?:Z|[+-][0-9]{2}:[0-9]{2})", value) is None:
+            raise ValueError("Aware RFC3339 datetime required")
+        return value
 
     @field_validator("note", "next_action", mode="before")
     @classmethod
@@ -376,7 +388,23 @@ class ApplicationStatusHistoryOut(BaseModel):
     items: list[ApplicationStatusHistoryItemOut]
 
 
-class ApplicationOut(BaseModel):
+class ReminderPublicOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    next_action_remind_at: datetime | None = None
+    next_action_timezone: str | None = None
+    reminder_delivery_state: Literal["pending", "claimed", "sent", "failed"] | None = None
+    reminder_sent_at: datetime | None = None
+    reminder_failure_reason: Literal["uncertain", "telegram_not_connected", "unavailable"] | None = None
+
+    @field_validator("next_action_remind_at", "reminder_sent_at")
+    @classmethod
+    def utc_output(cls, value):
+        if value is None:
+            return None
+        return value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value.astimezone(timezone.utc)
+
+
+class ApplicationOut(ReminderPublicOut):
     model_config = ConfigDict(from_attributes=True)
 
     id: int
@@ -386,6 +414,7 @@ class ApplicationOut(BaseModel):
     note: str | None
     next_action: str | None
     next_action_due_on: date | None
+    next_action_suggestions: list[dict[str, str]] = Field(default_factory=list)
     created_at: datetime
     updated_at: datetime
 
@@ -397,10 +426,11 @@ class SavedApplicationOut(BaseModel):
     application_created: bool
 
 
-class ApplicationListItemOut(BaseModel):
+class ApplicationListItemOut(ReminderPublicOut):
     """Small application representation intended for the Telegram list."""
 
     app_id: int
+    next_action_due_on: date | None = None
     next_action: str | None = None
     status: ApplicationStatus
     job_id: int
@@ -423,13 +453,13 @@ class ApplicationsPageOut(BaseModel):
     has_next: bool
 
 
-class ApplicationFollowUpOut(BaseModel):
+class ApplicationFollowUpOut(ReminderPublicOut):
     application_id: int
     title: str | None
     company: str | None
     status: ApplicationStatus
     next_action: str
-    next_action_due_on: date
+    next_action_due_on: date | None
     due_state: FollowUpDueState
 
 

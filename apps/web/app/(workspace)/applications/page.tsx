@@ -9,8 +9,10 @@ export default async function Page({
 }: {
   searchParams?: Promise<Record<string, string | string[] | undefined>>;
 }) {
-  if (!(await pageAccess(await pagePath("/applications", searchParams))))
-    return <AuthUnavailable />;
+  const identity = await pageAccess(
+    await pagePath("/applications", searchParams),
+  );
+  if (!identity) return <AuthUnavailable />;
   return (
     <Suspense
       fallback={
@@ -19,7 +21,7 @@ export default async function Page({
         </div>
       }
     >
-      <ApplicationsList />
+      <ApplicationsList telegramLinked={identity.user?.telegram_linked} />
     </Suspense>
   );
 }

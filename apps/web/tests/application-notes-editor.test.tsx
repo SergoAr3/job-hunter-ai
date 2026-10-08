@@ -149,7 +149,7 @@ it("starts both collapsed with persisted summaries, semantic buttons and panels"
     }),
   ).toBeInTheDocument();
   expect(screen.getByText(/Существующая дата/)).toHaveTextContent("2026-10-01");
-  expect(document.querySelector('input[type="date"]')).toBeNull();
+  expect(document.querySelector('input[type="date"]')).not.toBeInTheDocument();
 });
 
 it("shows empty summaries and allows both sections open independently", () => {
@@ -170,8 +170,8 @@ it("shows empty summaries and allows both sections open independently", () => {
     "placeholder",
     "Написать рекрутеру",
   );
-  expect(screen.getByText("До 1000 символов.")).toBeInTheDocument();
-  expect(screen.getByText("До 500 символов.")).toBeInTheDocument();
+  expect(screen.getByText(/До 1000 символов/)).toBeInTheDocument();
+  expect(screen.getByText(/До 500 символов/)).toBeInTheDocument();
   fireEvent.click(toggle("note"));
   expect(toggle("note")).toHaveAttribute("aria-expanded", "false");
   expect(toggle("next_action")).toHaveAttribute("aria-expanded", "true");

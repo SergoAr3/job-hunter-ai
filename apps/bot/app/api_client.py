@@ -461,8 +461,11 @@ class JobHunterApiClient:
                 and item.get("status") in _APPLICATION_STATUS_VALUES
                 and isinstance(item.get("next_action"), str)
                 and 1 <= len(item["next_action"]) <= 500
-                and isinstance(item.get("next_action_due_on"), str)
-                and re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}", item["next_action_due_on"]) is not None
+                and ((isinstance(item.get("next_action_due_on"), str)
+                      and re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}", item["next_action_due_on"]) is not None)
+                     or (item.get("next_action_due_on") is None
+                         and isinstance(item.get("next_action_remind_at"), str)
+                         and isinstance(item.get("next_action_timezone"), str)))
                 and item.get("due_state") in _FOLLOW_UP_DUE_STATES
                 for item in items
             )
@@ -470,8 +473,16 @@ class JobHunterApiClient:
             raise httpx.DecodingError("API response has invalid follow-up queue shape", request=response.request)
         for item in items:
             try:
-                date.fromisoformat(str(item["next_action_due_on"]))
-            except ValueError as error:
+                if item.get("next_action_due_on"):
+                    date.fromisoformat(str(item["next_action_due_on"]))
+                else:
+                    from datetime import datetime
+                    from zoneinfo import ZoneInfo
+                    parsed = datetime.fromisoformat(item["next_action_remind_at"].replace("Z", "+00:00"))
+                    if parsed.tzinfo is None:
+                        raise ValueError("Aware time required")
+                    ZoneInfo(item["next_action_timezone"])
+            except (ValueError, KeyError) as error:
                 raise httpx.DecodingError(
                     "API response has invalid follow-up due date", request=response.request
                 ) from error

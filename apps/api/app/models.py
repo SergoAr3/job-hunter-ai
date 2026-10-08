@@ -1,10 +1,11 @@
 from datetime import date, datetime
+from uuid import UUID
 from decimal import Decimal
 from enum import Enum
 
-from sqlalchemy import BigInteger, Boolean, CheckConstraint, Date, DateTime, ForeignKey, Index, JSON, Numeric, String, Text, UniqueConstraint, func
+from sqlalchemy import BigInteger, Boolean, CheckConstraint, Date, DateTime, ForeignKey, Index, JSON, Numeric, String, Text, UniqueConstraint, Uuid, func
 from sqlalchemy.dialects.postgresql import JSONB
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
 
@@ -366,6 +367,34 @@ class Application(Base):
     note: Mapped[str | None] = mapped_column(Text, nullable=True)
     next_action: Mapped[str | None] = mapped_column(Text, nullable=True)
     next_action_due_on: Mapped[date | None] = mapped_column(Date, nullable=True)
+    reminder: Mapped["ApplicationReminder | None"] = relationship(uselist=False, passive_deletes="all")
+
+    @property
+    def next_action_remind_at(self):
+        return self.reminder.remind_at if self.reminder else None
+
+    @property
+    def next_action_timezone(self):
+        return self.reminder.timezone if self.reminder else None
+
+    @property
+    def reminder_delivery_state(self):
+        return self.reminder.delivery_state if self.reminder else None
+
+    @property
+    def reminder_sent_at(self):
+        return self.reminder.sent_at if self.reminder else None
+
+    @property
+    def reminder_failure_reason(self):
+        if not self.reminder or self.reminder.delivery_state != "failed":
+            return None
+        return {"DELIVERY_UNCERTAIN": "uncertain", "TELEGRAM_NOT_CONNECTED": "telegram_not_connected"}.get(self.reminder.last_error_code, "unavailable")
+
+    @property
+    def next_action_suggestions(self):
+        from app.services.action_suggestions import suggestions_for
+        return suggestions_for(self.status)
     status: Mapped[str] = mapped_column(
         String(32), default=ApplicationStatus.SAVED.value, server_default=ApplicationStatus.SAVED.value
     )
@@ -378,6 +407,30 @@ class Application(Base):
         onupdate=func.now(),
         nullable=False,
     )
+
+
+class ApplicationReminder(Base):
+    __tablename__ = "application_reminders"
+    __table_args__ = (
+        CheckConstraint("delivery_state IN ('pending','claimed','sent','failed')", name="ck_reminders_state"),
+        CheckConstraint("attempt_count BETWEEN 0 AND 3", name="ck_reminders_attempts"),
+        CheckConstraint("(delivery_state = 'claimed' AND lease_token IS NOT NULL AND lease_until IS NOT NULL) OR (delivery_state <> 'claimed' AND lease_token IS NULL AND lease_until IS NULL)", name="ck_reminders_lease"),
+        CheckConstraint("(delivery_state = 'sent' AND sent_at IS NOT NULL) OR (delivery_state <> 'sent' AND sent_at IS NULL)", name="ck_reminders_sent"),
+        CheckConstraint("last_error_code IS NULL OR last_error_code IN ('CONNECT_FAILED','RATE_LIMITED','PROVIDER_REJECTED','DELIVERY_UNCERTAIN','CHAT_UNAVAILABLE','TELEGRAM_NOT_CONNECTED','INVALID_STATE','RETRY_EXHAUSTED','DELIVERY_EXPIRED','CONFIGURATION_FAILED')", name="ck_reminders_error"),
+        Index("ix_reminders_pending", "delivery_state", "next_attempt_at"),
+        Index("ix_reminders_lease", "delivery_state", "lease_until"),
+    )
+    application_id: Mapped[int] = mapped_column(ForeignKey("applications.id", ondelete="CASCADE"), primary_key=True)
+    remind_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    timezone: Mapped[str] = mapped_column(String(128), nullable=False)
+    generation: Mapped[UUID] = mapped_column(Uuid, nullable=False)
+    delivery_state: Mapped[str] = mapped_column(String(16), nullable=False, default="pending", server_default="pending")
+    attempt_count: Mapped[int] = mapped_column(nullable=False, default=0, server_default="0")
+    next_attempt_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    lease_token: Mapped[UUID | None] = mapped_column(Uuid)
+    lease_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_error_code: Mapped[str | None] = mapped_column(String(32))
 
 
 class ApplicationStatusHistory(Base):

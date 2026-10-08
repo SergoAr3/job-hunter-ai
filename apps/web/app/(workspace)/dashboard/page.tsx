@@ -13,7 +13,8 @@ import { loginUrl } from "../../../lib/auth";
 
 export const dynamic = "force-dynamic";
 export default async function Page() {
-  if (!(await pageAccess("/dashboard"))) return <AuthUnavailable />;
+  const identity = await pageAccess("/dashboard");
+  if (!identity) return <AuthUnavailable />;
   let data;
   try {
     const [summary, recent, profile] = await Promise.all([
@@ -41,5 +42,7 @@ export default async function Page() {
       </div>
     );
   }
-  return <Dashboard {...data} />;
+  return (
+    <Dashboard {...data} telegramLinked={identity.user?.telegram_linked} />
+  );
 }

@@ -21,14 +21,15 @@ if [[ ${1:-} == runner ]]; then
     api_pid=""
     bot_pid=""
     web_pid=""
+    reminder_pid=""
     cleanup() {
         local exit_status=$?
         trap - EXIT INT TERM
-        stop_dev_process_groups "$api_pid" "$bot_pid" "$web_pid"
+        stop_dev_process_groups "$api_pid" "$bot_pid" "$web_pid" "$reminder_pid"
         exit "$exit_status"
     }
     trap cleanup EXIT INT TERM
-    for service in api bot web; do
+    for service in api bot web reminder; do
         begin_dev_service_start
         (
             bash "$script_path" child "$2/$service" &
@@ -51,11 +52,12 @@ if [[ ${1:-} == runner ]]; then
             api) api_pid=$service_pid ;;
             bot) bot_pid=$service_pid ;;
             web) web_pid=$service_pid ;;
+            reminder) reminder_pid=$service_pid ;;
         esac
         finish_dev_service_start
     done
     while true; do
-        for service_pid in "$api_pid" "$bot_pid" "$web_pid"; do
+        for service_pid in "$api_pid" "$bot_pid" "$web_pid" "$reminder_pid"; do
             kill -0 "$service_pid" 2>/dev/null || exit 1
         done
         sleep 0.1
@@ -77,14 +79,14 @@ wait_for_children() {
     local attempt service ready
     for attempt in {1..100}; do
         ready=true
-        for service in api bot web; do
+        for service in api bot web reminder; do
             if [[ ! -s "$1/$service.group" || ! -s "$1/$service.child" || ! -s "$1/$service.grandchild" ]]; then
                 ready=false
                 break
             fi
         done
         if [[ $ready == true ]]; then
-            for service in api bot web; do
+            for service in api bot web reminder; do
                 kill -0 -- "-$(cat "$1/$service.group")" 2>/dev/null || {
                     echo "Dummy service PID is not its process group ID" >&2
                     return 1
@@ -147,6 +149,6 @@ for scenario in runner_sigterm runner_sigint child_failure startup_race; do
     fi
     wait "$runner_pid" 2>/dev/null || true
     runner_pid=""
-    assert_stopped "$scenario_dir" api bot web
+    assert_stopped "$scenario_dir" api bot web reminder
     printf '%s: all dummy service processes stopped\n' "$scenario"
 done

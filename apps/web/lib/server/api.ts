@@ -2,6 +2,8 @@ import "server-only";
 import { getDomainIdentity } from "./auth";
 import { WebError } from "../errors";
 import type {
+  ReminderFields,
+  FollowUpsPage,
   ApplicationDetail,
   ApplicationStatusHistory,
   ApplicationsPage,
@@ -65,6 +67,15 @@ async function request(
       "source_identity_conflict",
       "USER_NOT_FOUND",
       "APPLICATION_NOT_FOUND",
+      "REMINDER_ACTION_REQUIRED",
+      "REMINDER_TIMEZONE_INVALID",
+      "REMINDER_DATETIME_INVALID",
+      "REMINDER_DATETIME_REQUIRED",
+      "REMINDER_OFFSET_MISMATCH",
+      "REMINDER_TIME_NONEXISTENT",
+      "REMINDER_TIME_AMBIGUOUS",
+      "REMINDER_TOO_SOON",
+      "REMINDER_LEGACY_CONFLICT",
     ];
     throw new WebError(
       known.includes(code)
@@ -113,6 +124,47 @@ export async function searchJobs(
     throw new WebError("api_unavailable");
   return data;
 }
+export function publicReminder(value: ReminderFields): ReminderFields {
+  if (value.next_action_remind_at === undefined) return {};
+  const {
+    next_action_remind_at,
+    next_action_timezone,
+    reminder_delivery_state,
+    reminder_sent_at,
+    reminder_failure_reason,
+  } = value;
+  for (const time of [next_action_remind_at, reminder_sent_at])
+    if (
+      time !== null &&
+      (typeof time !== "string" ||
+        !/(?:Z|[+-]\d{2}:\d{2})$/.test(time) ||
+        !Number.isFinite(Date.parse(time)))
+    )
+      throw new WebError("api_unavailable");
+  if (
+    next_action_remind_at !== null &&
+    (typeof next_action_timezone !== "string" ||
+      next_action_timezone.length > 128)
+  )
+    throw new WebError("api_unavailable");
+  if (
+    ![null, "pending", "claimed", "sent", "failed"].includes(
+      reminder_delivery_state ?? null,
+    ) ||
+    ![null, "uncertain", "telegram_not_connected", "unavailable"].includes(
+      reminder_failure_reason ?? null,
+    )
+  )
+    throw new WebError("api_unavailable");
+  return {
+    next_action_remind_at,
+    next_action_timezone,
+    reminder_delivery_state,
+    reminder_sent_at,
+    reminder_failure_reason,
+  };
+}
+
 // Explicit projection prevents the authenticated user's ID (or extra backend fields) reaching the browser.
 export function publicDetail(data: ApplicationDetail): ApplicationDetail {
   if (
@@ -138,7 +190,30 @@ export function publicDetail(data: ApplicationDetail): ApplicationDetail {
     salary_currency,
   } = data.job;
   return {
-    application: { id, status, note, next_action, next_action_due_on },
+    application: {
+      id,
+      status,
+      note,
+      next_action,
+      next_action_due_on,
+      ...publicReminder(data.application),
+      ...(data.application.next_action_suggestions
+        ? {
+            next_action_suggestions:
+              data.application.next_action_suggestions.map(
+                ({ id, label, action_text }) => {
+                  if (
+                    ![id, label, action_text].every(
+                      (v) => typeof v === "string" && v.length <= 500,
+                    )
+                  )
+                    throw new WebError("api_unavailable");
+                  return { id, label, action_text };
+                },
+              ),
+          }
+        : {}),
+    },
     job: {
       title,
       company,
@@ -230,6 +305,8 @@ export async function setApplicationStatus(
 export interface ApplicationPatch {
   note?: string | null;
   next_action?: string | null;
+  next_action_remind_at?: string | null;
+  next_action_timezone?: string | null;
 }
 
 export async function patchApplication(id: string, changes: ApplicationPatch) {
@@ -314,6 +391,10 @@ export async function listApplications(
         parsing_status,
         ai_enrichment_status,
         next_action,
+        ...(item.next_action_due_on !== undefined
+          ? { next_action_due_on: item.next_action_due_on }
+          : {}),
+        ...publicReminder(item),
       };
     }),
   };
@@ -348,5 +429,50 @@ export async function getApplicationsSummary(): Promise<ApplicationsSummary> {
     status_counts: Object.fromEntries(
       applicationStatuses.map((status) => [status, data.status_counts[status]]),
     ) as ApplicationsSummary["status_counts"],
+  };
+}
+
+export async function getFollowUps(
+  timezone: string,
+  bucket: string,
+): Promise<FollowUpsPage> {
+  const params = new URLSearchParams({ timezone, bucket, limit: "5" });
+  const value = (await request(
+    `applications/follow-ups?${params}`,
+  )) as FollowUpsPage;
+  if (
+    !Array.isArray(value?.items) ||
+    value.items.length > 5 ||
+    typeof value.has_next !== "boolean"
+  )
+    throw new WebError("api_unavailable");
+  return {
+    has_next: value.has_next,
+    items: value.items.map((item) => {
+      if (
+        !Number.isSafeInteger(item.application_id) ||
+        item.application_id < 1 ||
+        typeof item.next_action !== "string" ||
+        item.next_action.length > 500 ||
+        !["overdue", "today", "upcoming"].includes(item.due_state) ||
+        ![item.title, item.company].every(
+          (v) => v === null || typeof v === "string",
+        ) ||
+        typeof item.status !== "string" ||
+        (item.next_action_due_on !== null &&
+          typeof item.next_action_due_on !== "string")
+      )
+        throw new WebError("api_unavailable");
+      return {
+        application_id: item.application_id,
+        title: item.title,
+        company: item.company,
+        status: item.status,
+        next_action: item.next_action,
+        next_action_due_on: item.next_action_due_on,
+        due_state: item.due_state,
+        ...publicReminder(item),
+      };
+    }),
   };
 }

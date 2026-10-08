@@ -31,6 +31,7 @@ from app.schemas import (
     ApplicationMatchLearningSummaryOut,
     ApplicationListItemOut,
     ApplicationOut,
+    ReminderPublicOut,
     ApplicationNotePutIn,
     ApplicationPatchIn,
     ApplicationNextActionPutIn,
@@ -72,6 +73,7 @@ from app.services.applications import (
     patch_application,
     set_application_next_action,
 )
+from app.services.reminders import ReminderError
 from app.services.application_learning import build_application_learning_summary
 from app.services.application_match_learning import build_application_match_learning_summary
 from app.services.job_matching import calculate_match
@@ -152,6 +154,11 @@ from app.cv_import_routes import router as cv_import_router
 app.include_router(cv_import_router)
 
 
+@app.exception_handler(ReminderError)
+async def reminder_error_response(request: Request, error: ReminderError):
+    return JSONResponse(status_code=error.status, content={"detail": {"code": error.code}}, headers={"Cache-Control": "no-store"})
+
+
 @app.exception_handler(AuthError)
 async def auth_error_response(request: Request, error: AuthError):
     return JSONResponse(status_code=error.status, content={"code": "rate_limited"} if error.status == 429 else {"detail": {"code": error.code}},
@@ -160,6 +167,11 @@ async def auth_error_response(request: Request, error: AuthError):
 
 @app.exception_handler(RequestValidationError)
 async def safe_auth_validation(request: Request, error: RequestValidationError):
+    if getattr(request.scope.get("route"), "path", None) == "/users/{user_id}/applications/follow-ups":
+        return JSONResponse(
+            status_code=422, content={"detail": {"code": "FOLLOW_UPS_INVALID"}},
+            headers={"Cache-Control": "no-store"},
+        )
     if (request.method == "PATCH" and
             getattr(request.scope.get("route"), "path", None) ==
             "/users/{user_id}/applications/{application_id}"):
@@ -491,6 +503,8 @@ def read_applications(
             ApplicationListItemOut(
                 app_id=application.id,
                 next_action=application.next_action,
+                next_action_due_on=application.next_action_due_on,
+                **ReminderPublicOut.model_validate(application).model_dump(),
                 status=ApplicationStatus(application.status),
                 job_id=job.id,
                 created_at=application.created_at,
@@ -515,9 +529,11 @@ def read_application_follow_ups(
     user_id: int,
     limit: int = Query(default=5, ge=1, le=5),
     offset: int = Query(default=0, ge=0),
+    timezone: str = Query(default="UTC", max_length=128),
+    bucket: str = Query(default="all", pattern="^(all|overdue|today|upcoming)$"),
     session: Session = Depends(get_session),
 ) -> ApplicationFollowUpsPageOut:
-    rows = list_application_follow_ups(session, user_id, limit=limit, offset=offset)
+    rows = list_application_follow_ups(session, user_id, limit=limit, offset=offset, timezone_name=timezone, bucket=bucket)
     return ApplicationFollowUpsPageOut(
         items=[
             ApplicationFollowUpOut(
@@ -527,6 +543,7 @@ def read_application_follow_ups(
                 status=ApplicationStatus(application.status),
                 next_action=application.next_action,
                 next_action_due_on=application.next_action_due_on,
+                **ReminderPublicOut.model_validate(application).model_dump(),
                 due_state=due_state,
             )
             for application, job, due_state in rows[:limit]

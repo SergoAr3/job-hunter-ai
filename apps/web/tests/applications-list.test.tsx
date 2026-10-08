@@ -28,6 +28,46 @@ const row = {
 const respond = (items: unknown[] = [row], has_next = false) =>
   Response.json({ items, has_next });
 
+it("renders exact sent/uncertain states and legacy date without notification", async () => {
+  const exact = {
+    next_action: "Call",
+    next_action_remind_at: "2026-10-10T07:02:00Z",
+    next_action_timezone: "Asia/Yerevan",
+    reminder_sent_at: null,
+    reminder_failure_reason: null,
+  };
+  vi.stubGlobal(
+    "fetch",
+    vi.fn().mockResolvedValue(
+      respond([
+        { ...row, ...exact, reminder_delivery_state: "sent" },
+        {
+          ...row,
+          ...exact,
+          app_id: 43,
+          reminder_delivery_state: "failed",
+          reminder_failure_reason: "uncertain",
+        },
+        {
+          ...row,
+          app_id: 44,
+          next_action: "Legacy call",
+          next_action_due_on: "2026-10-10",
+        },
+      ]),
+    ),
+  );
+  render(<ApplicationsList />);
+  expect(await screen.findByText("Напоминание отправлено")).toBeInTheDocument();
+  expect(
+    screen.getByText(
+      "Не удалось подтвердить отправку. Напоминание могло прийти.",
+    ),
+  ).toBeInTheDocument();
+  expect(screen.getByText(/Дата без уведомления/)).toBeInTheDocument();
+  expect(screen.getByText(/Следующее: Legacy call/)).toBeInTheDocument();
+});
+
 beforeEach(() => {
   testUrl = "/applications";
   testPath = "/applications";

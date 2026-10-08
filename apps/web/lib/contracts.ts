@@ -45,8 +45,35 @@ export interface DiscoverPage {
   locally_filtered: boolean;
 }
 export type Identity = Pick<Vacancy, "source" | "source_scope" | "external_id">;
+export interface ReminderFields {
+  next_action_remind_at?: string | null;
+  next_action_timezone?: string | null;
+  reminder_delivery_state?: "pending" | "claimed" | "sent" | "failed" | null;
+  reminder_sent_at?: string | null;
+  reminder_failure_reason?:
+    "uncertain" | "telegram_not_connected" | "unavailable" | null;
+}
+export interface ActionSuggestion {
+  id: string;
+  label: string;
+  action_text: string;
+}
+export interface FollowUp extends ReminderFields {
+  application_id: number;
+  title: string | null;
+  company: string | null;
+  status: string;
+  next_action: string;
+  next_action_due_on: string | null;
+  due_state: "overdue" | "today" | "upcoming";
+}
+export interface FollowUpsPage {
+  items: FollowUp[];
+  has_next: boolean;
+}
 export interface ApplicationDetail {
-  application: {
+  application: ReminderFields & {
+    next_action_suggestions?: ActionSuggestion[];
     id: number;
     status: string;
     note: string | null;
@@ -77,7 +104,8 @@ export interface SaveResult extends ApplicationDetail {
   job_created: boolean;
   application_created: boolean;
 }
-export interface ApplicationListItem {
+export interface ApplicationListItem extends ReminderFields {
+  next_action_due_on?: string | null;
   app_id: number;
   next_action?: string | null;
   status: string;
