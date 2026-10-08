@@ -167,3 +167,45 @@ binding cookie: terminal response одной вкладки не удаляет 
 для вкладок; login при уже активной session не разрешён. После Bot restart
 откройте deep link снова.
 Подробный контракт: [docs/auth-slice4.md](docs/auth-slice4.md).
+
+## Matching Foundation v1: bounded reconciliation
+
+Новая DDL migration `20261009_20` создаёт derived skill tables; существующие JSON
+skills и matcher `job-match-v2.1` сохраняются. Примените migration обычным способом
+до использования новых write paths. Migration не выполняет backfill. Маленький
+versioned bootstrap автоматически и идемпотентно вызывается внутри live sync,
+без отдельного daemon/startup task или public endpoint.
+
+Из `apps/api` сначала выполните read-only оценку:
+
+```bash
+.venv/bin/python -m app.commands.reconcile_skills --dry-run --entity all --batch-size 100 --limit 1000
+```
+
+Dry-run не создаёт даже unknown Skills. Если migration ещё не установлена,
+`schema_ready=false`, counts — оценка по semantic snapshots при отсутствующих
+relations. Apply в таком состоянии запрещён. Вывод содержит только counts/IDs,
+не skill names/CV/profile text. Проверяйте invalid/quarantined owners отдельно.
+
+Для согласованного backfill после migration выполните ограниченный apply:
+
+```bash
+.venv/bin/python -m app.commands.reconcile_skills --apply --entity profiles --batch-size 100 --limit 1000
+.venv/bin/python -m app.commands.reconcile_skills --apply --entity jobs --batch-size 100 --limit 1000
+```
+
+Для продолжения добавьте `--after-id` из `last_processed_id` нужной entity.
+Не используйте nonzero cursor с `--entity all`: ID пространства различаются.
+Повторная команда идемпотентна; `--limit` ограничивает total owners за запуск.
+После apply снова проверьте dry-run drift. Не запускайте пользовательский backfill
+как часть обычного server startup.
+
+Конечные tests PostgreSQL используют disposable schemas existing PostgreSQL,
+не поднимают дополнительную БД и не меняют public schema:
+
+```bash
+RUN_MATCHING_POSTGRES=1 .venv/bin/python -m pytest tests/test_skill_postgres.py tests/test_skill_migration.py -q
+```
+
+Схема, transaction ownership, rollback, privacy и future readiness:
+[docs/matching-foundation-v1.md](docs/matching-foundation-v1.md).

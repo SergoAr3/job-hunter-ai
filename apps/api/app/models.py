@@ -3,7 +3,7 @@ from uuid import UUID
 from decimal import Decimal
 from enum import Enum
 
-from sqlalchemy import BigInteger, Boolean, CheckConstraint, Date, DateTime, ForeignKey, Index, JSON, Numeric, String, Text, UniqueConstraint, Uuid, func
+from sqlalchemy import BigInteger, Boolean, CheckConstraint, Date, DateTime, ForeignKey, Index, JSON, Numeric, String, Text, UniqueConstraint, PrimaryKeyConstraint, Uuid, func
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -536,3 +536,47 @@ class ApplicationMatchSnapshot(Base):
     result_detail: Mapped[dict[str, object] | None] = mapped_column(
         JSON(none_as_null=True).with_variant(JSONB(none_as_null=True), "postgresql")
     )
+
+
+class Skill(Base):
+    __tablename__ = "skills"
+    __table_args__ = (
+        PrimaryKeyConstraint("id", name="pk_skills"),
+        UniqueConstraint("normalized_key", name="uq_skills_normalized_key"),
+        CheckConstraint("length(canonical_name) BETWEEN 1 AND 100 AND length(trim(canonical_name)) > 0", name="ck_skills_name_length"),
+        CheckConstraint("length(normalized_key) BETWEEN 1 AND 512 AND length(trim(normalized_key)) > 0", name="ck_skills_key_length"),
+    )
+    id: Mapped[int] = mapped_column(primary_key=True)
+    canonical_name: Mapped[str] = mapped_column(String(100), nullable=False)
+    normalized_key: Mapped[str] = mapped_column(String(512).with_variant(String(512, collation="C"), "postgresql"), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+
+class SkillAlias(Base):
+    __tablename__ = "skill_aliases"
+    __table_args__ = (
+        PrimaryKeyConstraint("normalized_alias", name="pk_skill_aliases"),
+        CheckConstraint("length(alias) BETWEEN 1 AND 100 AND length(trim(alias)) > 0", name="ck_skill_aliases_name_length"),
+        CheckConstraint("length(normalized_alias) BETWEEN 1 AND 512 AND length(trim(normalized_alias)) > 0", name="ck_skill_aliases_key_length"),
+    )
+    normalized_alias: Mapped[str] = mapped_column(String(512).with_variant(String(512, collation="C"), "postgresql"), primary_key=True)
+    skill_id: Mapped[int] = mapped_column(ForeignKey("skills.id", ondelete="CASCADE", name="fk_skill_aliases_skill"), nullable=False, index=True)
+    alias: Mapped[str] = mapped_column(String(100), nullable=False)
+
+
+class JobSkill(Base):
+    __tablename__ = "job_skills"
+    __table_args__ = (
+        PrimaryKeyConstraint("job_id", "skill_id", "requirement_kind", name="pk_job_skills"),
+        CheckConstraint("requirement_kind IN ('required','preferred')", name="ck_job_skills_requirement_kind"),
+    )
+    job_id: Mapped[int] = mapped_column(ForeignKey("jobs.id", ondelete="CASCADE", name="fk_job_skills_job"), primary_key=True)
+    skill_id: Mapped[int] = mapped_column(ForeignKey("skills.id", ondelete="RESTRICT", name="fk_job_skills_skill"), primary_key=True)
+    requirement_kind: Mapped[str] = mapped_column(String(16), primary_key=True)
+
+
+class UserSkill(Base):
+    __tablename__ = "user_skills"
+    __table_args__ = (PrimaryKeyConstraint("user_profile_id", "skill_id", name="pk_user_skills"),)
+    user_profile_id: Mapped[int] = mapped_column(ForeignKey("user_profiles.id", ondelete="CASCADE", name="fk_user_skills_profile"), primary_key=True)
+    skill_id: Mapped[int] = mapped_column(ForeignKey("skills.id", ondelete="RESTRICT", name="fk_user_skills_skill"), primary_key=True)

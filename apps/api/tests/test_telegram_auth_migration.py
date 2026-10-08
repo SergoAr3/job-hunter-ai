@@ -29,7 +29,7 @@ def test_revision16_upgrade_downgrade_parity(connection, tmp_path, monkeypatch):
             user=User(telegram_id=123,first_name="Keep");db.add(user);db.flush()
             result=auth.issue_session(db,user.id);db.commit(); uid=user.id
         command.upgrade(config,"20261002_16")
-        assert ScriptDirectory.from_config(config).get_heads()==["20261006_19"]
+        assert ScriptDirectory.from_config(config).get_heads()==["20261009_20"]
         with engine.connect() as conn:
             inspect=sa.inspect(conn)
             assert {c["name"]:c["nullable"] for c in inspect.get_columns("auth_telegram_challenges")}=={c.name:c.nullable for c in TelegramChallenge.__table__.columns}

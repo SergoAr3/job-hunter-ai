@@ -31,6 +31,7 @@ from app.services.job_ai_enrichment import (
 from app.services.job_sources import detect_job_source
 from app.services.safe_http_fetcher import BlockedUrlError, FetchError
 from app.services.salary_validation import is_iso_4217_currency
+from app.services.skill_sync import sync_job_skills
 from app.services.vacancy_enrichment import VacancyEnrichmentService
 
 logger = logging.getLogger(__name__)
@@ -240,7 +241,8 @@ def run_job_ai_enrichment(
         logger.exception("Unexpected AI enrichment failure", extra={"job_id": job_id})
         result, error = None, "processing_failed"
     try:
-        refreshed_job = session.get(Job, job_id)
+        refreshed_job = session.scalar(select(Job).where(Job.id == job_id).with_for_update()
+                                       .execution_options(populate_existing=True))
         if refreshed_job is None:
             raise RuntimeError("Saved job disappeared before AI enrichment update")
         if result is None:
@@ -250,20 +252,22 @@ def run_job_ai_enrichment(
             _apply_ai_enrichment(refreshed_job, result, merge_existing=merge_existing)
             refreshed_job.ai_enrichment_status = AIEnrichmentStatus.SUCCESS.value
             refreshed_job.ai_enrichment_error = None
+            session.flush()
+            sync_job_skills(session, refreshed_job)
         session.commit()
         session.refresh(refreshed_job)
-    except Exception:
+    except Exception as error:
         session.rollback()
-        logger.exception("Could not persist AI enrichment", extra={"job_id": job_id})
+        logger.error("Could not persist AI enrichment exception_class=%s", type(error).__name__, extra={"job_id": job_id})
         try:
             failed_job = session.get(Job, job_id)
             if failed_job is not None and failed_job.ai_enrichment_status == AIEnrichmentStatus.PENDING.value:
                 failed_job.ai_enrichment_status = AIEnrichmentStatus.FAILED.value
                 failed_job.ai_enrichment_error = "processing_failed"
                 session.commit()
-        except Exception:
+        except Exception as error:
             session.rollback()
-            logger.exception("Could not mark failed AI enrichment", extra={"job_id": job_id})
+            logger.error("Could not mark failed AI enrichment exception_class=%s", type(error).__name__, extra={"job_id": job_id})
 
 
 def _apply_ai_enrichment(

@@ -13,6 +13,8 @@ from app.schemas import CVProfileDraftOut, LanguageIn, UserProfilePutIn, normali
 from app.services.cv_import_state import CVImportError, ImportStore
 from app.services.profile_experience_facts import MAX_PROFILE_EXPERIENCE_FACTS, list_profile_experience_facts
 from app.services.profile_normalization import profile_language_name_key
+from app.services.skill_sync import sync_profile_skills
+from app.services.skill_taxonomy import SkillAliasConflict
 from app.services.work_experiences import MAX_WORK_EXPERIENCES, identity, list_for_profile
 from app.work_experience_schema import WorkExperienceIn
 
@@ -40,11 +42,11 @@ def _merge_languages(existing, imported):
 
 def snapshot(session: Session, user_id: int, *, lock=False):
     # User lock also serializes imports when no profile exists yet.
-    user = session.scalar(select(User).where(User.id == user_id).with_for_update()) if lock else session.get(User, user_id)
+    user = session.scalar(select(User).where(User.id == user_id).with_for_update().execution_options(populate_existing=True)) if lock else session.get(User, user_id)
     if user is None:
         raise CVImportError("cv_import_invalid", 404)
     query = select(UserProfile).where(UserProfile.user_id == user_id)
-    profile = session.scalar(query.with_for_update() if lock else query)
+    profile = session.scalar(query.with_for_update().execution_options(populate_existing=True) if lock else query)
     current = ImportProfile.model_validate({key: getattr(profile, key) for key in PROFILE_FIELDS}).model_dump(mode="json") if profile else None
     work = list_for_profile(session, profile.id) if profile else []
     facts = list_profile_experience_facts(session, profile.id) if profile else []
@@ -187,6 +189,7 @@ def apply_import(session: Session, user_id: int, session_hash: str, token: str, 
         for key, value in ImportProfile.model_validate(payload["proposed"]).model_dump().items():
             setattr(profile, key, value)
         session.flush()
+        sync_profile_skills(session, profile)
         session.execute(delete(WorkExperience).where(WorkExperience.user_profile_id == profile.id))
         # Reads order by descending ID; insert in reverse to preserve preview order.
         for entry in reversed(payload["work_experience"]):
@@ -201,6 +204,6 @@ def apply_import(session: Session, user_id: int, session_hash: str, token: str, 
     except CVImportError:
         session.rollback()
         raise
-    except (SQLAlchemyError, ValidationError):
+    except (SQLAlchemyError, ValidationError, SkillAliasConflict):
         session.rollback()
         raise CVImportError("cv_import_unconfirmed" if committing else "cv_import_apply_failed", 503) from None
