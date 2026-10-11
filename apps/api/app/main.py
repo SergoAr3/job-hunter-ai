@@ -79,6 +79,7 @@ from app.services.reminders import ReminderError
 from app.services.application_learning import build_application_learning_summary
 from app.services.application_match_learning import build_application_match_learning_summary
 from app.services.job_matching import calculate_match
+from app.services.match_explainability import explain_match
 from app.services.discover import (
     SourceIdentityConflictError,
     UnsupportedDiscoverSourceError,
@@ -709,4 +710,5 @@ def read_application_match(
     job = session.get(Job, application.job_id)
     if job is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail={"code": "APPLICATION_NOT_FOUND"})
-    return calculate_match(profile, job, application)
+    result = calculate_match(profile, job, application)
+    return result.model_copy(update={"explainability": explain_match(profile, job, result)})

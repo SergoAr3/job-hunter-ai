@@ -6,12 +6,16 @@ export function ApplicationView({
   statusControl,
   historySection,
   notesControl,
+  matchSummary,
+  matchSection,
   statusUnconfirmed = false,
 }: {
   detail: ApplicationDetail;
   statusControl?: ReactNode;
   historySection?: ReactNode;
   notesControl?: ReactNode;
+  matchSummary?: ReactNode;
+  matchSection?: ReactNode;
   statusUnconfirmed?: boolean;
 }) {
   const { job, application } = detail;
@@ -34,6 +38,18 @@ export function ApplicationView({
       <div className="save-area">
         <SourceLink url={job.source_url} />
       </div>
+      {matchSummary}
+      <section
+        className="application-vacancy-content"
+        aria-labelledby="vacancy-content-heading"
+      >
+        <h2 id="vacancy-content-heading">О вакансии</h2>
+        <JobText job={job} descriptionHeading={null} />
+        {!job.description && !job.requirements_text && (
+          <p className="muted">Описание вакансии не предоставлено.</p>
+        )}
+      </section>
+      {matchSection}
       {notesControl ??
         ((application.note || application.next_action) && (
           <section className="crm-notes">
@@ -60,7 +76,6 @@ export function ApplicationView({
             )}
           </section>
         ))}
-      <JobText job={job} />
       {historySection}
     </article>
   );

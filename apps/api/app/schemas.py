@@ -574,6 +574,38 @@ class MatchRecommendationOut(BaseModel):
     primary_reason: MatchReasonOut | None = None
 
 
+MatchExplanationCode = Literal[
+    "job_skills_missing", "job_skills_unavailable", "profile_skills_missing",
+    "job_languages_missing", "job_languages_unavailable",
+    "language_requirement_unparseable", "profile_language_level_unknown",
+    "job_role_missing", "profile_roles_missing",
+    "job_seniority_unknown", "profile_seniority_unknown",
+    "job_workplace_unknown", "workplace_any",
+    "remote_location_not_compared", "location_not_compared",
+    "job_location_missing", "profile_locations_missing",
+    "job_salary_missing", "profile_salary_missing",
+    "job_salary_currency_missing", "profile_salary_currency_missing",
+    "salary_currencies_incompatible", "job_salary_period_unknown",
+    "profile_salary_period_unknown", "salary_period_inferred", "salary_not_comparable",
+]
+
+
+class MatchExplanationItemOut(BaseModel):
+    code: MatchExplanationCode
+    source: Literal["profile", "job", "comparison"]
+    value: str | None = None
+
+
+class MatchComponentExplanationOut(BaseModel):
+    notices: list[MatchExplanationItemOut] = Field(default_factory=list)
+    unknown_items: list[MatchExplanationItemOut] = Field(default_factory=list)
+
+
+class MatchExplainabilityOut(BaseModel):
+    schema_version: Literal[1] = 1
+    components: dict[str, MatchComponentExplanationOut]
+
+
 class MatchResultOut(BaseModel):
     algorithm_version: str
     application_id: int
@@ -589,6 +621,7 @@ class MatchResultOut(BaseModel):
     unknowns: list[MatchReasonOut]
     conflicts: list[MatchReasonOut]
     recommendation: MatchRecommendationOut
+    explainability: MatchExplainabilityOut | None = None
 
 
 class MatchPreviewOut(BaseModel):

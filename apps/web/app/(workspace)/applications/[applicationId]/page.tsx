@@ -46,7 +46,9 @@ export default async function Page({
         ← К моим вакансиям
       </Link>
       <ApplicationStatusDetail
+        key={detail.application.id}
         detail={detail}
+        matchApplicationId={detail.application.id}
         telegramLinked={identity.user?.telegram_linked}
       />
     </>

@@ -1,3 +1,5 @@
+import Link from "next/link";
+import { MatchSummary } from "./match-summary";
 import type { ApplicationDetail, Preview, Reason } from "../lib/contracts";
 import { compactLocation } from "../lib/presentation";
 export { statusLabels } from "../lib/application-presentation";
@@ -118,12 +120,18 @@ function SourceText({ text }: { text: string }) {
     </details>
   );
 }
-export function JobText({ job }: { job: ApplicationDetail["job"] }) {
+export function JobText({
+  job,
+  descriptionHeading = "О вакансии",
+}: {
+  job: ApplicationDetail["job"];
+  descriptionHeading?: string | null;
+}) {
   return (
     <div className="job-content">
       {job.description && (
         <section>
-          <h3>О вакансии</h3>
+          {descriptionHeading && <h3>{descriptionHeading}</h3>}
           <SourceText text={job.description} />
         </section>
       )}
@@ -180,18 +188,6 @@ function ReasonText({ reason }: { reason: Reason }) {
   );
 }
 export function Matching({ preview }: { preview: Preview }) {
-  const verdicts: Record<string, string> = {
-    high: "Высокое соответствие",
-    medium: "Среднее соответствие",
-    low: "Низкое соответствие",
-    insufficient_data: "Недостаточно данных",
-  };
-  const recommendations: Record<string, string> = {
-    apply: "Можно откликнуться",
-    apply_with_risks: "Отклик с учётом рисков",
-    unlikely_fit: "Вероятно, не подходит",
-    insufficient_data: "Для рекомендации недостаточно данных",
-  };
   return (
     <section
       className={`matching ${!preview.available || preview.verdict === "insufficient_data" ? "matching-muted" : ""}`}
@@ -205,38 +201,22 @@ export function Matching({ preview }: { preview: Preview }) {
           <p className="match-verdict">Оценка пока недоступна</p>
           <p>
             {preview.unavailable_reason === "profile_missing_for_preview"
-              ? "Для оценки нужен профиль. Настройте его в Telegram — поиск и сохранение уже доступны."
+              ? "Для оценки нужен профиль. Заполните его на сайте — поиск и сохранение уже доступны."
               : "Предварительная оценка недоступна."}
           </p>
+          {preview.unavailable_reason === "profile_missing_for_preview" && (
+            <Link className="text-link match-profile-link" href="/profile">
+              Редактировать профиль →
+            </Link>
+          )}
         </div>
       ) : (
         <>
-          <p className="match-score">
-            {preview.score != null && (
-              <strong>
-                {preview.score}
-                <small>/100</small>{" "}
-              </strong>
-            )}
-            {preview.verdict && (verdicts[preview.verdict] ?? "Оценка API")}
+          <MatchSummary {...preview} />
+          <p className="match-helper">
+            Предварительное сравнение по данным источника. Требования к навыкам
+            и языкам здесь не оцениваются.
           </p>
-          <div className="metadata">
-            {preview.coverage != null && (
-              <span>Для оценки доступно {preview.coverage}% данных.</span>
-            )}
-            {preview.confidence && (
-              <span>
-                Уверенность:{" "}
-                {(
-                  {
-                    high: "высокая",
-                    medium: "средняя",
-                    low: "низкая",
-                  } as Record<string, string>
-                )[preview.confidence] ?? preview.confidence}
-              </span>
-            )}
-          </div>
           <div className="reason-groups">
             {(
               [
@@ -263,18 +243,6 @@ export function Matching({ preview }: { preview: Preview }) {
                 ),
             )}
           </div>
-          {preview.recommendation && (
-            <p className="recommendation">
-              {recommendations[preview.recommendation.code] ??
-                "Рекомендация API"}
-              {preview.recommendation.primary_reason && (
-                <>
-                  .{" "}
-                  <ReasonText reason={preview.recommendation.primary_reason} />
-                </>
-              )}
-            </p>
-          )}
         </>
       )}
     </section>
