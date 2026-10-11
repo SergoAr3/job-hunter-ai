@@ -13,6 +13,10 @@ Profile/Job DTOs, extraction and CV preview still contain strings. The existing
 unchanged. Historical ApplicationMatchSnapshot inputs/results are not rebuilt.
 Web/Bot production code and public DTOs are unchanged. No Match UI is added.
 
+The offline [Matching Shadow Comparator v1](matching-shadow-comparator-v1.md)
+compares legacy, occurrence-preserving hybrid and distinct relational views using
+bounded read-only transactions. It does not activate Foundation scoring.
+
 ## Schema
 
 | Table | Identity and constraints |
