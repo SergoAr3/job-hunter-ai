@@ -114,7 +114,9 @@ it("expands API reasons without deriving a score or verdict", () => {
     />,
   );
   expect(
-    screen.getByText("Для оценки доступно 25% данных."),
+    screen.getByText(
+      "Для оценки удалось сравнить критерии с суммарным весом 25%.",
+    ),
   ).toBeInTheDocument();
   fireEvent.click(screen.getByText(/Различия · 1/));
   expect(screen.getByText("Роль не совпадает: Python")).toBeVisible();

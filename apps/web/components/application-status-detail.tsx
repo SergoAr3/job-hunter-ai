@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import Link from "next/link";
 import type {
   ApplicationDetail,
@@ -12,13 +12,16 @@ import { ApplicationView } from "./application-detail";
 import { ApplicationHistory } from "./application-history";
 import { ApplicationNotesEditor } from "./application-notes-editor";
 import { StatusSelect } from "./status-select";
+import { ApplicationMatch } from "./application-match";
 
 export function ApplicationStatusDetail({
   detail: initial,
   telegramLinked,
+  matchApplicationId,
 }: {
   detail: ApplicationDetail;
   telegramLinked?: boolean;
+  matchApplicationId?: number;
 }) {
   const [detail, setDetail] = useState(initial);
   const [selected, setSelected] = useState(
@@ -212,10 +215,12 @@ export function ApplicationStatusDetail({
     );
 
   const busy = pending !== "idle";
-  return (
+  const renderView = (matchSummary?: ReactNode, matchSection?: ReactNode) => (
     <ApplicationView
       detail={detail}
       statusUnconfirmed={uncertain}
+      matchSection={matchSection}
+      matchSummary={matchSummary}
       notesControl={
         <ApplicationNotesEditor
           application={detail.application}
@@ -313,5 +318,12 @@ export function ApplicationStatusDetail({
         </div>
       }
     />
+  );
+  return matchApplicationId === undefined ? (
+    renderView()
+  ) : (
+    <ApplicationMatch applicationId={matchApplicationId}>
+      {({ summary, details }) => renderView(summary, details)}
+    </ApplicationMatch>
   );
 }

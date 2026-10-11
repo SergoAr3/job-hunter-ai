@@ -90,7 +90,8 @@ Paths in this inventory omit the common `/users/{user_id}` prefix.
 | PUT `/applications/{application_id}/status`; GET `/applications/{application_id}/status-history` | shared Web/Bot | owned application → history/snapshot |
 | PUT/DELETE `/applications/{application_id}/note` | Bot-only | owned application |
 | PUT/DELETE `/applications/{application_id}/next-action` | Bot-only | owned application |
-| GET `/applications/{application_id}/match`; POST `/applications/{application_id}/cover-letter` | Bot-only | owned application → job/profile |
+| GET `/applications/{application_id}/match` | shared Web/Bot | owned application → job/profile |
+| POST `/applications/{application_id}/cover-letter` | Bot-only | owned application → job/profile |
 | GET `/applications/follow-ups`; GET `/applications/learning-summary`; GET `/applications/match-learning-summary` | Bot-only | authorized User; all aggregate queries scoped to User |
 | POST `/users/telegram` (no common prefix) | Bot-only identity resolver | mandatory service credential; Telegram ID taken from trusted Bot |
 | GET `/health`; POST `/profile/skills/normalize`, `/profile/languages/normalize`, `/cover-letter/language` | public/shared utilities | no account identity or user data access |

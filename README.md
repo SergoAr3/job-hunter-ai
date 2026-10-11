@@ -14,6 +14,7 @@ Job Hunter AI — персональное пространство для по�
 
 - Web-раздел `/applications`: сохранённые вакансии, поиск по названию или компании, фильтр по статусу, сортировка и пагинация.
 - Карточка `/applications/{applicationId}`: детали вакансии, изменение статуса и история статусов, загружаемая при раскрытии блока. Web подтверждает изменение повторным чтением из API после `PUT`.
+- Карточка показывает текущую оценку соответствия профилю: обязательные и желательные навыки, другие критерии и неизвестные данные. Подробнее: [Match UI v1](docs/match-ui-v1.md).
 - В Telegram доступны список откликов и работа со статусами; API также хранит заметки и следующие действия по откликам.
 
 ### Профиль и Telegram
@@ -35,7 +36,7 @@ Browser  → Web ─┘       ├→ OpenAI API
 Matching Foundation v1 добавляет внутренний derived слой `Skill`/`SkillAlias` и
 связи `UserSkill`/`JobSkill` поверх сохранённых semantic JSON skills. Profile PUT,
 CV Apply и Job AI enrichment синхронизируют связи атомарно. Текущий matcher
-`job-match-v2.1` продолжает читать прежние поля; Match UI ещё не добавлен.
+`job-match-v2.1` продолжает читать прежние поля; Match UI объясняет именно его текущий результат.
 [Matching Foundation v1](docs/matching-foundation-v1.md) описывает normalization,
 migration, bounded backfill и rollback.
 

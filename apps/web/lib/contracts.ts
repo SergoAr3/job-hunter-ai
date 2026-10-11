@@ -1,4 +1,13 @@
 // Display contracts mirror apps/api/app/schemas.py. Domain decisions stay in FastAPI.
+export type {
+  MatchResult,
+  MatchComponent,
+  MatchReason,
+  MatchExplainability,
+  MatchInputState,
+  MatchRecommendation,
+} from "./match-contract";
+import type { MatchVerdict, MatchConfidence } from "./match-contract";
 export interface Reason {
   code: string;
   component: string;
@@ -8,9 +17,9 @@ export interface Preview {
   available: boolean;
   unavailable_reason?: string | null;
   score: number | null;
-  verdict: string | null;
+  verdict: MatchVerdict | null;
   coverage: number | null;
-  confidence: string | null;
+  confidence: MatchConfidence | null;
   strengths: Reason[];
   gaps: Reason[];
   unknowns: Reason[];

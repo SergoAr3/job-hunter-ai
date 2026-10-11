@@ -1,6 +1,7 @@
 import "server-only";
 import { getDomainIdentity } from "./auth";
 import { WebError } from "../errors";
+import { projectMatchResult } from "../match-contract";
 import type {
   ReminderFields,
   FollowUpsPage,
@@ -67,6 +68,7 @@ async function request(
       "source_identity_conflict",
       "USER_NOT_FOUND",
       "APPLICATION_NOT_FOUND",
+      "PROFILE_REQUIRED",
       "REMINDER_ACTION_REQUIRED",
       "REMINDER_TIMEZONE_INVALID",
       "REMINDER_DATETIME_INVALID",
@@ -78,7 +80,8 @@ async function request(
       "REMINDER_LEGACY_CONFLICT",
     ];
     throw new WebError(
-      known.includes(code)
+      known.includes(code) &&
+        (code !== "PROFILE_REQUIRED" || response.status === 409)
         ? code
         : body && response.status >= 500
           ? ambiguous
@@ -251,6 +254,14 @@ export async function getApplication(id: string) {
     throw new WebError("APPLICATION_NOT_FOUND", 404);
   return publicDetail(
     (await request(`applications/${id}`)) as ApplicationDetail,
+  );
+}
+export async function getApplicationMatch(id: string) {
+  if (!/^[1-9]\d*$/.test(id) || !Number.isSafeInteger(Number(id)))
+    throw new WebError("APPLICATION_NOT_FOUND", 404);
+  return projectMatchResult(
+    await request(`applications/${id}/match`),
+    Number(id),
   );
 }
 export async function getApplicationStatusHistory(
