@@ -1,7 +1,10 @@
 import logging
 
+from sqlalchemy.orm import Session, object_session
+
 from app.models import Application, Job, UserProfile
-from app.services.job_matching import calculate_match, serialize_match_inputs
+from app.services.job_matching import serialize_match_inputs
+from app.services.match_dispatch import calculate_current_match
 
 
 logger = logging.getLogger(__name__)
@@ -21,14 +24,16 @@ def prepare_match_snapshot(
     profile: UserProfile | None,
     job: Job,
     application: Application,
+    *, session: Session | None = None,
 ) -> dict[str, object]:
     """Prepare one immutable captured result or an explicit unavailable marker."""
     if profile is None:
         return _unavailable("profile_missing")
 
     try:
+        result = calculate_current_match(session if session is not None else object_session(profile),
+                                         profile, job, application)
         inputs = serialize_match_inputs(profile, job)
-        result = calculate_match(profile, job, application)
     except Exception:
         logger.exception(
             "Could not calculate first-applied match snapshot",

@@ -1,9 +1,9 @@
-# Frozen Matcher Alias Policy for future v2.2
+# Frozen Matcher Alias Policy for v2.2
 
-This prepares identity semantics only. Production `job-match-v2.1`, scoring,
-MatchResult, GET, Web/Bot, Discover, cover letters and snapshot captures are
-unchanged. No dispatcher, fallback, replay or v2.2 activation is implemented.
-The shadow comparator retains its existing registry-based hybrid diagnostics.
+This defines frozen identity semantics. The default-off production candidate is
+now implemented in [Job Match v2.2](job-match-v22.md): production still defaults
+to `job-match-v2.1`, with explicit config opt-in for v2.2. The shadow comparator
+retains its existing registry-based hybrid diagnostics.
 
 ## Two different authorities
 
@@ -28,7 +28,8 @@ Policy changes require a new matcher version and preservation of old policies.
 - `canonicalize_matcher_skill(value, algorithm_version=...)`;
 - `equivalent_matcher_skills(left, right, algorithm_version=...)`.
 
-The explicit default is future `job-match-v2.2`, not the newest registry/policy.
+The pure helper's explicit default is `job-match-v2.2`, not the newest registry/policy;
+this does not change the production config default of `job-match-v2.1`.
 Identities are canonical normalized strings, not integer Skill IDs. This keeps
 them reproducible across database rebuilds and avoids a second policy-code
 namespace: `postgresql`, `javascript`, `rest api`, `node.js`, `react`.
@@ -83,7 +84,8 @@ allowed and do not change policy results.
 The helper disables autoflush, performs no bootstrap/resolution/sync/flush/commit
 and neither owns nor closes the caller's transaction. The caller supplies its
 consistent read transaction. DB execution failures propagate without logging;
-the future execution boundary must handle rollback and privacy-safe errors.
+the candidate execution boundary protects caller transactions with a read savepoint
+and emits privacy-safe bounded fallback codes.
 
 Compatibility is scoped to the frozen namespace, not a global taxonomy health
 certificate. It does not check UserSkill/JobSkill drift or unknown exact keys.
@@ -93,9 +95,9 @@ identities to decide membership, not unrestricted equality of integer DB IDs.
 Referenced mappings outside the frozen namespace and owner associations require
 their own policy-aware consistency check before any relational optimization.
 
-## Future fallback and historical semantics
+## Candidate fallback and historical semantics
 
-The future contract is:
+The implemented default-off contract is:
 
 `configured v2.2 -> validate policy/registry and owner consistency -> hybrid`
 
@@ -103,14 +105,15 @@ Missing/incompatible registry or stale associations must lead to a **full v2.1
 fallback**, with `algorithm_version=job-match-v2.1`. No partially mixed result.
 Semantic inputs must remain available after a DB read failure; the dispatcher
 must respect transaction ownership, including existing snapshot write sessions.
-These components are not implemented here.
+These components are implemented by the default-off dispatcher and owner reader;
+see [candidate transaction and fallback contract](job-match-v22.md).
 
-Future hybrid keeps semantic occurrences authoritative: original labels/order,
+Hybrid keeps semantic occurrences authoritative: original labels/order,
 duplicates and required/preferred denominators remain unchanged. Only membership
 uses frozen policy identity; weights, availability and all score math stay as
 before. Direct distinct scoring is outside this contract.
 
-A future snapshot's `algorithm_version=job-match-v2.2`, immutable semantic inputs
+A captured snapshot's `algorithm_version=job-match-v2.2`, immutable semantic inputs
 and preserved frozen evaluator together determine identity semantics without
 the current registry. Policy alone is not a complete scorer/replay implementation.
 Old snapshots remain untouched. No migration or taxonomy history/revision tables

@@ -17,10 +17,11 @@ The offline [Matching Shadow Comparator v1](matching-shadow-comparator-v1.md)
 compares legacy, occurrence-preserving hybrid and distinct relational views using
 bounded read-only transactions. It does not activate Foundation scoring.
 
-The [frozen matcher policy for future v2.2](matcher-frozen-policy-v22.md) owns
+The [frozen matcher policy for v2.2](matcher-frozen-policy-v22.md) owns
 versioned scoring equivalence separately from mutable Foundation taxonomy.
 It adds pure identity helpers and a read-only compatibility audit without changing
-the resolver, production matcher or shadow comparator.
+the resolver or shadow comparator. The [default-off v2.2 candidate](job-match-v22.md)
+now uses these helpers after owner validation; production default stays v2.1.
 
 ## Schema
 

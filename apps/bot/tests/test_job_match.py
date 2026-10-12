@@ -145,6 +145,39 @@ class FakeApi:
         return self.match
 
 
+def test_v22_dto_compatible_with_saved_match_handler_and_formatters() -> None:
+    # Same public DTO; version never changes Bot-side skill identity or rendering.
+    legacy = {
+        "algorithm_version": "job-match-v2.1", "application_id": 42, "job_id": 2,
+        "score": 100, "verdict": "high", "coverage": 65, "confidence": "medium",
+        "input_state": {"profile_updated_at": None, "job_updated_at": None,
+                        "parsing_status": "success", "ai_enrichment_status": "success"},
+        "components": {name: {"weight": weight, "score": 100 if name in {"role", "required_skills", "seniority"} else None,
+                              "status": "matched" if name in {"role", "required_skills", "seniority"} else "unknown",
+                              "matched": ["NodeJS"] if name == "required_skills" else [], "missing": []}
+                       for name, weight in (("role", 20), ("required_skills", 30), ("nice_to_have_skills", 5),
+                                            ("seniority", 15), ("languages", 10), ("workplace", 5), ("location", 5), ("salary", 10))},
+        "strengths": [{"code": "required_skill_listed", "component": "required_skills", "value": "NodeJS"}],
+        "gaps": [], "unknowns": [], "conflicts": [],
+        "recommendation": {"code": "apply", "primary_reason": None}, "explainability": None,
+    }
+    candidate = {**legacy, "algorithm_version": "job-match-v2.2"}
+    assert format_match_message(candidate) == format_match_message(legacy)
+    assert format_match_details(candidate) == format_match_details(legacy)
+    assert "NodeJS" in format_match_details(candidate)
+
+    async def scenario():
+        storage, current_state = state()
+        message = FakeMessage()
+        api = FakeApi(candidate)
+        await current_state.update_data({ACTIVE_MATCH_MESSAGE_ID: message.message_id})
+        await handle_match_callback(FakeCallback(f"{MATCH_DETAILS_PREFIX}42", message), current_state, api)
+        assert api.match_calls == 1
+        assert message.edits and "NodeJS" in message.edits[0][0]
+        await storage.close()
+    asyncio.run(scenario())
+
+
 class DelayedMatchApi(FakeApi):
     def __init__(self, match: object | None = None) -> None:
         super().__init__(match)

@@ -114,7 +114,7 @@ export interface MatchRecommendation {
   primary_reason: MatchReason | null;
 }
 export interface MatchResult {
-  algorithm_version: "job-match-v2.1";
+  algorithm_version: "job-match-v2.1" | "job-match-v2.2";
   application_id: number;
   job_id: number;
   score: number | null;
@@ -221,7 +221,7 @@ export function projectMatchResult(
   const state = object(v.input_state);
   const recommendation = object(v.recommendation);
   const result: MatchResult = {
-    algorithm_version: member(v.algorithm_version, ["job-match-v2.1"]),
+    algorithm_version: member(v.algorithm_version, ["job-match-v2.1", "job-match-v2.2"]),
     application_id: number(v.application_id, 1, Number.MAX_SAFE_INTEGER),
     job_id: number(v.job_id, 1, Number.MAX_SAFE_INTEGER),
     score: v.score === null ? null : number(v.score, 0, 100),

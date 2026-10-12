@@ -170,6 +170,13 @@ binding cookie: terminal response одной вкладки не удаляет 
 
 ## Matching Foundation v1: bounded reconciliation
 
+Current saved matching по умолчанию остаётся `job-match-v2.1`.
+`MATCH_ALGORITHM_VERSION=job-match-v2.2` — явный opt-in API для hybrid candidate;
+не включайте его в persisted env для обычного локального запуска. Для rollback
+выберите `job-match-v2.1` и перезапустите существующий API; миграции и historical
+snapshots не меняются. Discover preview всегда legacy.
+Контракт и конечные тесты: [docs/job-match-v22.md](docs/job-match-v22.md).
+
 Новая DDL migration `20261009_20` создаёт derived skill tables; существующие JSON
 skills и matcher `job-match-v2.1` сохраняются. Примените migration обычным способом
 до использования новых write paths. Migration не выполняет backfill. Маленький

@@ -652,7 +652,7 @@ def set_application_status(
                     profile = session.scalar(
                         select(UserProfile).where(UserProfile.user_id == user_id)
                     )
-                    snapshot_values = prepare_match_snapshot(profile, job, application)
+                    snapshot_values = prepare_match_snapshot(profile, job, application, session=session)
 
             application.status = status.value
             history = ApplicationStatusHistory(
