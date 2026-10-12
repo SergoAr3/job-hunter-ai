@@ -5,6 +5,10 @@ and Job inputs. Production `job-match-v2.1`, endpoints, MatchResult, Web/Bot,
 Discover, historical snapshots and Foundation sync are unchanged. No migrations,
 new dependencies, startup tasks, workers or production activation are involved.
 
+The separate [frozen matcher policy for future v2.2](matcher-frozen-policy-v22.md)
+does not change this comparator. Its current hybrid remains a registry-based
+diagnostic view, not an activated frozen-policy scorer.
+
 ## Views
 
 * **Legacy** uses the actual pure v2.1 core. Each semantic job occurrence is one
