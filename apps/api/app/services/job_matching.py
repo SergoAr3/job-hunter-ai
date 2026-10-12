@@ -60,7 +60,7 @@ class _MatchCoreResult:
 
 
 def serialize_match_inputs(profile: UserProfile, job: Job) -> dict[str, object]:
-    """Serialize only the factual Profile and Job fields consumed by Matching v2.1."""
+    """Serialize factual Profile/Job inputs shared by saved matching versions."""
     return {
         "profile": {
             "target_roles": list(profile.target_roles),
@@ -105,6 +105,16 @@ def canonical_skill(value: str) -> str:
 
 
 def calculate_match(profile: UserProfile, job: Job, application: Application) -> MatchResultOut:
+    """Frozen legacy entry point, also used by the offline comparator."""
+    return _calculate_saved_match(profile, job, application, algorithm_version=ALGORITHM_VERSION)
+
+
+def _calculate_saved_match(
+    profile: UserProfile, job: Job, application: Application, *,
+    algorithm_version: str,
+    skill_components: dict[str, MatchComponentOut] | None = None,
+) -> MatchResultOut:
+    """Share aggregation/reasons; candidate supplies both validated skill buckets."""
     ai_evidence_available = job.ai_enrichment_status == "success"
     core = _calculate_match_core(
         profile,
@@ -114,9 +124,10 @@ def calculate_match(profile: UserProfile, job: Job, application: Application) ->
             languages=ai_evidence_available,
             location=job.workplace_type in {"onsite", "hybrid"},
         ),
+        skill_components=skill_components,
     )
     return MatchResultOut(
-        algorithm_version=ALGORITHM_VERSION,
+        algorithm_version=algorithm_version,
         application_id=application.id,
         job_id=job.id,
         score=core.score,
@@ -165,14 +176,20 @@ def _calculate_match_core(
     profile: UserProfile,
     job: Job,
     evidence: MatchEvidenceAvailability,
+    *,
+    skill_components: dict[str, MatchComponentOut] | None = None,
 ) -> _MatchCoreResult:
     components: dict[str, MatchComponentOut] = {}
     conflicts: list[MatchReasonOut] = []
 
     components["role"] = _role_component(profile.target_roles, job.title)
 
-    components["required_skills"] = _skills_component(profile.skills, job.required_skills, evidence.skills, "required_skills")
-    components["nice_to_have_skills"] = _skills_component(profile.skills, job.nice_to_have_skills, evidence.skills, "nice_to_have_skills")
+    if skill_components is None:
+        components["required_skills"] = _skills_component(profile.skills, job.required_skills, evidence.skills, "required_skills")
+        components["nice_to_have_skills"] = _skills_component(profile.skills, job.nice_to_have_skills, evidence.skills, "nice_to_have_skills")
+    else:
+        components["required_skills"] = skill_components["required_skills"]
+        components["nice_to_have_skills"] = skill_components["nice_to_have_skills"]
 
     components["seniority"] = _seniority_component(profile.experience, job.seniority)
     components["languages"] = _languages_component(profile.languages, job.language_requirements, evidence.languages)

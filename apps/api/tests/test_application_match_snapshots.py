@@ -301,10 +301,10 @@ def test_matcher_exception_creates_unavailable_without_losing_applied(
     _full_profile(user_id)
     application_id, _ = _full_application(user_id)
 
-    def fail(*args: object) -> None:
+    def fail(*args: object, **kwargs: object) -> None:
         raise RuntimeError("matcher failed")
 
-    monkeypatch.setattr("app.services.application_match_snapshots.calculate_match", fail)
+    monkeypatch.setattr("app.services.application_match_snapshots.calculate_current_match", fail)
 
     response = _set_status(user_id, application_id, "applied")
 

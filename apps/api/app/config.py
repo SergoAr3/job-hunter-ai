@@ -5,6 +5,11 @@ DATABASE_URL = os.getenv(
     "DATABASE_URL", "postgresql+psycopg://job_hunter:job_hunter@localhost:5432/job_hunter"
 )
 
+# Explicit opt-in only; never select the newest matcher implicitly.
+MATCH_ALGORITHM_VERSION = os.getenv("MATCH_ALGORITHM_VERSION", "job-match-v2.1")
+if MATCH_ALGORITHM_VERSION not in {"job-match-v2.1", "job-match-v2.2"}:
+    raise ValueError("unsupported_match_algorithm_version")
+
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-5-mini")
 OPENAI_TIMEOUT_SECONDS = float(os.getenv("OPENAI_TIMEOUT_SECONDS", "15"))

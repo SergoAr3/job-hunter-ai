@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session
 from app.config import COVER_LETTER_MAX_OUTPUT_TOKENS, COVER_LETTER_MODEL, COVER_LETTER_TIMEOUT_SECONDS, OPENAI_API_KEY
 from app.models import Job
 from app.services.applications import get_application_for_user
-from app.services.job_matching import calculate_match
+from app.services.match_dispatch import calculate_current_match
 from app.services.letter_languages import LANGUAGES, LanguageCode
 from app.services.profile_experience_facts import list_profile_experience_facts
 from app.services.user_profiles import UserNotFoundError, UserProfileNotFoundError, get_user_profile
@@ -240,12 +240,12 @@ def build_context(session: Session, user_id: int, application_id: int, selected_
     job = session.get(Job, application.job_id)
     if job is None:
         raise CoverLetterError("APPLICATION_NOT_FOUND")
+    match = calculate_current_match(session, profile, job, application)
     candidates, vacancy = _candidate_evidence(profile, session), _vacancy_evidence(job)
     if not any(item.kind in {"title", "description", "requirements", "required_skill"} for item in vacancy):
         raise CoverLetterError("INSUFFICIENT_JOB_INFORMATION")
     if not candidates:
         raise CoverLetterError("PROFILE_REQUIRED")
-    match = calculate_match(profile, job, application)
     matching = {key: [reason.model_dump() for reason in getattr(match, key)] for key in ("strengths", "gaps", "conflicts", "unknowns")}
     return CoverLetterContext(candidate_evidence=candidates, vacancy_evidence=vacancy, matching=matching, language=selected_language)
 

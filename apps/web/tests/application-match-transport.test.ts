@@ -13,6 +13,17 @@ const url = "http://localhost:3100/api/applications/42/match";
 const context = (applicationId = "42") => ({
   params: Promise.resolve({ applicationId }),
 });
+
+it.each(["job-match-v2.1", "job-match-v2.2"] as const)(
+  "accepts the explicit matcher version %s through the API route",
+  async (algorithm_version) => {
+    const fixture = { ...matchFixture(), algorithm_version };
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(Response.json(fixture)));
+    const response = await GET(new Request(url), context());
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual(fixture);
+  },
+);
 beforeEach(() => {
   vi.mocked(getDomainIdentity).mockResolvedValue({
     userId: "987",
@@ -118,6 +129,7 @@ it("sanitizes timeout and infrastructure error", async () => {
   }
 });
 it.each([
+  { algorithm_version: "job-match-v99" },
   { score: false },
   { score: null },
   { verdict: "invented" },

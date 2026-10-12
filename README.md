@@ -36,7 +36,10 @@ Browser  → Web ─┘       ├→ OpenAI API
 Matching Foundation v1 добавляет внутренний derived слой `Skill`/`SkillAlias` и
 связи `UserSkill`/`JobSkill` поверх сохранённых semantic JSON skills. Profile PUT,
 CV Apply и Job AI enrichment синхронизируют связи атомарно. Текущий matcher
-`job-match-v2.1` продолжает читать прежние поля; Match UI объясняет именно его текущий результат.
+`job-match-v2.1` остаётся production default и продолжает читать прежние поля.
+Hybrid [job-match-v2.2](docs/job-match-v22.md) включается только явным
+`MATCH_ALGORITHM_VERSION=job-match-v2.2`; при небезопасных данных полностью
+возвращается к v2.1. Match UI объясняет фактический результат выбранной версии.
 [Matching Foundation v1](docs/matching-foundation-v1.md) описывает normalization,
 migration, bounded backfill и rollback.
 

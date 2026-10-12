@@ -365,6 +365,8 @@ def _discover_item(
             parsing_status="partial",
             ai_enrichment_status="not_attempted",
         )
+        # Transient source evidence deliberately stays on the v2.1 preview
+        # contract, independently of current saved-match configuration.
         preview = calculate_match_preview(
             profile,
             transient_job,

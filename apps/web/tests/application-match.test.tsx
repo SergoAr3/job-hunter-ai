@@ -10,6 +10,18 @@ const response = (data: unknown, status = 200) =>
   Response.json(data, { status });
 afterEach(() => vi.unstubAllGlobals());
 
+it("renders v2.2 score, skill facts and unknowns with the same layout as v2.1", () => {
+  const legacy = matchFixture();
+  const first = render(<MatchFacts result={legacy} />);
+  const expected = first.container.innerHTML;
+  const candidate = { ...legacy, algorithm_version: "job-match-v2.2" as const };
+  first.rerender(<MatchFacts result={candidate} />);
+  expect(first.container.innerHTML).toBe(expected);
+  expect(screen.getByLabelText("Оценка 80 из 100")).toBeInTheDocument();
+  expect(screen.getByText("Kubernetes", { exact: true })).toBeInTheDocument();
+  expect(screen.getByText("Redis", { exact: true })).toBeInTheDocument();
+});
+
 it("auto-loads locally without blocking vacancy/CRM and renders facts once", async () => {
   let finish!: (value: Response) => void;
   vi.stubGlobal(
