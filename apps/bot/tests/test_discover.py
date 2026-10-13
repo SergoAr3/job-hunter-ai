@@ -404,7 +404,7 @@ def test_dispatcher_discover_lifecycle_and_stale_callbacks(monkeypatch) -> None:
             await main_module.dp.feed_update(bot, callback_update(f"discover:{list_token}:open:0", 93, message_id=active_message_id))
             assert "✅ Уже в моих вакансиях" in str(rendered[-1][1])
             saved_token = (await state.get_data())["discover_screen_token"]
-            bot_actor = User(id=987654, is_bot=True, first_name="Job Hunter AI")
+            bot_actor = User(id=987654, is_bot=True, first_name="Veylinq")
             await main_module.dp.feed_update(bot, callback_update(
                 f"discover:{saved_token}:applications", 94,
                 message_id=active_message_id, message_user=bot_actor,

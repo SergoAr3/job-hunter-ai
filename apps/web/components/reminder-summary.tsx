@@ -77,7 +77,7 @@ export function ReminderDeliveryStatus({
           : value.reminder_delivery_state === "sent"
             ? "Напоминание отправлено"
             : telegramLinked === false
-              ? "Запланировано только в Job Hunter AI"
+              ? "Запланировано только в Veylinq"
               : "Уведомление запланировано"}
       </span>
       {uncertain && (

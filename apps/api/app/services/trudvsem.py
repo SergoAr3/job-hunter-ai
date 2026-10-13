@@ -194,7 +194,7 @@ def map_vacancy(item: object, *, fetched_at: datetime) -> ExternalVacancy:
 
 
 def _urlopen_transport(url: str, timeout_seconds: float) -> tuple[int, bytes]:
-    request = Request(url, headers={"Accept": "application/json", "User-Agent": "JobHunterAI/1.0"})
+    request = Request(url, headers={"Accept": "application/json", "User-Agent": "Veylinq/1.0"})
     with urlopen(request, timeout=timeout_seconds) as response:
         content_length = response.headers.get("Content-Length")
         if content_length is not None:

@@ -40,17 +40,18 @@ def test_capture_requires_private_absolute_directory(tmp_path,monkeypatch):
     assert json.loads(file.read_text())["purpose"]=="verify"
 
 
-def test_smtp_tls_delivery_and_no_secret_logging(monkeypatch,caplog):
+@pytest.mark.parametrize("purpose,subject", [("verify", "Veylinq: confirm email"), ("reset", "Veylinq: reset password")])
+def test_smtp_tls_delivery_and_no_secret_logging(monkeypatch,caplog,purpose,subject):
     monkeypatch.setenv("AUTH_SMTP_HOST","smtp.example.com");monkeypatch.setenv("AUTH_MAIL_FROM","sender@example.com")
     monkeypatch.setenv("AUTH_SMTP_USERNAME","user");monkeypatch.setenv("AUTH_SMTP_PASSWORD","private-provider-secret")
     server=MagicMock();server.__enter__.return_value=server
     factory=MagicMock(return_value=server);monkeypatch.setattr(auth_mail.smtplib,"SMTP_SSL",factory)
-    mailer=auth_mail.SMTPMail();mailer.check();mailer.send("reset","user@example.com","https://jobs.example.com/reset-password#token=private")
+    mailer=auth_mail.SMTPMail();mailer.check();mailer.send(purpose,"user@example.com","https://jobs.example.com/reset-password#token=private")
     assert factory.call_args.kwargs["context"].check_hostname
     assert factory.call_args.kwargs["timeout"]==10
     server.login.assert_called_with("user","private-provider-secret")
     message=server.send_message.call_args.args[0]
-    assert message["To"]=="user@example.com" and "reset password" in message["Subject"]
+    assert message["To"]=="user@example.com" and message["Subject"]==subject
     assert "reset-password#token=private" in message.get_content()
     factory.side_effect=RuntimeError("private-provider-secret")
     with pytest.raises(auth.AuthError) as result: mailer.check()

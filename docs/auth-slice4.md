@@ -112,8 +112,8 @@ There is no async-only second `window.open`, and the client does not build a URL
 The original browser remains in compact waiting state with a secondary comparison
 code and fallback “Открыть Telegram”. Existing polling/completion and safe-next
 continue automatically. Expired/cancelled login offers retry. Linking retains its
-manual opening and password reauthentication flow. Bot login copy names Job Hunter
-AI and reports “Вход подтверждён. Вернитесь на сайт.” / “Вход отменён.”; ownership
+manual opening and password reauthentication flow. Bot login copy names Veylinq
+and reports “Вход подтверждён. Вернитесь на сайт.” / “Вход отменён.”; ownership
 checks and the warning to approve only an initiated request are unchanged.
 
 ## Validation record

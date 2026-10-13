@@ -49,7 +49,7 @@ async def handle_auth_start(message, state, api_client, payload):
     if info["status"] != "pending":
         await message.answer(INVALID)
         return
-    prompt_text = "Подтвердить вход в Job Hunter AI?" if info["purpose"] == "login" else "Подтвердить подключение Telegram к аккаунту на сайте?"
+    prompt_text = "Подтвердить вход в Veylinq?" if info["purpose"] == "login" else "Подтвердить подключение Telegram к аккаунту на сайте?"
     code = info["code"]
     markup = InlineKeyboardMarkup(inline_keyboard=[[
         InlineKeyboardButton(text="Подтвердить", callback_data=f"tga:a:{code}"),

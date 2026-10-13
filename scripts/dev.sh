@@ -145,7 +145,7 @@ wait_for_web() {
             wait "$web_pid" || true
             return 1
         fi
-        if curl --silent --fail --max-time 1 http://127.0.0.1:3100/login | grep '<title>Job Hunter AI</title>' >/dev/null; then
+        if curl --silent --fail --max-time 1 http://127.0.0.1:3100/login | grep '<title>Veylinq</title>' >/dev/null; then
             return 0
         fi
         sleep 1

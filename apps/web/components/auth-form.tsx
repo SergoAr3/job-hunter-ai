@@ -74,7 +74,7 @@ export function AuthForm({
   return (
     <div className="auth-card">
       <Link className="auth-brand" href="/">
-        Job Hunter AI
+        Veylinq
       </Link>
       <h1>{registering ? "Создать аккаунт" : "Войти"}</h1>
       <p>Ваш профиль и вакансии — в одном месте.</p>
