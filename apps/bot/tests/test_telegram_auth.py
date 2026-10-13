@@ -50,7 +50,7 @@ def test_dispatcher_deep_link_approval_cancel_replay_no_premature_user(monkeypat
             assert api.inspections==[TOKEN] and api.users==[]
             assert (await state.get_data())[KEY]["token"]==TOKEN
             assert "A1B2C3" in answers[-1][0]
-            assert ("вход в Job Hunter AI" if purpose=="login" else "подключение Telegram") in answers[-1][0]
+            assert ("вход в Veylinq" if purpose=="login" else "подключение Telegram") in answers[-1][0]
             markup=answers[-1][1]
             assert all(len(button.callback_data.encode())<=64 and TOKEN not in button.callback_data for row in markup.inline_keyboard for button in row)
             await main_module.dp.feed_update(bot,callback_update("tga:"+decision+":A1B2C3"))

@@ -543,7 +543,7 @@ function ApplicationFieldEditor({
                         ) : (
                           <>
                             Без Telegram это напоминание будет видно только в
-                            Job Hunter AI.
+                            Veylinq.
                             <br />
                             Подключите Telegram, чтобы получать уведомления.
                           </>

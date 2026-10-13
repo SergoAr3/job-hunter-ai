@@ -136,7 +136,7 @@ it("full unsaved draft has no persisted-remove button and calm disconnected help
   change(time(), "12:00");
   expect(remove()).not.toBeInTheDocument();
   const helper = screen.getByText(
-    /Без Telegram это напоминание будет видно только в Job Hunter AI/,
+    /Без Telegram это напоминание будет видно только в Veylinq/,
   );
   expect(helper).toHaveTextContent(
     "Подключите Telegram, чтобы получать уведомления.",
@@ -264,7 +264,7 @@ it.each(["pending", "claimed"] as const)(
       />,
     );
     expect(
-      screen.getByText("Запланировано только в Job Hunter AI"),
+      screen.getByText("Запланировано только в Veylinq"),
     ).toBeInTheDocument();
     expect(
       screen.queryByText("Уведомление запланировано"),
@@ -287,7 +287,7 @@ it("successful reminder Save exposes persisted removal on reopening", async () =
   );
   await save();
   expect(
-    screen.getByText("Запланировано только в Job Hunter AI"),
+    screen.getByText("Запланировано только в Veylinq"),
   ).toBeInTheDocument();
   fireEvent.click(screen.getByRole("button", { name: "Следующее действие" }));
   expect(remove()).toBeInTheDocument();
@@ -388,12 +388,12 @@ it("persisted reminder reveals immediately without duplicate date or schedule su
   expect(document.querySelector(".reminder-summary")).not.toBeInTheDocument();
   expect(document.querySelector(".reminder-delivery")).not.toBeInTheDocument();
   expect(
-    screen.queryByText("Запланировано только в Job Hunter AI"),
+    screen.queryByText("Запланировано только в Veylinq"),
   ).not.toBeInTheDocument();
   fireEvent.click(screen.getByRole("button", { name: "Следующее действие" }));
   expect(document.querySelector(".reminder-summary")).toBeVisible();
   expect(
-    screen.getByText("Запланировано только в Job Hunter AI"),
+    screen.getByText("Запланировано только в Veylinq"),
   ).toBeVisible();
   expect(screen.queryByText(/Без Telegram/)).not.toBeVisible();
 });

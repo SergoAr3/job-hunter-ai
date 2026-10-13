@@ -13,10 +13,10 @@ export default async function WorkspaceLayout({
       <aside className="sidebar">
         <Link className="brand" href="/dashboard">
           <span className="brand-mark" aria-hidden="true">
-            JH
+            VL
           </span>
           <span>
-            Job Hunter AI
+            Veylinq
             <span className="brand-subtitle">Поиск работы, по порядку</span>
           </span>
         </Link>

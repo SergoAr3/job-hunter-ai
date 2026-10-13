@@ -274,9 +274,9 @@ Git diff --check passed. No commit, push or PR.
 - Existing `pageAccess().user.telegram_linked` supplies the safe boolean to
   detail, Applications list and Dashboard presentation. No API fields,
   identifiers, client storage inference or additional requests were added.
-- An unlinked reminder draft explains that the schedule appears only in Job
-  Hunter AI and invites Telegram connection. Pending/claimed read state says
-  «Запланировано только в Job Hunter AI». Linked drafts say «Уведомление придёт в
+- An unlinked reminder draft explains that the schedule appears only in Veylinq
+  and invites Telegram connection. Pending/claimed read state says
+  «Запланировано только в Veylinq». Linked drafts say «Уведомление придёт в
   Telegram.» and read state says «Уведомление запланировано». Sent and failure
   wording is preserved. The timezone remains visible and muted.
 - Validation: targeted reminder/editor/list/transport/time suites **79 passed**;

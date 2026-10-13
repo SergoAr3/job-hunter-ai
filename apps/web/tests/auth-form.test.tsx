@@ -9,6 +9,7 @@ it.each(["login", "register"] as const)(
   "native accessible inputs use correct autocomplete for %s",
   (mode) => {
     render(<AuthForm mode={mode} next="/profile" />);
+    expect(screen.getByText("Veylinq")).toBeInTheDocument();
     expect(screen.getByLabelText("Email")).toHaveAttribute(
       "autocomplete",
       "email",

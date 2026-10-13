@@ -824,7 +824,7 @@ def test_save_uses_callback_user_not_bot_summary_message_author() -> None:
                 ACTIVE_PROFILE_PROMPT_MESSAGE_ID: bot_summary_message.message_id,
             }
         )
-        bot_summary_message.from_user = SimpleNamespace(id=999_999, first_name="Job Hunter Bot")
+        bot_summary_message.from_user = SimpleNamespace(id=999_999, first_name="Veylinq Bot")
         callback_user = SimpleNamespace(
             id=123, first_name="Анна", last_name=None, username="anna", language_code="ru"
         )

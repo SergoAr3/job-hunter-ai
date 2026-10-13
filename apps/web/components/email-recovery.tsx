@@ -188,7 +188,7 @@ export function EmailRecovery({
   return (
     <div className="auth-card">
       <Link className="auth-brand" href="/">
-        Job Hunter AI
+        Veylinq
       </Link>
       <h1>
         {mode === "verify"

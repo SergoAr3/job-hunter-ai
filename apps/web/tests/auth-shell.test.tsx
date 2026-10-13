@@ -12,6 +12,10 @@ it("keeps logout available on server outage without presenting dev identity", as
     await WorkspaceLayout({ children: <p>Сервис временно недоступен</p> }),
   );
   expect(screen.getByRole("button", { name: "Выйти" })).toBeInTheDocument();
+  expect(screen.getByRole("link", { name: /Veylinq/ })).toHaveAttribute(
+    "href", "/dashboard",
+  );
+  expect(screen.getByText("VL")).toHaveAttribute("aria-hidden", "true");
   expect(screen.queryByText("Локальный dev-аккаунт")).not.toBeInTheDocument();
 });
 it("no session offers login without presenting an account", async () => {

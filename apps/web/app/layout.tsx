@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import "./globals.css";
 export const metadata: Metadata = {
-  title: "Job Hunter AI",
+  title: "Veylinq",
   description: "Персональный поиск работы",
 };
 export default function Layout({ children }: { children: React.ReactNode }) {

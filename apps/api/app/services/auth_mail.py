@@ -64,7 +64,7 @@ class SMTPMail:
     def send(self, purpose, recipient, link):
         message = EmailMessage()
         message["From"], message["To"] = self.sender, recipient
-        message["Subject"] = "Job Hunter: confirm email" if purpose == "verify" else "Job Hunter: reset password"
+        message["Subject"] = "Veylinq: confirm email" if purpose == "verify" else "Veylinq: reset password"
         message.set_content(f"Open this link only if you requested it:\n{link}\nIf not, ignore this message.")
         with self.connection() as server:
             server.send_message(message)

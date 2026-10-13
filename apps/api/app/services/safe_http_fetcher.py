@@ -121,7 +121,7 @@ class SafeHttpFetcher:
                 host = f"[{host}]"
             if parsed.port and parsed.port != _default_port(parsed.scheme):
                 host = f"{host}:{parsed.port}"
-            request = f"GET {target} HTTP/1.1\r\nHost: {host}\r\nUser-Agent: JobHunterAI/1.0\r\nAccept: text/html,application/xhtml+xml\r\nAccept-Encoding: identity\r\nConnection: close\r\n\r\n"
+            request = f"GET {target} HTTP/1.1\r\nHost: {host}\r\nUser-Agent: Veylinq/1.0\r\nAccept: text/html,application/xhtml+xml\r\nAccept-Encoding: identity\r\nConnection: close\r\n\r\n"
             sock.sendall(request.encode("ascii"))
             response = http.client.HTTPResponse(sock)
             response.begin()
