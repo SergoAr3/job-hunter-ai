@@ -180,17 +180,31 @@ def test_generic_service_scopes_search_and_persistence_identity_by_source() -> N
             assert provider.queries == [DiscoverQuery("Backend", "RU", "77", 10, 0)]
             assert page.items[0].source == item.source
             assert page.items[0].already_saved_for_user is False
+            assert page.items[0].application_id is None
+            assert page.items[0].application_status is None
             saved = save_discovered_job(
                 session, user.id, source=item.source, source_scope=item.source_scope,
                 external_id=item.external_id, provider=provider, ai_service=DisabledAI(),
             )
             assert saved.job_created is True
             assert saved.job.source == item.source
+            assert (saved.job.source_scope, saved.job.external_id, saved.job.source_url) == (
+                item.source_scope, item.external_id, item.source_url
+            )
+            saved_id = saved.application.id
+            repeated = save_discovered_job(
+                session, user.id, source=item.source, source_scope=item.source_scope,
+                external_id=item.external_id, provider=provider, ai_service=DisabledAI(),
+            )
+            assert repeated.application.id == saved_id
+            assert not repeated.job_created and not repeated.application_created
             page = search_discover_jobs(
                 session, user.id, market_country="RU", query="Backend", limit=10, offset=0,
                 region_code=None, remote_only=False, provider=provider,
             )
             assert page.items[0].already_saved_for_user is True
+            assert page.items[0].application_id == saved_id
+            assert page.items[0].application_status == "saved"
         assert session.query(Job).count() == session.query(Application).count() == 2
 
 

@@ -16,6 +16,18 @@ import {
 import { compactLocation } from "../lib/presentation";
 const keyOf = (item: Vacancy) =>
   JSON.stringify([item.source, item.source_scope, item.external_id]);
+function reconcileSave(item: Vacancy, result?: SaveResult): Vacancy {
+  // A loaded search Application wins over an older mutation response. Only
+  // fill missing knowledge from a successful Save of this exact identity.
+  if (!result || item.application_id != null) return item;
+  return {
+    ...item,
+    already_saved_for_user: true,
+    application_id: result.application.id,
+    application_status: result.application
+      .status as Vacancy["application_status"],
+  };
+}
 function cardAccessibleName(item: Vacancy, items: Vacancy[], index: number) {
   const location = compactLocation(item.location);
   const name = [item.title, item.company, location].filter(Boolean).join(" — ");
@@ -33,11 +45,16 @@ export function Discover() {
   const [remote, setRemote] = useState(false);
   const [committed, setCommitted] = useState({ query: "", remote: false });
   const [page, setPage] = useState<DiscoverPage | null>(null);
-  const [selected, setSelected] = useState<Vacancy | null>(null);
+  const [selectedKey, setSelectedKey] = useState<string | null>(null);
+  const selected =
+    page?.items.find((item) => keyOf(item) === selectedKey) ?? null;
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [saveErrors, setSaveErrors] = useState<Record<string, string>>({});
-  const [saved, setSaved] = useState<Record<string, SaveResult>>({});
+  const [saveFeedback, setSaveFeedback] = useState<Record<string, boolean>>({});
+  // Outcomes only bridge a search that overlapped Save. Rendered Application
+  // state lives in page.items; this buffer resets when a new search starts.
+  const completedSaves = useRef<Record<string, SaveResult>>({});
   const [pending, setPending] = useState<string | null>(null);
   const generation = useRef(0);
   const saveLock = useRef(false);
@@ -55,8 +72,11 @@ export function Discover() {
     setCommitted({ query: text, remote: onlyRemote });
     setLoading(true);
     setError("");
-    setSelected(null);
+    setSelectedKey(null);
     setPage(null);
+    completedSaves.current = {};
+    setSaveFeedback({});
+    setSaveErrors({});
     try {
       const params = new URLSearchParams({
         query: text,
@@ -67,7 +87,13 @@ export function Discover() {
         signal: controller.signal,
       });
       if (generation.current !== current) return;
-      setPage(result);
+      setPage({
+        ...result,
+        items: result.items.map((item) =>
+          reconcileSave(item, completedSaves.current[keyOf(item)]),
+        ),
+      });
+      completedSaves.current = {};
     } catch (error) {
       if (generation.current === current) setError(errorMessage(error));
     } finally {
@@ -76,8 +102,9 @@ export function Discover() {
   }
   async function save(item: Vacancy) {
     const key = keyOf(item);
-    if (saveLock.current || item.already_saved_for_user || saved[key]) return;
+    if (saveLock.current || item.already_saved_for_user) return;
     saveLock.current = true;
+    const current = generation.current;
     setPending(key);
     setSaveErrors((previous) => ({ ...previous, [key]: "" }));
     try {
@@ -87,19 +114,37 @@ export function Discover() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ source, source_scope, external_id }),
       });
-      setSaved((previous) => ({ ...previous, [key]: result }));
-    } catch (error) {
-      setSaveErrors((previous) => ({
+      completedSaves.current[key] = result;
+      setPage(
+        (previous) =>
+          previous && {
+            ...previous,
+            items: previous.items.map((candidate) =>
+              keyOf(candidate) === key
+                ? reconcileSave(candidate, result)
+                : candidate,
+            ),
+          },
+      );
+      setSaveFeedback((previous) => ({
         ...previous,
-        [key]: errorMessage(error),
+        [key]: result.application_created,
       }));
+    } catch (error) {
+      if (generation.current === current)
+        setSaveErrors((previous) => ({
+          ...previous,
+          [key]: errorMessage(error),
+        }));
     } finally {
       saveLock.current = false;
       setPending(null);
     }
   }
   const selectionKey = selected ? keyOf(selected) : "";
-  const result = saved[selectionKey];
+  const savedNow = saveFeedback[selectionKey];
+  const applicationId = selected?.application_id;
+  const applicationStatus = selected?.application_status;
   return (
     <>
       <header className="page-heading">
@@ -214,65 +259,70 @@ export function Discover() {
                   </p>
                 </div>
               )}
-              {page.items.map((item, index) => (
-                <button
-                  className={`vacancy-card ${selected && keyOf(selected) === keyOf(item) ? "selected" : ""}`}
-                  key={keyOf(item)}
-                  aria-label={cardAccessibleName(item, page.items, index)}
-                  onClick={(event) => {
-                    selectedButton.current = event.currentTarget;
-                    setSelected(item);
-                    if (window.innerWidth <= 900) {
-                      requestAnimationFrame(() => {
-                        detailPanel.current?.focus();
-                        detailPanel.current?.scrollIntoView({ block: "start" });
-                      });
+              {page.items.map((item, index) => {
+                const status = item.application_status;
+                return (
+                  <button
+                    className={`vacancy-card ${selected && keyOf(selected) === keyOf(item) ? "selected" : ""}`}
+                    key={keyOf(item)}
+                    aria-label={cardAccessibleName(item, page.items, index)}
+                    onClick={(event) => {
+                      selectedButton.current = event.currentTarget;
+                      setSelectedKey(keyOf(item));
+                      if (window.innerWidth <= 900) {
+                        requestAnimationFrame(() => {
+                          detailPanel.current?.focus();
+                          detailPanel.current?.scrollIntoView({
+                            block: "start",
+                          });
+                        });
+                      }
+                    }}
+                    aria-pressed={
+                      selected ? keyOf(selected) === keyOf(item) : false
                     }
-                  }}
-                  aria-pressed={
-                    selected ? keyOf(selected) === keyOf(item) : false
-                  }
-                >
-                  <span className="card-main">
-                    <span className="card-heading">
-                      <span className="card-title">{item.title}</span>
-                      {selected && keyOf(selected) === keyOf(item) && (
-                        <span className="selection-mark" aria-label="Выбрана">
-                          ✓
-                        </span>
-                      )}
-                    </span>
-                    <span className="company">{item.company}</span>
-                    {!selected && item.description?.trim() ? (
-                      <span className="card-description">
-                        {item.description}
+                  >
+                    <span className="card-main">
+                      <span className="card-heading">
+                        <span className="card-title">{item.title}</span>
+                        {selected && keyOf(selected) === keyOf(item) && (
+                          <span className="selection-mark" aria-label="Выбрана">
+                            ✓
+                          </span>
+                        )}
                       </span>
-                    ) : null}
-                  </span>
-                  <span className="card-aside">
-                    <span className="salary">
-                      <Salary job={item} />
-                    </span>
-                    <span className="card-metadata">
-                      {item.location && (
-                        <span title={item.location}>
-                          {compactLocation(item.location)}
+                      <span className="company">{item.company}</span>
+                      {!selected && item.description?.trim() ? (
+                        <span className="card-description">
+                          {item.description}
                         </span>
-                      )}
-                      {workplace[item.workplace_type] && (
-                        <span className="workplace-pill">
-                          {workplace[item.workplace_type]}
-                        </span>
-                      )}
+                      ) : null}
                     </span>
-                    {(item.already_saved_for_user || saved[keyOf(item)]) && (
-                      <span className="badge saved-badge">
-                        В моих вакансиях
+                    <span className="card-aside">
+                      <span className="salary">
+                        <Salary job={item} />
                       </span>
-                    )}
-                  </span>
-                </button>
-              ))}
+                      <span className="card-metadata">
+                        {item.location && (
+                          <span title={item.location}>
+                            {compactLocation(item.location)}
+                          </span>
+                        )}
+                        {workplace[item.workplace_type] && (
+                          <span className="workplace-pill">
+                            {workplace[item.workplace_type]}
+                          </span>
+                        )}
+                      </span>
+                      {status && (
+                        <span className="badge saved-badge">
+                          {statusLabels[status] ?? status}
+                        </span>
+                      )}
+                    </span>
+                  </button>
+                );
+              })}
               <nav className="pagination" aria-label="Страницы результатов">
                 <button
                   disabled={page.offset === 0}
@@ -313,7 +363,7 @@ export function Discover() {
                   <button
                     className="mobile-back"
                     onClick={() => {
-                      setSelected(null);
+                      setSelectedKey(null);
                       requestAnimationFrame(() => {
                         selectedButton.current?.focus();
                         selectedButton.current?.scrollIntoView({
@@ -331,21 +381,22 @@ export function Discover() {
                     <JobMetadata job={selected} />
                   </header>
                   <div className="save-area">
-                    {result ? (
+                    {applicationId != null && applicationStatus != null ? (
                       <div role="status">
-                        <p className="badge saved-badge">
-                          {result.application_created
-                            ? "Вакансия сохранена"
-                            : "Вакансия уже была в ваших откликах"}
-                        </p>
+                        {savedNow !== undefined && (
+                          <p className="badge saved-badge">
+                            {savedNow
+                              ? "Вакансия сохранена"
+                              : "Вакансия уже была в ваших откликах"}
+                          </p>
+                        )}
                         <p>
                           Текущий статус:{" "}
-                          {statusLabels[result.application.status] ??
-                            result.application.status}
+                          {statusLabels[applicationStatus] ?? applicationStatus}
                         </p>
                         <Link
                           className="primary button-link"
-                          href={`/applications/${result.application.id}`}
+                          href={`/applications/${applicationId}`}
                         >
                           Открыть сохранённую вакансию →
                         </Link>

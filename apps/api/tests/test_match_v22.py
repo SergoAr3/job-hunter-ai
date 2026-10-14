@@ -429,7 +429,7 @@ def test_discover_stays_legacy_preview_under_v22_config(monkeypatch):
     monkeypatch.setattr(config, "MATCH_ALGORITHM_VERSION", "job-match-v2.2")
     monkeypatch.setattr("app.services.match_dispatch.read_hybrid_skills", Mock(side_effect=AssertionError("candidate called")))
     with TestSessionLocal() as session:
-        item = _discover_item(vacancy(), owners(session, pair)[0], False)
+        item = _discover_item(vacancy(), owners(session, pair)[0], None)
     assert item.preview_match.algorithm_version == "job-match-v2.1"
     assert item.preview_match.components["required_skills"].score is None
 
