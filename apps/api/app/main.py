@@ -87,7 +87,8 @@ from app.services.discover import (
     save_discovered_job,
     search_discover_jobs,
 )
-from app.services.trudvsem import TrudvsemClient, TrudvsemError
+from app.services.trudvsem import TrudvsemClient, TrudvsemProvider
+from app.services.vacancy_sources import SourceError
 from app.services.cv_profile_draft import (
     ERROR_AI_PROVIDER,
     ERROR_AI_TIMEOUT,
@@ -246,7 +247,7 @@ CV_DRAFT_ERROR_STATUS = {
 }
 
 
-def _discover_source_error(error: TrudvsemError) -> HTTPException:
+def _discover_source_error(error: SourceError) -> HTTPException:
     status_code = {
         "source_timeout": status.HTTP_504_GATEWAY_TIMEOUT,
         "source_rate_limited": status.HTTP_429_TOO_MANY_REQUESTS,
@@ -433,7 +434,7 @@ def discover_jobs(
             offset=offset,
             region_code=region_code,
             remote_only=remote_only,
-            client=trudvsem_client,
+            provider=TrudvsemProvider(trudvsem_client),
         )
     except UnsupportedMarketError as error:
         raise HTTPException(status_code=422, detail={"code": error.code}) from error
@@ -441,7 +442,7 @@ def discover_jobs(
         raise HTTPException(status_code=404, detail={"code": "USER_NOT_FOUND"}) from error
     except ValueError as error:
         raise HTTPException(status_code=422, detail={"code": "INVALID_DISCOVER_QUERY"}) from error
-    except TrudvsemError as error:
+    except SourceError as error:
         raise _discover_source_error(error) from error
 
 
@@ -458,7 +459,7 @@ def save_discover_job(
             source=payload.source,
             source_scope=payload.source_scope,
             external_id=payload.external_id,
-            client=trudvsem_client,
+            provider=TrudvsemProvider(trudvsem_client),
             ai_service=ai_enrichment_service,
         )
     except UnsupportedDiscoverSourceError as error:
@@ -469,7 +470,7 @@ def save_discover_job(
         raise HTTPException(status_code=409, detail={"code": error.code}) from error
     except ValueError as error:
         raise HTTPException(status_code=422, detail={"code": "INVALID_SOURCE_IDENTITY"}) from error
-    except TrudvsemError as error:
+    except SourceError as error:
         raise _discover_source_error(error) from error
     return SavedApplicationOut(
         job=JobOut.model_validate(result.job),

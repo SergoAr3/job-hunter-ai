@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 import re
 import socket
-from dataclasses import dataclass
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 from typing import Callable
@@ -11,13 +10,15 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode, urlsplit
 from urllib.request import Request, urlopen
 
+from app.services.vacancy_sources import DiscoverQuery, ExternalVacancy, SearchPage, SourceError
+
 
 BASE_URL = "https://opendata.trudvsem.ru/api/v1/vacancies"
 REMOTE_EMPLOYMENT = "Дистанционная (удаленная) работа"
 MAX_RESPONSE_BYTES = 8 * 1024 * 1024
 
 
-class TrudvsemError(Exception):
+class TrudvsemError(SourceError):
     code = "source_unavailable"
 
 
@@ -35,33 +36,6 @@ class TrudvsemBadResponseError(TrudvsemError):
 
 class TrudvsemVacancyNotFoundError(TrudvsemError):
     code = "vacancy_not_found"
-
-
-@dataclass(frozen=True)
-class ExternalVacancy:
-    source_scope: str
-    external_id: str
-    source_url: str
-    title: str
-    company: str
-    location: str | None
-    description: str | None
-    requirements_text: str | None
-    workplace_type: str
-    salary_text: str | None
-    salary_min: Decimal | None
-    salary_max: Decimal | None
-    salary_currency: str | None
-    source_updated_at: datetime | None
-    fetched_at: datetime
-
-
-@dataclass(frozen=True)
-class SearchPage:
-    items: list[ExternalVacancy]
-    total: int
-    limit: int
-    offset: int
 
 
 Transport = Callable[[str, float], tuple[int, bytes]]
@@ -148,6 +122,31 @@ class TrudvsemClient:
         return payload
 
 
+class TrudvsemProvider:
+    """Translate the internal contract to the existing official API client."""
+
+    source_key = "trudvsem"
+
+    def __init__(self, client: TrudvsemClient) -> None:
+        self._client = client
+
+    def supports_market(self, market_country: str) -> bool:
+        return market_country == "RU"
+
+    def search(self, query: DiscoverQuery) -> SearchPage:
+        if not self.supports_market(query.market_country):
+            raise ValueError("Unsupported search market")
+        return self._client.search(
+            query.keywords,
+            limit=query.limit,
+            offset=query.offset,
+            region_code=query.market_region,
+        )
+
+    def get_detail(self, source_scope: str, external_id: str) -> ExternalVacancy:
+        return self._client.get_detail(source_scope, external_id)
+
+
 def map_vacancy(item: object, *, fetched_at: datetime) -> ExternalVacancy:
     if not isinstance(item, dict) or not isinstance(item.get("vacancy"), dict):
         raise TrudvsemBadResponseError("Malformed vacancy wrapper")
@@ -175,6 +174,7 @@ def map_vacancy(item: object, *, fetched_at: datetime) -> ExternalVacancy:
     if salary_min is not None and salary_max is not None and salary_max < salary_min:
         salary_min = salary_max = None
     return ExternalVacancy(
+        source=TrudvsemProvider.source_key,
         source_scope=source_scope,
         external_id=external_id,
         source_url=source_url,

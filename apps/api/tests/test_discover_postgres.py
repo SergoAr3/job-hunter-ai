@@ -12,7 +12,8 @@ from sqlalchemy import delete, select
 from app.database import SessionLocal
 from app.models import Application, Job, User
 from app.services.discover import SourceIdentityConflictError, save_discovered_job
-from app.services.trudvsem import ExternalVacancy
+from app.services.trudvsem import TrudvsemProvider
+from app.services.vacancy_sources import ExternalVacancy
 from test_discover_api import StubClient, vacancy
 
 
@@ -68,7 +69,7 @@ def test_concurrent_manual_url_attachment_never_silently_overwrites_identity() -
                     source="trudvsem",
                     source_scope=item.source_scope,
                     external_id=item.external_id,
-                    client=ConcurrentClient([item]),
+                    provider=TrudvsemProvider(ConcurrentClient([item])),
                     ai_service=DisabledAI(),  # type: ignore[arg-type]
                 )
                 return "saved"
