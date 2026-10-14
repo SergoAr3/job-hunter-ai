@@ -73,12 +73,12 @@ def search_discover_jobs(
         )
     )
     vacancies = [item for item in page.items if not remote_only or item.workplace_type == "remote"]
-    saved = _saved_identity_keys(session, user_id, vacancies)
+    saved = _saved_applications(session, user_id, vacancies)
     items = [
         _discover_item(
             vacancy,
             profile,
-            _identity_key(vacancy) in saved or normalize_source_url(vacancy.source_url) in saved,
+            saved.get(_identity_key(vacancy)),
         )
         for vacancy in vacancies
     ]
@@ -112,9 +112,21 @@ def save_discovered_job(
 
     vacancy = provider.get_detail(source_scope, external_id)
     try:
+        if session.get_bind().dialect.name == "sqlite":
+            # Reserve SQLite's writer before the identity SELECT: a deferred
+            # read transaction cannot safely upgrade when another Save writes.
+            # The outer transaction also keeps nested inserts rollback-safe.
+            connection = session.connection()
+            if not connection.connection.driver_connection.in_transaction:
+                connection.exec_driver_sql("BEGIN IMMEDIATE")
+            else:
+                # Engines that already BEGIN need a write reservation too.
+                # This changes no rows and happens before any identity read.
+                connection.exec_driver_sql("UPDATE jobs SET id = id WHERE 0")
         job, job_created = _get_or_create_external_job(session, vacancy)
         application, application_created = get_or_create_application(session, user_id, job.id)
         job_id = job.id
+        application_id = application.id
         session.commit()
     except Exception:
         session.rollback()
@@ -128,6 +140,11 @@ def save_discovered_job(
         job = session.get(Job, job_id)
         if job is None:
             raise RuntimeError("Saved Discover job disappeared after enrichment")
+    # Runtime sessions do not expire on commit; reload CRM state after the
+    # transaction and optional enrichment instead of returning a cached status.
+    application = session.get(Application, application_id, populate_existing=True)
+    if application is None:
+        raise RuntimeError("Saved Discover application disappeared")
     return DiscoverSaveResult(job, application, job_created, application_created)
 
 
@@ -326,7 +343,7 @@ def _is_known(value: object) -> bool:
 def _discover_item(
     vacancy: ExternalVacancy,
     profile: UserProfile | None,
-    already_saved: bool,
+    application_state: tuple[int, str] | None,
 ) -> DiscoverJobItemOut:
     if profile is None:
         preview = MatchPreviewOut(
@@ -386,21 +403,26 @@ def _discover_item(
         salary_currency=vacancy.salary_currency,
         source_updated_at=vacancy.source_updated_at,
         preview_match=preview,
-        already_saved_for_user=already_saved,
+        already_saved_for_user=application_state is not None,
+        application_id=application_state[0] if application_state is not None else None,
+        application_status=application_state[1] if application_state is not None else None,
     )
 
 
-def _saved_identity_keys(
+def _saved_applications(
     session: Session,
     user_id: int,
     vacancies: list[ExternalVacancy],
-) -> set[tuple[str, str, str] | str]:
+) -> dict[tuple[str, str, str], tuple[int, str]]:
     if not vacancies:
-        return set()
+        return {}
     identities = [_identity_key(item) for item in vacancies]
     urls = [normalize_source_url(item.source_url) for item in vacancies]
     rows = session.execute(
-        select(Job, Application.id)
+        select(
+            Job.id, Job.source, Job.source_scope, Job.external_id, Job.source_url,
+            Application.id, Application.status,
+        )
         .outerjoin(
             Application,
             and_(Application.job_id == Job.id, Application.user_id == user_id),
@@ -412,13 +434,33 @@ def _saved_identity_keys(
             )
         )
     )
-    saved: set[tuple[str, str, str] | str] = set()
-    for job, application_id in rows:
-        if application_id is None:
-            continue
-        if job.source_scope is not None and job.external_id is not None:
-            saved.add((job.source, job.source_scope, job.external_id))
-        saved.add(job.source_url)
+    identity_jobs: dict[tuple[str, str, str], tuple[int, tuple[int, str] | None]] = {}
+    url_jobs: dict[str, tuple[int, tuple[str, str, str] | None, tuple[int, str] | None]] = {}
+    for job_id, source, scope, external_id, url, application_id, status in rows:
+        state = (application_id, status) if application_id is not None else None
+        identity = (source, scope, external_id) if scope is not None and external_id is not None else None
+        if identity is not None:
+            identity_jobs[identity] = (job_id, state)
+        url_jobs[url] = (job_id, identity, state)
+    saved: dict[tuple[str, str, str], tuple[int, str]] = {}
+    for vacancy, url in zip(vacancies, urls):
+        key = _identity_key(vacancy)
+        identity_job = identity_jobs.get(key)
+        url_job = url_jobs.get(url)
+        # Mirror Save's candidate resolution before returning any handoff.
+        # Conflicts matter even when either Job has no owned Application.
+        if identity_job is not None:
+            if url_job is not None and identity_job[0] != url_job[0]:
+                continue
+            state = identity_job[1]
+        elif url_job is not None:
+            if url_job[1] is not None and url_job[1] != key:
+                continue
+            state = url_job[2]
+        else:
+            state = None
+        if state is not None:
+            saved[key] = state
     return saved
 
 

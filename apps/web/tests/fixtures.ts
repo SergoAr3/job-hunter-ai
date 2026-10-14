@@ -16,6 +16,8 @@ export const vacancy: Vacancy = {
   description: "<script>external text</script>",
   requirements_text: "Python",
   already_saved_for_user: false,
+  application_id: null,
+  application_status: null,
   preview_match: {
     available: false,
     unavailable_reason: "profile_missing_for_preview",

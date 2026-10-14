@@ -43,6 +43,8 @@ export interface Vacancy {
   salary_currency: string | null;
   preview_match: Preview;
   already_saved_for_user: boolean;
+  application_id: number | null;
+  application_status: import("./applications").ApplicationStatus | null;
 }
 export interface DiscoverPage {
   items: Vacancy[];

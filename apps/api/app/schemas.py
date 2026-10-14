@@ -666,6 +666,8 @@ class DiscoverJobItemOut(BaseModel):
     source_updated_at: datetime | None
     preview_match: MatchPreviewOut
     already_saved_for_user: bool
+    application_id: int | None = None
+    application_status: ApplicationStatus | None = None
 
 
 class DiscoverJobsPageOut(BaseModel):

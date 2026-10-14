@@ -9,6 +9,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { Discover } from "../components/discover";
 import { ApplicationView } from "../components/application-detail";
 import { Matching } from "../components/vacancy";
+import { applicationStatuses } from "../lib/applications";
+import { statusLabels } from "../lib/application-presentation";
 import { page, saved, vacancy } from "./fixtures";
 const response = (value: unknown, status = 200) => ({
   ok: status < 400,
@@ -276,19 +278,191 @@ describe("Discover", () => {
     const fetcher = vi.fn().mockResolvedValue(
       response({
         ...page,
-        items: [{ ...vacancy, already_saved_for_user: true }],
+        items: [
+          {
+            ...vacancy,
+            already_saved_for_user: true,
+            application_id: 73,
+            application_status: "applied",
+          },
+        ],
       }),
     );
     vi.stubGlobal("fetch", fetcher);
     render(<Discover />);
     submit();
     await select();
-    expect(screen.getByText("Уже в моих вакансиях")).toBeInTheDocument();
+    expect(
+      screen.getByText("Текущий статус: Отклик отправлен"),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("link", { name: /Открыть сохранённую/ }),
+    ).toHaveAttribute("href", "/applications/73");
     expect(
       screen.queryByRole("button", { name: "Сохранить вакансию" }),
     ).not.toBeInTheDocument();
     expect(fetcher).toHaveBeenCalledTimes(1);
   });
+  it.each(applicationStatuses)(
+    "shows authoritative %s status on the card and detail",
+    async (status) => {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn().mockResolvedValue(
+          response({
+            ...page,
+            items: [
+              {
+                ...vacancy,
+                already_saved_for_user: true,
+                application_id: 73,
+                application_status: status,
+              },
+            ],
+          }),
+        ),
+      );
+      render(<Discover />);
+      submit();
+      await select();
+      expect(
+        screen.getByRole("button", { name: /Python developer.*Test company/ }),
+      ).toHaveTextContent(statusLabels[status]);
+      expect(
+        screen.getByText(`Текущий статус: ${statusLabels[status]}`),
+      ).toBeInTheDocument();
+      expect(
+        screen.getByRole("link", { name: /Открыть сохранённую/ }),
+      ).toHaveAttribute("href", "/applications/73");
+      expect(
+        screen.queryByRole("button", { name: "Сохранить вакансию" }),
+      ).not.toBeInTheDocument();
+    },
+  );
+  it("uses the latest search status instead of a prior Save response", async () => {
+    const fetcher = vi
+      .fn()
+      .mockResolvedValueOnce(response(page))
+      .mockResolvedValueOnce(response(saved))
+      .mockResolvedValueOnce(
+        response({
+          ...page,
+          items: [
+            {
+              ...vacancy,
+              already_saved_for_user: true,
+              application_id: 42,
+              application_status: "offer",
+            },
+          ],
+        }),
+      );
+    vi.stubGlobal("fetch", fetcher);
+    render(<Discover />);
+    submit();
+    await select();
+    fireEvent.click(screen.getByRole("button", { name: "Сохранить вакансию" }));
+    await screen.findByText("Текущий статус: Собеседование");
+    submit();
+    await select();
+    expect(screen.getByText("Текущий статус: Оффер")).toBeInTheDocument();
+    expect(
+      screen.queryByText("Текущий статус: Собеседование"),
+    ).not.toBeInTheDocument();
+    expect(fetcher).toHaveBeenCalledTimes(3);
+  });
+  it("ignores a late Save response after a newer search has loaded", async () => {
+    let finish!: (value: unknown) => void;
+    const fetcher = vi
+      .fn()
+      .mockResolvedValueOnce(response(page))
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            finish = resolve;
+          }),
+      )
+      .mockResolvedValueOnce(
+        response({
+          ...page,
+          items: [
+            {
+              ...vacancy,
+              already_saved_for_user: true,
+              application_id: 42,
+              application_status: "offer",
+            },
+          ],
+        }),
+      );
+    vi.stubGlobal("fetch", fetcher);
+    render(<Discover />);
+    submit();
+    await select();
+    fireEvent.click(screen.getByRole("button", { name: "Сохранить вакансию" }));
+    submit();
+    await select();
+    await act(async () => finish(response(saved)));
+    expect(screen.getByText("Текущий статус: Оффер")).toBeInTheDocument();
+    expect(
+      screen.queryByText("Текущий статус: Собеседование"),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("link", { name: /Открыть сохранённую/ }),
+    ).toHaveAttribute("href", "/applications/42");
+  });
+  it.each(["search first", "save first"])(
+    "reconciles successful Save with an overlapping unsaved snapshot: %s",
+    async (order) => {
+      let finishSave!: (value: unknown) => void;
+      let finishSearch!: (value: unknown) => void;
+      const fetcher = vi
+        .fn()
+        .mockResolvedValueOnce(response(page))
+        .mockImplementationOnce(
+          () =>
+            new Promise((resolve) => {
+              finishSave = resolve;
+            }),
+        )
+        .mockImplementationOnce(
+          () =>
+            new Promise((resolve) => {
+              finishSearch = resolve;
+            }),
+        );
+      vi.stubGlobal("fetch", fetcher);
+      render(<Discover />);
+      submit();
+      await select();
+      fireEvent.click(
+        screen.getByRole("button", { name: "Сохранить вакансию" }),
+      );
+      submit();
+      if (order === "save first") {
+        await act(async () => finishSave(response(saved)));
+        await act(async () => finishSearch(response(page)));
+        await select();
+      } else {
+        await act(async () => finishSearch(response(page)));
+        await select();
+        await act(async () => finishSave(response(saved)));
+      }
+      expect(
+        screen.getByRole("link", { name: /Открыть сохранённую/ }),
+      ).toHaveAttribute("href", "/applications/42");
+      expect(
+        screen.getByText("Текущий статус: Собеседование"),
+      ).toBeInTheDocument();
+      expect(
+        screen.getByRole("button", { name: /Python developer.*Test company/ }),
+      ).toHaveTextContent("Собеседование");
+      expect(
+        screen.queryByRole("button", { name: "Сохранить вакансию" }),
+      ).not.toBeInTheDocument();
+      expect(fetcher).toHaveBeenCalledTimes(3);
+    },
+  );
   it("reports uncertain network save without claiming rollback", async () => {
     vi.stubGlobal(
       "fetch",

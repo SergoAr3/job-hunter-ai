@@ -1,11 +1,17 @@
 from dataclasses import replace
-from datetime import datetime, timezone
+from concurrent.futures import ThreadPoolExecutor
+from datetime import date, datetime, timezone
 from decimal import Decimal
+from uuid import uuid4
+from threading import Event, local
+
+import pytest
 
 from sqlalchemy import event, select
 
 import app.main as main_module
-from app.models import Application, ApplicationStatusHistory, Job, User
+import app.services.discover as discover_service
+from app.models import Application, ApplicationReminder, ApplicationStatus, ApplicationStatusHistory, Job, User
 from app.services.discover import save_discovered_job
 from app.services.trudvsem import (
     TrudvsemProvider,
@@ -104,7 +110,10 @@ def test_search_is_ephemeral_and_missing_profile_keeps_results(monkeypatch) -> N
     assert item["description"] == "Build APIs"
     assert item["requirements_text"] == "Python"
     assert "raw_payload" not in item
-    assert "application_id" not in item and "job_id" not in item
+    assert item["application_id"] is None
+    assert item["application_status"] is None
+    assert item["already_saved_for_user"] is False
+    assert "job_id" not in item
     assert payload["items"][0]["preview_match"] == {
         "available": False,
         "unavailable_reason": "profile_missing_for_preview",
@@ -222,10 +231,10 @@ def test_already_saved_is_user_scoped_and_queried_without_per_item_lookup(monkey
         )
         session.add_all([first, second])
         session.flush()
-        session.add_all(
-            [Application(user_id=owner, job_id=first.id), Application(user_id=other, job_id=second.id)]
-        )
+        owned = Application(user_id=owner, job_id=first.id, status="offer")
+        session.add_all([owned, Application(user_id=other, job_id=second.id)])
         session.commit()
+        owned_id = owned.id
     monkeypatch.setattr(main_module, "trudvsem_client", StubClient(items))
 
     payload = client.get(
@@ -233,6 +242,8 @@ def test_already_saved_is_user_scoped_and_queried_without_per_item_lookup(monkey
         params={"market_country": "RU", "query": "Backend"},
     ).json()
     assert [item["already_saved_for_user"] for item in payload["items"]] == [True, False]
+    assert [item["application_id"] for item in payload["items"]] == [owned_id, None]
+    assert [item["application_status"] for item in payload["items"]] == ["offer", None]
 
 
 def test_saved_lookup_query_count_does_not_grow_with_results(monkeypatch) -> None:
@@ -241,6 +252,12 @@ def test_saved_lookup_query_count_does_not_grow_with_results(monkeypatch) -> Non
 
     def run(items: list[ExternalVacancy]) -> None:
         statements: list[str] = []
+        # Exercise populated saved state so ORM lazy loads cannot hide behind
+        # the no-results path.
+        for item in items:
+            body = {key: getattr(item, key) for key in ("source", "source_scope", "external_id")}
+            monkeypatch.setattr(main_module, "trudvsem_client", StubClient([item]))
+            assert client.post(f"/users/{user_id}/discover/jobs/save", json=body).status_code == 200
 
         def record(_conn, _cursor, statement, _parameters, _context, _executemany):
             statements.append(statement)
@@ -253,9 +270,12 @@ def test_saved_lookup_query_count_does_not_grow_with_results(monkeypatch) -> Non
                 params={"market_country": "RU", "query": "Backend"},
             )
             assert response.status_code == 200
+            assert all(item["application_id"] is not None for item in response.json()["items"])
         finally:
             event.remove(engine, "before_cursor_execute", record)
         counts.append(len(statements))
+        lookup = [statement for statement in statements if "JOIN applications" in statement]
+        assert len(lookup) == 1
 
     run([vacancy("one")])
     run([vacancy(str(index)) for index in range(5)])
@@ -275,11 +295,23 @@ def test_save_creates_once_and_preserves_advanced_application_status(monkeypatch
     app_id = first.json()["application"]["id"]
     assert first.json()["job"]["salary_period"] == "unknown"
     assert first.json()["job"]["ingestion_method"] == "discover"
+    assert first.json()["application"]["status"] == "saved"
+    for field in ("source", "source_scope", "external_id", "source_url", "title", "company", "description", "requirements_text"):
+        assert first.json()["job"][field] == getattr(vacancy(), field)
 
     with TestSessionLocal() as session:
         application = session.get(Application, app_id)
         assert application is not None
         application.status = "interview"
+        application.note = "Keep this note"
+        application.next_action = "Contact recruiter"
+        application.next_action_due_on = date(2026, 11, 1)
+        reminder_time = datetime(2026, 11, 1, 10, tzinfo=timezone.utc)
+        generation = uuid4()
+        session.add(ApplicationReminder(
+            application_id=app_id, remind_at=reminder_time, timezone="Asia/Yerevan",
+            generation=generation, next_attempt_at=reminder_time,
+        ))
         session.commit()
 
     repeated = client.post(f"/users/{user_id}/discover/jobs/save", json=body)
@@ -287,10 +319,290 @@ def test_save_creates_once_and_preserves_advanced_application_status(monkeypatch
     assert repeated.json()["job_created"] is False
     assert repeated.json()["application_created"] is False
     assert repeated.json()["application"]["status"] == "interview"
+    assert repeated.json()["application"]["id"] == app_id
+    assert repeated.json()["application"]["note"] == "Keep this note"
+    assert repeated.json()["application"]["next_action"] == "Contact recruiter"
+    assert repeated.json()["application"]["next_action_due_on"] == "2026-11-01"
+    assert repeated.json()["application"]["reminder_delivery_state"] == "pending"
     with TestSessionLocal() as session:
         assert session.query(Job).count() == 1
         assert session.query(Application).count() == 1
         assert session.query(ApplicationStatusHistory).count() == 1
+        reminder = session.get(ApplicationReminder, app_id)
+        assert reminder.generation == generation
+        assert reminder.attempt_count == 0
+        assert reminder.timezone == "Asia/Yerevan"
+        assert reminder.remind_at == reminder_time.replace(tzinfo=None)
+
+
+@pytest.mark.parametrize("status", list(ApplicationStatus))
+def test_discover_reports_current_application_after_status_change(monkeypatch, status) -> None:
+    user_id = create_user(701)
+    monkeypatch.setattr(main_module, "trudvsem_client", StubClient())
+    body = {"source": "trudvsem", "source_scope": "company-1", "external_id": "vacancy-1"}
+    saved = client.post(f"/users/{user_id}/discover/jobs/save", json=body).json()
+    app_id = saved["application"]["id"]
+    response = client.put(f"/users/{user_id}/applications/{app_id}/status", json={"status": status.value})
+    assert response.status_code == 200
+    item = client.get(f"/users/{user_id}/discover/jobs", params={"market_country": "RU", "query": "Backend"}).json()["items"][0]
+    assert item["already_saved_for_user"] is True
+    assert item["application_id"] == app_id
+    assert item["application_status"] == status.value
+
+
+def test_save_reloads_application_after_enrichment(monkeypatch) -> None:
+    user_id = create_user(703)
+    def update_status(_session, job, _ai_service, **_kwargs):
+        with TestSessionLocal() as concurrent:
+            application = concurrent.scalar(select(Application).where(Application.job_id == job.id))
+            application.status = "applied"
+            concurrent.commit()
+    monkeypatch.setattr(discover_service, "run_job_ai_enrichment", update_status)
+    with TestSessionLocal() as session:
+        result = save_discovered_job(
+            session, user_id, source="trudvsem", source_scope="company-1", external_id="vacancy-1",
+            provider=TrudvsemProvider(StubClient()), ai_service=main_module.ai_enrichment_service,
+        )
+        assert result.application.status == "applied"
+
+
+@pytest.mark.parametrize("explicit_transaction", [False, True])
+def test_application_failure_rolls_back_new_job_and_leaves_session_usable(monkeypatch, explicit_transaction) -> None:
+    user_id = create_user(704)
+    def fail(*_args):
+        raise RuntimeError("application creation failed")
+    monkeypatch.setattr(discover_service, "get_or_create_application", fail)
+    def begin(connection):
+        connection.exec_driver_sql("BEGIN")
+    if explicit_transaction:
+        event.listen(engine, "begin", begin)
+    try:
+        with TestSessionLocal() as session:
+            with pytest.raises(RuntimeError, match="application creation failed"):
+                save_discovered_job(
+                    session, user_id, source="trudvsem", source_scope="company-1", external_id="vacancy-1",
+                    provider=TrudvsemProvider(StubClient()), ai_service=main_module.ai_enrichment_service,
+                )
+            assert session.query(Job).count() == 0
+            assert session.query(Application).count() == 0
+            assert session.get(User, user_id) is not None
+    finally:
+        if explicit_transaction:
+            event.remove(engine, "begin", begin)
+
+
+def test_saved_lookup_uses_legacy_url_but_not_a_different_attached_identity(monkeypatch) -> None:
+    user_id = create_user(702)
+    original = vacancy()
+    different = replace(original, source_scope="different-scope")
+    with TestSessionLocal() as session:
+        manual = Job(source="company_site", source_url=original.source_url)
+        session.add(manual)
+        session.flush()
+        application = Application(user_id=user_id, job_id=manual.id, status="applied")
+        session.add(application)
+        session.commit()
+        app_id = application.id
+    monkeypatch.setattr(main_module, "trudvsem_client", StubClient([original]))
+    params = {"market_country": "RU", "query": "Backend"}
+    item = client.get(f"/users/{user_id}/discover/jobs", params=params).json()["items"][0]
+    assert (item["application_id"], item["application_status"]) == (app_id, "applied")
+    body = {key: getattr(original, key) for key in ("source", "source_scope", "external_id")}
+    assert client.post(f"/users/{user_id}/discover/jobs/save", json=body).status_code == 200
+    monkeypatch.setattr(main_module, "trudvsem_client", StubClient([different]))
+    item = client.get(f"/users/{user_id}/discover/jobs", params=params).json()["items"][0]
+    assert item["already_saved_for_user"] is False
+    assert item["application_id"] is None and item["application_status"] is None
+
+
+@pytest.mark.parametrize("identity_application_owner", ["none", "other", "current"])
+def test_split_identity_and_manual_url_have_no_handoff_for_any_owner(monkeypatch, identity_application_owner) -> None:
+    owner = create_user(705)
+    other = create_user(706)
+    item = vacancy()
+    with TestSessionLocal() as session:
+        identity = Job(
+            source=item.source, source_scope=item.source_scope, external_id=item.external_id,
+            source_url="https://trudvsem.ru/vacancy/card/previous-url", ingestion_method="discover",
+        )
+        manual = Job(source="company_site", source_url=item.source_url, ingestion_method="manual")
+        session.add_all([identity, manual])
+        session.flush()
+        session.add(Application(user_id=owner, job_id=manual.id, status="interview"))
+        identity_application = None
+        if identity_application_owner != "none":
+            identity_application = Application(
+                user_id=owner if identity_application_owner == "current" else other,
+                job_id=identity.id, status="offer",
+            )
+            session.add(identity_application)
+        session.commit()
+    monkeypatch.setattr(main_module, "trudvsem_client", StubClient([item]))
+    response = client.get(f"/users/{owner}/discover/jobs", params={"market_country": "RU", "query": "Backend"})
+    assert response.status_code == 200
+    actual = response.json()["items"][0]
+    assert (actual["already_saved_for_user"], actual["application_id"], actual["application_status"]) == (False, None, None)
+    body = {key: getattr(item, key) for key in ("source", "source_scope", "external_id")}
+    assert client.post(f"/users/{owner}/discover/jobs/save", json=body).status_code == 409
+
+
+@pytest.mark.parametrize(
+    ("identity_owner", "url_target", "other_source", "conflict", "handoff"),
+    [
+        pytest.param("current", "manual", False, True, None, id="A-owned-identity-split-manual-url"),
+        pytest.param("current", "attached", False, True, None, id="A-owned-identity-split-attached-url"),
+        pytest.param("none", "manual", False, True, None, id="B-unowned-identity-split-manual-url"),
+        pytest.param("current", "identity", False, False, "identity", id="C-identity-and-url-same-job"),
+        pytest.param("current", "unclaimed", False, False, "identity", id="D-identity-can-move-to-unclaimed-url"),
+        pytest.param("absent", "manual", False, False, "url", id="E-manual-url-fallback"),
+        pytest.param("absent", "attached", False, True, None, id="F-url-attached-to-another-source"),
+        pytest.param("current", "identity", True, False, "identity", id="G-same-id-from-different-source"),
+    ],
+)
+def test_discover_handoff_and_save_share_identity_conflict_semantics(
+    monkeypatch, identity_owner, url_target, other_source, conflict, handoff,
+) -> None:
+    user_id = create_user(708)
+    item = vacancy(source_url=vacancy().source_url + "#description")
+    canonical_url = vacancy().source_url
+    application_ids: dict[str, int] = {}
+    with TestSessionLocal() as session:
+        identity = None
+        if identity_owner != "absent":
+            identity = Job(
+                source=item.source, source_scope=item.source_scope, external_id=item.external_id,
+                source_url=canonical_url if url_target == "identity" else "https://trudvsem.ru/vacancy/card/previous-url",
+                ingestion_method="discover",
+            )
+            session.add(identity)
+            session.flush()
+            if identity_owner == "current":
+                application = Application(user_id=user_id, job_id=identity.id, status="offer")
+                session.add(application)
+                session.flush()
+                application_ids["identity"] = application.id
+        if url_target in {"manual", "attached"}:
+            url_job = Job(
+                source="company_site", source_url=canonical_url,
+                ingestion_method="manual" if url_target == "manual" else "discover",
+                source_scope=item.source_scope if url_target == "attached" else None,
+                external_id=item.external_id if url_target == "attached" else None,
+            )
+            session.add(url_job)
+            session.flush()
+            application = Application(user_id=user_id, job_id=url_job.id, status="interview")
+            session.add(application)
+            session.flush()
+            application_ids["url"] = application.id
+        if other_source:
+            independent = Job(
+                source="company_site", source_scope=item.source_scope, external_id=item.external_id,
+                source_url="https://example.test/jobs/independent", ingestion_method="discover",
+            )
+            session.add(independent)
+            session.flush()
+            session.add(Application(user_id=user_id, job_id=independent.id, status="rejected"))
+        session.commit()
+        jobs_before = session.query(Job).count()
+        applications_before = session.query(Application).count()
+
+    monkeypatch.setattr(main_module, "trudvsem_client", StubClient([item]))
+    class DisabledAI:
+        configured = False
+    monkeypatch.setattr(main_module, "ai_enrichment_service", DisabledAI())
+    response = client.get(f"/users/{user_id}/discover/jobs", params={"market_country": "RU", "query": "Backend"})
+    assert response.status_code == 200
+    actual = response.json()["items"][0]
+    if handoff is None:
+        assert (actual["already_saved_for_user"], actual["application_id"], actual["application_status"]) == (False, None, None)
+    else:
+        assert actual["already_saved_for_user"] is True
+        assert actual["application_id"] == application_ids[handoff]
+        assert actual["application_status"] == ("offer" if handoff == "identity" else "interview")
+
+    body = {key: getattr(item, key) for key in ("source", "source_scope", "external_id")}
+    saved = client.post(f"/users/{user_id}/discover/jobs/save", json=body)
+    if conflict:
+        assert saved.status_code == 409
+        assert saved.json() == {"detail": {"code": "source_identity_conflict"}}
+    else:
+        assert saved.status_code == 200
+        assert saved.json()["job_created"] is False
+        assert saved.json()["application_created"] is False
+        assert saved.json()["application"]["id"] == actual["application_id"]
+        assert saved.json()["application"]["status"] == actual["application_status"]
+    with TestSessionLocal() as session:
+        assert session.query(Job).count() == jobs_before
+        assert session.query(Application).count() == applications_before
+
+
+@pytest.mark.parametrize("explicit_transaction", [False, True])
+def test_sqlite_concurrent_save_serializes_before_identity_read(concurrent_database, explicit_transaction) -> None:
+    sessions = concurrent_database
+    database = sessions.kw["bind"]
+    with sessions() as session:
+        session.add(User(id=1, telegram_id=707))
+        session.commit()
+    first_read = Event()
+    release_first = Event()
+    second_attempt = Event()
+    second_read = Event()
+    request = local()
+
+    def begin(connection):
+        connection.exec_driver_sql("BEGIN")
+
+    def before(_conn, _cursor, statement, _parameters, _context, _executemany):
+        if getattr(request, "name", None) == "second":
+            if statement.startswith("BEGIN") or statement.startswith("UPDATE jobs"):
+                second_attempt.set()
+            if statement.startswith("SELECT") and "FROM jobs" in statement:
+                second_read.set()
+
+    def after(_conn, _cursor, statement, _parameters, _context, _executemany):
+        if getattr(request, "name", None) == "first" and statement.startswith("SELECT") and "FROM jobs" in statement:
+            first_read.set()
+            assert release_first.wait(timeout=5)
+
+    if explicit_transaction:
+        event.listen(database, "begin", begin)
+    event.listen(database, "before_cursor_execute", before)
+    event.listen(database, "after_cursor_execute", after)
+    class DisabledAI:
+        configured = False
+    def save(name):
+        request.name = name
+        with sessions() as session:
+            result = save_discovered_job(
+                session, 1, source="trudvsem", source_scope="company-1", external_id="vacancy-1",
+                provider=TrudvsemProvider(StubClient()), ai_service=DisabledAI(),
+            )
+            return result.job.id, result.application.id, result.job_created, result.application_created
+    try:
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            first = pool.submit(save, "first")
+            try:
+                assert first_read.wait(timeout=5)
+                second = pool.submit(save, "second")
+                assert second_attempt.wait(timeout=5)
+                assert not second_read.wait(timeout=0.2)
+            finally:
+                release_first.set()
+            first_result = first.result(timeout=5)
+            second_result = second.result(timeout=5)
+        assert first_result[:2] == second_result[:2]
+        assert first_result[2:] == (True, True)
+        assert second_result[2:] == (False, False)
+        with sessions() as session:
+            assert session.query(Job).count() == 1
+            assert session.query(Application).count() == 1
+            assert session.query(ApplicationStatusHistory).count() == 1
+    finally:
+        release_first.set()
+        event.remove(database, "before_cursor_execute", before)
+        event.remove(database, "after_cursor_execute", after)
+        if explicit_transaction:
+            event.remove(database, "begin", begin)
 
 
 def test_save_reuses_manual_job_and_attaches_identity(monkeypatch) -> None:

@@ -34,6 +34,32 @@ contract. Original URLs are displayed; existing canonical URL rules apply on sav
 URL reuse can attach identity to a manual job without identity, but cannot replace
 a different attached source identity. No fuzzy cross-source merging is performed.
 
+Discover list items expose nullable `application_id` and `application_status`
+for the current user. Both come from one batch Job/Application lookup, alongside
+the compatible `already_saved_for_user` flag. The same query includes all identity
+and URL candidates, even when their Jobs have no Application for this user.
+As in Save, different Jobs for identity and URL suppress handoff; an attached
+URL identity cannot be replaced by another candidate. A valid identity Job takes
+precedence, and manual URL fallback remains available when no identity Job exists.
+This does not add per-result queries or store a separate Discover status.
+Save keeps the existing `SavedApplicationOut` contract and reloads Application
+after commit and optional AI enrichment. Repeated Save preserves CRM data.
+SQLite reserves its writer before the first identity lookup: `BEGIN IMMEDIATE`
+when no driver transaction exists, or a zero-row UPDATE when an engine has already
+begun the transaction. Both preserve rollback of nested inserts and serialize
+concurrent saves using the existing bounded SQLite busy timeout. No external calls
+run under this reservation. PostgreSQL locking and unique constraint handling
+are unchanged.
+
+Web displays the shared Application status label in the result card and detail,
+then opens the existing `/applications/{application_id}` route. Rendered Application
+state lives in the search results. Successful Save fills only an unsaved result
+of the same identity; a loaded search Application always wins over an older Save.
+A temporary mutation buffer bridges an overlapping search response, then clears
+after that response or at the next search start. Selection stores only the identity
+key, keeping card/detail state consistent. Existing My vacancies filter/back-navigation
+behavior is unchanged.
+
 To add an official source, first obtain its documented API/feed contract and access
 terms: authentication, query/location semantics, stable IDs/scopes, original URLs,
 pagination, limits and errors. Implement the small Protocol with internal DTOs and
