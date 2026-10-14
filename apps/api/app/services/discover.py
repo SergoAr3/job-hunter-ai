@@ -1,13 +1,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Protocol
 
 from sqlalchemy import and_, or_, select, tuple_
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.models import Application, IngestionMethod, Job, JobSource, ParsingStatus, User, UserProfile
+from app.models import Application, IngestionMethod, Job, ParsingStatus, User, UserProfile
 from app.schemas import DiscoverJobItemOut, DiscoverJobsPageOut, MatchPreviewOut
 from app.services.applications import (
     UserNotFoundError,
@@ -20,7 +19,7 @@ from app.services.job_matching import (
     MatchEvidenceAvailability,
     calculate_match_preview,
 )
-from app.services.trudvsem import ExternalVacancy, SearchPage
+from app.services.vacancy_sources import DiscoverQuery, ExternalVacancy, VacancySourceProvider
 
 
 class UnsupportedMarketError(ValueError):
@@ -33,19 +32,6 @@ class UnsupportedDiscoverSourceError(ValueError):
 
 class SourceIdentityConflictError(Exception):
     code = "source_identity_conflict"
-
-
-class DiscoverSourceClient(Protocol):
-    def search(
-        self,
-        query: str,
-        *,
-        limit: int,
-        offset: int,
-        region_code: str | None = None,
-    ) -> SearchPage: ...
-
-    def get_detail(self, source_scope: str, external_id: str) -> ExternalVacancy: ...
 
 
 @dataclass(frozen=True)
@@ -66,9 +52,9 @@ def search_discover_jobs(
     offset: int,
     region_code: str | None,
     remote_only: bool,
-    client: DiscoverSourceClient,
+    provider: VacancySourceProvider,
 ) -> DiscoverJobsPageOut:
-    if market_country.upper() != "RU":
+    if not provider.supports_market(market_country.upper()):
         raise UnsupportedMarketError
     if session.get(User, user_id) is None:
         raise UserNotFoundError
@@ -77,7 +63,15 @@ def search_discover_jobs(
         session.expunge(profile)
     session.rollback()
 
-    page = client.search(query, limit=limit, offset=offset, region_code=region_code)
+    page = provider.search(
+        DiscoverQuery(
+            keywords=query.strip(),
+            market_country=market_country.upper(),
+            market_region=region_code,
+            limit=limit,
+            offset=offset,
+        )
+    )
     vacancies = [item for item in page.items if not remote_only or item.workplace_type == "remote"]
     saved = _saved_identity_keys(session, user_id, vacancies)
     items = [
@@ -107,16 +101,16 @@ def save_discovered_job(
     source: str,
     source_scope: str,
     external_id: str,
-    client: DiscoverSourceClient,
+    provider: VacancySourceProvider,
     ai_service: JobAIEnrichmentService,
 ) -> DiscoverSaveResult:
-    if source != JobSource.TRUDVSEM.value:
+    if source != provider.source_key:
         raise UnsupportedDiscoverSourceError
     if session.get(User, user_id) is None:
         raise UserNotFoundError
     session.rollback()
 
-    vacancy = client.get_detail(source_scope, external_id)
+    vacancy = provider.get_detail(source_scope, external_id)
     try:
         job, job_created = _get_or_create_external_job(session, vacancy)
         application, application_created = get_or_create_application(session, user_id, job.id)
@@ -144,7 +138,7 @@ def _get_or_create_external_job(session: Session, vacancy: ExternalVacancy) -> t
         return _reuse_external_job(session, vacancy, normalized_url, identity_job, url_job)
 
     job = Job(
-        source=JobSource.TRUDVSEM.value,
+        source=vacancy.source,
         ingestion_method=IngestionMethod.DISCOVER.value,
         source_url=normalized_url,
         external_id=vacancy.external_id,
@@ -180,7 +174,7 @@ def _locked_external_job_candidates(
             .where(
                 or_(
                     and_(
-                        Job.source == JobSource.TRUDVSEM.value,
+                        Job.source == vacancy.source,
                         Job.source_scope == vacancy.source_scope,
                         Job.external_id == vacancy.external_id,
                     ),
@@ -195,7 +189,7 @@ def _locked_external_job_candidates(
         (
             job
             for job in candidates
-            if job.source == JobSource.TRUDVSEM.value
+            if job.source == vacancy.source
             and job.source_scope == vacancy.source_scope
             and job.external_id == vacancy.external_id
         ),
@@ -224,15 +218,14 @@ def _reuse_external_job(
             raise SourceIdentityConflictError from error
         return identity_job, False
     if url_job is not None:
-        if (url_job.external_id, url_job.source_scope) not in {
-            (None, None),
-            (vacancy.external_id, vacancy.source_scope),
-        }:
+        if url_job.external_id is not None and (
+            url_job.source, url_job.source_scope, url_job.external_id
+        ) != _identity_key(vacancy):
             raise SourceIdentityConflictError
         try:
             with session.begin_nested():
                 if url_job.external_id is None:
-                    url_job.source = JobSource.TRUDVSEM.value
+                    url_job.source = vacancy.source
                     url_job.external_id = vacancy.external_id
                     url_job.source_scope = vacancy.source_scope
                     _fill_missing_job_fields(url_job, vacancy)
@@ -341,7 +334,7 @@ def _discover_item(
         )
     else:
         transient_job = Job(
-            source=JobSource.TRUDVSEM.value,
+            source=vacancy.source,
             ingestion_method=IngestionMethod.DISCOVER.value,
             source_url=vacancy.source_url,
             title=vacancy.title,
@@ -377,7 +370,7 @@ def _discover_item(
             ),
         )
     return DiscoverJobItemOut(
-        source=JobSource.TRUDVSEM.value,
+        source=vacancy.source,
         source_scope=vacancy.source_scope,
         external_id=vacancy.external_id,
         source_url=vacancy.source_url,
@@ -404,7 +397,7 @@ def _saved_identity_keys(
 ) -> set[tuple[str, str, str] | str]:
     if not vacancies:
         return set()
-    identities = [(JobSource.TRUDVSEM.value, item.source_scope, item.external_id) for item in vacancies]
+    identities = [_identity_key(item) for item in vacancies]
     urls = [normalize_source_url(item.source_url) for item in vacancies]
     rows = session.execute(
         select(Job, Application.id)
@@ -430,4 +423,4 @@ def _saved_identity_keys(
 
 
 def _identity_key(vacancy: ExternalVacancy) -> tuple[str, str, str]:
-    return JobSource.TRUDVSEM.value, vacancy.source_scope, vacancy.external_id
+    return vacancy.source, vacancy.source_scope, vacancy.external_id

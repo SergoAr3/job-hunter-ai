@@ -8,11 +8,11 @@ import app.main as main_module
 from app.models import Application, ApplicationStatusHistory, Job, User
 from app.services.discover import save_discovered_job
 from app.services.trudvsem import (
-    ExternalVacancy,
-    SearchPage,
+    TrudvsemProvider,
     TrudvsemTimeoutError,
     TrudvsemVacancyNotFoundError,
 )
+from app.services.vacancy_sources import ExternalVacancy, SearchPage
 from conftest import TestSessionLocal, client, engine
 
 
@@ -45,6 +45,7 @@ def vacancy(
     source_url: str | None = None,
 ) -> ExternalVacancy:
     return ExternalVacancy(
+        source="trudvsem",
         source_scope=source_scope,
         external_id=external_id,
         source_url=source_url
@@ -570,7 +571,7 @@ def test_detail_fetch_runs_without_active_database_transaction() -> None:
             source="trudvsem",
             source_scope="company-1",
             external_id="vacancy-1",
-            client=TransactionProbe(),
+            provider=TrudvsemProvider(TransactionProbe()),
             ai_service=main_module.ai_enrichment_service,
         )
         assert result.application.status == "saved"
@@ -593,7 +594,7 @@ def test_ai_enrichment_failure_keeps_saved_application() -> None:
             source="trudvsem",
             source_scope="company-1",
             external_id="vacancy-1",
-            client=StubClient(),
+            provider=TrudvsemProvider(StubClient()),
             ai_service=FailingAI(),  # type: ignore[arg-type]
         )
         assert result.application.status == "saved"
