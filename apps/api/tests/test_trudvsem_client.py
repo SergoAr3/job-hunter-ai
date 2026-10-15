@@ -1,6 +1,7 @@
 import json
 import socket
 from datetime import datetime, timezone
+from urllib.parse import parse_qs, urlsplit
 
 import pytest
 
@@ -70,7 +71,8 @@ def response(*items: dict[str, object], total: int | None = None) -> bytes:
     ).encode()
 
 
-def test_search_maps_contract_and_pagination() -> None:
+@pytest.mark.parametrize(("offset", "source_page"), [(0, 0), (10, 1), (20, 2)])
+def test_search_maps_contract_and_pagination(offset: int, source_page: int) -> None:
     calls: list[tuple[str, float]] = []
 
     def transport(url: str, timeout: float):
@@ -78,15 +80,17 @@ def test_search_maps_contract_and_pagination() -> None:
         return 200, response(vacancy_payload(), total=25)
 
     page = TrudvsemClient(timeout_seconds=7, transport=transport).search(
-        "Backend", limit=10, offset=20, region_code="7700000000000"
+        "Backend", limit=10, offset=offset, region_code="7700000000000"
     )
 
     assert page.total == 25
     assert page.limit == 10
-    assert page.offset == 20
+    assert page.offset == offset
     assert len(page.items) == 1
     assert "/region/7700000000000?" in calls[0][0]
-    assert "text=Backend" in calls[0][0] and "limit=10" in calls[0][0] and "offset=20" in calls[0][0]
+    assert parse_qs(urlsplit(calls[0][0]).query) == {
+        "text": ["Backend"], "limit": ["10"], "offset": [str(source_page)]
+    }
     assert calls[0][1] == 7
 
 
@@ -100,6 +104,51 @@ def test_default_timeout_is_25_seconds() -> None:
     TrudvsemClient(transport=transport).search("Python", limit=1, offset=0)
 
     assert calls == [25.0]
+
+
+@pytest.mark.parametrize("offset", [1, 9, 11, 19])
+def test_non_aligned_offset_fails_before_transport(offset: int) -> None:
+    def transport(_url: str, _timeout: float):
+        pytest.fail("Non-aligned offset reached source transport")
+
+    with pytest.raises(ValueError, match="aligned"):
+        TrudvsemClient(transport=transport).search("Python", limit=10, offset=offset)
+
+
+@pytest.mark.parametrize(("total", "offset"), [(0, 0), (10, 10), (12, 20), (12, 30)])
+@pytest.mark.parametrize("results", [{}, {"vacancies": []}])
+def test_exhausted_search_is_empty(total: int, offset: int, results: dict) -> None:
+    body = json.dumps({"status": "200", "meta": {"total": total}, "results": results}).encode()
+    page = TrudvsemClient(transport=lambda *_args: (200, body)).search(
+        "Python", limit=10, offset=offset
+    )
+    assert (page.items, page.total, page.limit, page.offset) == ([], total, 10, offset)
+
+
+@pytest.mark.parametrize(
+    ("meta", "results", "offset"),
+    [
+        ({"total": 12}, {}, 10),
+        ({"total": 12}, {"vacancies": []}, 10),
+        ({"total": 12}, None, 20),
+        ({"total": 12}, [], 20),
+        ({"total": 12}, {"vacancies": None}, 20),
+        ({"total": 12}, {"vacancies": {}}, 20),
+        ({"total": 12}, {"unexpected": []}, 20),
+        ({"total": 12}, {"vacancies": [vacancy_payload()]}, 20),
+        ({"total": -1}, {}, 20),
+        ({"total": True}, {}, 20),
+        ({"total": "12"}, {}, 20),
+        ({}, {}, 20),
+        (None, {}, 20),
+    ],
+)
+def test_missing_or_inconsistent_search_data_is_still_bad_response(meta, results, offset) -> None:
+    body = json.dumps({"status": "200", "meta": meta, "results": results}).encode()
+    with pytest.raises(TrudvsemBadResponseError):
+        TrudvsemClient(transport=lambda *_args: (200, body)).search(
+            "Python", limit=10, offset=offset
+        )
 
 
 def test_mapping_is_deterministic_and_conservative() -> None:
@@ -141,10 +190,11 @@ def test_mapping_uses_region_fallback_and_does_not_infer_workplace() -> None:
         (200, b'{"status":"200","meta":{"total":0}}', TrudvsemBadResponseError),
     ],
 )
-def test_search_errors(status: int, body: bytes, error: type[Exception]) -> None:
+@pytest.mark.parametrize("offset", [0, 20])
+def test_search_errors(status: int, body: bytes, error: type[Exception], offset: int) -> None:
     client = TrudvsemClient(transport=lambda _url, _timeout: (status, body))
     with pytest.raises(error):
-        client.search("Python", limit=10, offset=0)
+        client.search("Python", limit=10, offset=offset)
 
 
 def test_timeout_is_typed() -> None:

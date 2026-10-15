@@ -1,5 +1,6 @@
 """Provider contracts use injected transport or internal candidates, never HTTP."""
 
+import json
 import socket
 from dataclasses import replace
 from urllib.error import HTTPError, URLError
@@ -25,6 +26,58 @@ class DisabledAI:
     configured = False
 
 
+def test_discover_paginates_twelve_results_through_real_provider(monkeypatch) -> None:
+    calls: list[int] = []
+    items = [vacancy_payload(id=f"vacancy-{index}") for index in range(12)]
+
+    def transport(url: str, _timeout: float):
+        params = parse_qs(urlsplit(url).query)
+        page = int(params["offset"][0])
+        limit = int(params["limit"][0])
+        calls.append(page)
+        # Source offset is a page index. Exhausted pages omit vacancies.
+        batch = items[page * limit:(page + 1) * limit]
+        return 200, json.dumps({
+            "status": "200", "meta": {"total": 12, "limit": limit},
+            "results": {"vacancies": batch} if batch else {},
+        }).encode()
+
+    monkeypatch.setattr(main_module, "trudvsem_client", TrudvsemClient(transport=transport))
+    user_id = create_user(9010)
+    for offset, count, next_offset in [(0, 10, 10), (10, 2, None), (20, 0, None)]:
+        result = client.get(
+            f"/users/{user_id}/discover/jobs",
+            params={"market_country": "RU", "query": "Python", "limit": 10, "offset": offset},
+        )
+        assert result.status_code == 200
+        page = result.json()
+        assert (page["source_total"], page["returned_count"], page["next_offset"]) == (
+            12, count, next_offset
+        )
+        assert (page["limit"], page["offset"]) == (10, offset)
+        assert [item["external_id"] for item in page["items"]] == [
+            f"vacancy-{index}" for index in range(offset, offset + count)
+        ]
+    assert calls == [0, 1, 2]
+
+
+@pytest.mark.parametrize(
+    ("offset", "results"), [(10, {}), (20, None), (20, {"vacancies": None})]
+)
+def test_discover_malformed_page_remains_502(monkeypatch, offset, results) -> None:
+    body = json.dumps({"status": "200", "meta": {"total": 12}, "results": results}).encode()
+    monkeypatch.setattr(
+        main_module, "trudvsem_client", TrudvsemClient(transport=lambda *_args: (200, body))
+    )
+    user_id = create_user(9011)
+    result = client.get(
+        f"/users/{user_id}/discover/jobs",
+        params={"market_country": "RU", "query": "Python", "limit": 10, "offset": offset},
+    )
+    assert result.status_code == 502
+    assert result.json() == {"detail": {"code": "source_bad_response"}}
+
+
 def test_real_trudvsem_provider_search_detail_and_mapping_parity() -> None:
     calls: list[tuple[str, float]] = []
     payload = vacancy_payload()
@@ -44,7 +97,7 @@ def test_real_trudvsem_provider_search_detail_and_mapping_parity() -> None:
     assert item.source_url == "https://trudvsem.ru/vacancy/card/company-1/vacancy-1"
     assert urlsplit(calls[0][0]).path.endswith("/region/7700000000000")
     assert parse_qs(urlsplit(calls[0][0]).query) == {
-        "text": ["Backend"], "limit": ["10"], "offset": ["20"]
+        "text": ["Backend"], "limit": ["10"], "offset": ["2"]
     }
     detail = provider.get_detail(item.source_scope, item.external_id)
     assert replace(detail, fetched_at=item.fetched_at) == item
@@ -131,6 +184,7 @@ def test_transport_errors_keep_api_status_and_code(monkeypatch, operation, failu
         ({"market_country": "AM", "query": "Python"}, "unsupported_market"),
         ({"market_country": "RU", "query": "   "}, "INVALID_DISCOVER_QUERY"),
         ({"market_country": "RU", "query": "Python", "region_code": "not-a-code"}, "INVALID_DISCOVER_QUERY"),
+        ({"market_country": "RU", "query": "Python", "limit": 10, "offset": 1}, "INVALID_DISCOVER_QUERY"),
     ],
 )
 def test_invalid_search_does_not_reach_transport(monkeypatch, params, code):
