@@ -1,5 +1,13 @@
 "use client";
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
+import {
+  discoverUrl,
+  parseDiscoverState,
+  vacancyKey as keyOf,
+  type DiscoverState,
+} from "../lib/discover";
+import { DiscoverRoleSuggestions } from "./discover-role-suggestions";
 import Link from "next/link";
 import type { DiscoverPage, SaveResult, Vacancy } from "../lib/contracts";
 import { webRequest } from "../lib/client";
@@ -14,8 +22,6 @@ import {
   workplace,
 } from "./vacancy";
 import { compactLocation } from "../lib/presentation";
-const keyOf = (item: Vacancy) =>
-  JSON.stringify([item.source, item.source_scope, item.external_id]);
 function reconcileSave(item: Vacancy, result?: SaveResult): Vacancy {
   // A loaded search Application wins over an older mutation response. Only
   // fill missing knowledge from a successful Save of this exact identity.
@@ -41,15 +47,39 @@ function cardAccessibleName(item: Vacancy, items: Vacancy[], index: number) {
   return duplicated ? `${name} — результат ${index + 1}` : name;
 }
 export function Discover() {
-  const [query, setQuery] = useState("");
-  const [remote, setRemote] = useState(false);
-  const [committed, setCommitted] = useState({ query: "", remote: false });
-  const [page, setPage] = useState<DiscoverPage | null>(null);
-  const [selectedKey, setSelectedKey] = useState<string | null>(null);
+  const router = useRouter();
+  const raw = useSearchParams().toString();
+  const state = parseDiscoverState(new URLSearchParams(raw));
+  const currentUrl = discoverUrl(state);
+  const searchUrl = discoverUrl({ ...state, selected: null });
+  const [draft, setDraft] = useState({
+    searchUrl,
+    query: state.query,
+    remote: state.remote,
+    revision: 0,
+  });
+  // Reset controls before rendering a new search. The revision also makes a
+  // return to A distinct from an earlier A result, without storing past pages.
+  if (draft.searchUrl !== searchUrl)
+    setDraft({
+      searchUrl,
+      query: state.query,
+      remote: state.remote,
+      revision: draft.revision + 1,
+    });
+  const { query, remote } = draft;
+  const [attempt, setAttempt] = useState(0);
+  const requestKey = `${searchUrl}:${draft.revision}:${attempt}`;
+  const [result, setResult] = useState<{
+    key: string;
+    page: DiscoverPage | null;
+    error: string;
+  } | null>(null);
+  const page = result?.key === requestKey ? result.page : null;
+  const error = result?.key === requestKey ? result.error : "";
+  const loading = !!state.query && result?.key !== requestKey;
   const selected =
-    page?.items.find((item) => keyOf(item) === selectedKey) ?? null;
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState("");
+    page?.items.find((item) => keyOf(item) === state.selected) ?? null;
   const [saveErrors, setSaveErrors] = useState<Record<string, string>>({});
   const [saveFeedback, setSaveFeedback] = useState<Record<string, boolean>>({});
   // Outcomes only bridge a search that overlapped Save. Rendered Application
@@ -60,45 +90,110 @@ export function Discover() {
   const saveLock = useRef(false);
   const detailPanel = useRef<HTMLElement | null>(null);
   const resultsPanel = useRef<HTMLDivElement | null>(null);
-  const selectedButton = useRef<HTMLButtonElement | null>(null);
-  const searchAbort = useRef<AbortController | null>(null);
-  const lastSearch = useRef({ query: "", remote: false, offset: 0 });
-  async function search(text: string, onlyRemote: boolean, offset = 0) {
+  const request = useRef<{
+    key: string;
+    controller: AbortController;
+    promise: Promise<DiscoverPage>;
+    subscribers: number;
+  } | null>(null);
+  useEffect(() => {
+    if (raw !== (currentUrl.split("?")[1] ?? ""))
+      router.replace(currentUrl, { scroll: false });
+  }, [raw, currentUrl, router]);
+
+  const { query: confirmedQuery, remote: confirmedRemote, offset } = state;
+  useEffect(() => {
     const current = ++generation.current;
-    searchAbort.current?.abort();
-    const controller = new AbortController();
-    searchAbort.current = controller;
-    lastSearch.current = { query: text, remote: onlyRemote, offset };
-    setCommitted({ query: text, remote: onlyRemote });
-    setLoading(true);
-    setError("");
-    setSelectedKey(null);
-    setPage(null);
+    let active = true;
     completedSaves.current = {};
-    setSaveFeedback({});
-    setSaveErrors({});
-    try {
+    if (!confirmedQuery) {
+      request.current?.controller.abort();
+      request.current = null;
+      return;
+    }
+    if (request.current?.key !== requestKey) {
+      request.current?.controller.abort();
+      const controller = new AbortController();
       const params = new URLSearchParams({
-        query: text,
-        remote_only: String(onlyRemote),
+        query: confirmedQuery,
+        remote_only: String(confirmedRemote),
         offset: String(offset),
       });
-      const result = await webRequest<DiscoverPage>(`/api/discover?${params}`, {
-        signal: controller.signal,
-      });
-      if (generation.current !== current) return;
-      setPage({
-        ...result,
-        items: result.items.map((item) =>
-          reconcileSave(item, completedSaves.current[keyOf(item)]),
-        ),
-      });
-      completedSaves.current = {};
-    } catch (error) {
-      if (generation.current === current) setError(errorMessage(error));
-    } finally {
-      if (generation.current === current) setLoading(false);
+      request.current = {
+        key: requestKey,
+        controller,
+        subscribers: 0,
+        promise: webRequest<DiscoverPage>(`/api/discover?${params}`, {
+          signal: controller.signal,
+        }),
+      };
     }
+    const pendingRequest = request.current;
+    pendingRequest.subscribers++;
+    void pendingRequest.promise
+      .then((fresh) => {
+        if (!active || generation.current !== current) return;
+        setResult({
+          key: requestKey,
+          error: "",
+          page: {
+            ...fresh,
+            items: fresh.items.map((item) =>
+              reconcileSave(item, completedSaves.current[keyOf(item)]),
+            ),
+          },
+        });
+        completedSaves.current = {};
+        setSaveFeedback({});
+        setSaveErrors({});
+      })
+      .catch((failure) => {
+        if (active && generation.current === current)
+          setResult({
+            key: requestKey,
+            page: null,
+            error: errorMessage(failure),
+          });
+      })
+      .finally(() => {
+        if (request.current === pendingRequest) request.current = null;
+      });
+    return () => {
+      active = false;
+      pendingRequest.subscribers--;
+      // Effect replay reuses the pending request. Real unmount aborts it.
+      queueMicrotask(() => {
+        if (pendingRequest.subscribers === 0) pendingRequest.controller.abort();
+      });
+    };
+  }, [confirmedQuery, confirmedRemote, offset, requestKey]);
+
+  useEffect(() => {
+    function refresh(event: PageTransitionEvent) {
+      if (event.persisted) setAttempt((value) => value + 1);
+    }
+    window.addEventListener("pageshow", refresh);
+    return () => window.removeEventListener("pageshow", refresh);
+  }, []);
+
+  const visibleSelection = selected ? keyOf(selected) : null;
+  useEffect(() => {
+    if (visibleSelection && window.innerWidth <= 900) {
+      detailPanel.current?.focus();
+      detailPanel.current?.scrollIntoView({ block: "start" });
+    }
+  }, [visibleSelection]);
+
+  function navigate(next: DiscoverState) {
+    const url = discoverUrl(next);
+    if (discoverUrl({ ...next, selected: null }) === searchUrl)
+      setAttempt((value) => value + 1);
+    if (url !== currentUrl) router.push(url, { scroll: false });
+  }
+  function selectIdentity(selected: string | null) {
+    // Next integrates native history with useSearchParams. Selection needs no
+    // server navigation/auth request, and replaces rather than adds an entry.
+    window.history.replaceState(null, "", discoverUrl({ ...state, selected }));
   }
   async function save(item: Vacancy) {
     const key = keyOf(item);
@@ -115,15 +210,18 @@ export function Discover() {
         body: JSON.stringify({ source, source_scope, external_id }),
       });
       completedSaves.current[key] = result;
-      setPage(
+      setResult(
         (previous) =>
           previous && {
             ...previous,
-            items: previous.items.map((candidate) =>
-              keyOf(candidate) === key
-                ? reconcileSave(candidate, result)
-                : candidate,
-            ),
+            page: previous.page && {
+              ...previous.page,
+              items: previous.page.items.map((candidate) =>
+                keyOf(candidate) === key
+                  ? reconcileSave(candidate, result)
+                  : candidate,
+              ),
+            },
           },
       );
       setSaveFeedback((previous) => ({
@@ -156,7 +254,13 @@ export function Discover() {
         className="search-panel"
         onSubmit={(event) => {
           event.preventDefault();
-          if (query.trim()) void search(query.trim(), remote);
+          if (query.trim())
+            navigate({
+              query: query.trim(),
+              remote,
+              offset: 0,
+              selected: null,
+            });
         }}
       >
         <label htmlFor="query">Должность или ключевые слова</label>
@@ -164,7 +268,9 @@ export function Discover() {
           <input
             id="query"
             value={query}
-            onChange={(event) => setQuery(event.target.value)}
+            onChange={(event) =>
+              setDraft({ ...draft, query: event.target.value })
+            }
             placeholder="Например, Python разработчик"
             maxLength={200}
             required
@@ -175,15 +281,15 @@ export function Discover() {
             disabled={
               !query.trim() ||
               (loading &&
-                query.trim() === committed.query &&
-                remote === committed.remote)
+                query.trim() === confirmedQuery &&
+                remote === confirmedRemote)
             }
             aria-label="Найти вакансии"
             aria-busy={loading}
           >
             {loading &&
-            query.trim() === committed.query &&
-            remote === committed.remote
+            query.trim() === confirmedQuery &&
+            remote === confirmedRemote
               ? "Ищем…"
               : "Найти вакансии"}
           </button>
@@ -193,7 +299,9 @@ export function Discover() {
             <input
               type="checkbox"
               checked={remote}
-              onChange={(event) => setRemote(event.target.checked)}
+              onChange={(event) =>
+                setDraft({ ...draft, remote: event.target.checked })
+              }
             />
             Только удалённая работа
           </label>
@@ -201,6 +309,9 @@ export function Discover() {
             Работа России <span aria-hidden="true">·</span> RU
           </span>
         </div>
+        <DiscoverRoleSuggestions
+          onSelect={(role) => setDraft({ ...draft, query: role })}
+        />
       </form>
       <div aria-live="polite">
         {loading && (
@@ -212,15 +323,7 @@ export function Discover() {
         {error && (
           <div className="notice error" role="alert">
             <p>{error}</p>
-            <button
-              onClick={() =>
-                void search(
-                  lastSearch.current.query,
-                  lastSearch.current.remote,
-                  lastSearch.current.offset,
-                )
-              }
-            >
+            <button onClick={() => setAttempt((value) => value + 1)}>
               Повторить поиск
             </button>
           </div>
@@ -266,18 +369,7 @@ export function Discover() {
                     className={`vacancy-card ${selected && keyOf(selected) === keyOf(item) ? "selected" : ""}`}
                     key={keyOf(item)}
                     aria-label={cardAccessibleName(item, page.items, index)}
-                    onClick={(event) => {
-                      selectedButton.current = event.currentTarget;
-                      setSelectedKey(keyOf(item));
-                      if (window.innerWidth <= 900) {
-                        requestAnimationFrame(() => {
-                          detailPanel.current?.focus();
-                          detailPanel.current?.scrollIntoView({
-                            block: "start",
-                          });
-                        });
-                      }
-                    }}
+                    onClick={() => selectIdentity(keyOf(item))}
                     aria-pressed={
                       selected ? keyOf(selected) === keyOf(item) : false
                     }
@@ -327,11 +419,11 @@ export function Discover() {
                 <button
                   disabled={page.offset === 0}
                   onClick={() =>
-                    void search(
-                      committed.query,
-                      committed.remote,
-                      Math.max(0, page.offset - page.limit),
-                    )
+                    navigate({
+                      ...state,
+                      offset: Math.max(0, page.offset - page.limit),
+                      selected: null,
+                    })
                   }
                 >
                   ← Назад
@@ -341,11 +433,11 @@ export function Discover() {
                   disabled={page.next_offset === null}
                   onClick={() =>
                     page.next_offset !== null &&
-                    void search(
-                      committed.query,
-                      committed.remote,
-                      page.next_offset,
-                    )
+                    navigate({
+                      ...state,
+                      offset: page.next_offset,
+                      selected: null,
+                    })
                   }
                 >
                   Далее →
@@ -363,10 +455,14 @@ export function Discover() {
                   <button
                     className="mobile-back"
                     onClick={() => {
-                      setSelectedKey(null);
+                      const button =
+                        resultsPanel.current?.querySelector<HTMLButtonElement>(
+                          '[aria-pressed="true"]',
+                        );
+                      selectIdentity(null);
                       requestAnimationFrame(() => {
-                        selectedButton.current?.focus();
-                        selectedButton.current?.scrollIntoView({
+                        button?.focus();
+                        button?.scrollIntoView({
                           block: "nearest",
                         });
                       });
@@ -396,7 +492,8 @@ export function Discover() {
                         </p>
                         <Link
                           className="primary button-link"
-                          href={`/applications/${applicationId}`}
+                          href={`/applications/${applicationId}?from=${encodeURIComponent(currentUrl)}`}
+                          prefetch={false}
                         >
                           Открыть сохранённую вакансию →
                         </Link>

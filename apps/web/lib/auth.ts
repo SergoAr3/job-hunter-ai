@@ -10,7 +10,9 @@ export type CurrentUser = {
 // Validate the destination path separately from query data. Never turn encoded
 // query values into URL separators or decode a literal percent a second time.
 export function safeNext(value: unknown): string {
-  if (typeof value !== "string" || value.length > 2048) return "/dashboard";
+  // An Application `from` nests an encoded Discover query/identity. Keep a
+  // bounded URL while allowing the existing 200-character Unicode search.
+  if (typeof value !== "string" || value.length > 8192) return "/dashboard";
   try {
     if (
       !value.startsWith("/") ||

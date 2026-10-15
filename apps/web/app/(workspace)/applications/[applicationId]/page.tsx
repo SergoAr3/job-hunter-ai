@@ -7,7 +7,7 @@ import { ApplicationStatusDetail } from "../../../../components/application-stat
 import { getApplication } from "../../../../lib/server/api";
 import { errorMessage, WebError } from "../../../../lib/errors";
 import { notFound } from "next/navigation";
-import { safeApplicationsReturn } from "../../../../lib/applications";
+import { safeApplicationReturn } from "../../../../lib/application-return";
 export const dynamic = "force-dynamic";
 export default async function Page({
   params,
@@ -17,25 +17,27 @@ export default async function Page({
   searchParams: Promise<{ from?: string | string[] }>;
 }) {
   const { applicationId } = await params;
-  const identity = await pageAccess(
-    `/applications/${encodeURIComponent(applicationId)}`,
-  );
+  const backUrl = safeApplicationReturn((await searchParams).from);
+  const detailUrl = `/applications/${encodeURIComponent(applicationId)}?from=${encodeURIComponent(backUrl)}`;
+  const identity = await pageAccess(detailUrl);
   if (!identity) return <AuthUnavailable />;
-  const backUrl = safeApplicationsReturn((await searchParams).from);
   let detail;
   try {
     detail = await getApplication(applicationId);
   } catch (error) {
     if (error instanceof WebError && error.code === "unauthenticated")
-      redirect(loginUrl(`/applications/${applicationId}`));
+      redirect(loginUrl(detailUrl));
     if (error instanceof WebError && error.code === "APPLICATION_NOT_FOUND")
       notFound();
     return (
       <div className="notice error" role="alert">
         <h1>Не удалось открыть вакансию</h1>
         <p>{errorMessage(error)}</p>
-        <Link href={`/applications/${encodeURIComponent(applicationId)}`}>
-          Повторить
+        <Link href={detailUrl}>Повторить</Link>
+        <Link className="back-link" href={backUrl}>
+          {backUrl.startsWith("/discover?")
+            ? "← К результатам поиска"
+            : "← К моим вакансиям"}
         </Link>
       </div>
     );
@@ -43,7 +45,9 @@ export default async function Page({
   return (
     <>
       <Link className="back-link" href={backUrl}>
-        ← К моим вакансиям
+        {backUrl.startsWith("/discover?")
+          ? "← К результатам поиска"
+          : "← К моим вакансиям"}
       </Link>
       <ApplicationStatusDetail
         key={detail.application.id}

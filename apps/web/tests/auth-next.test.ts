@@ -1,5 +1,8 @@
 import { expect, it } from "vitest";
 import { loginUrl, safeNext } from "../lib/auth";
+it("bounds nested return URL length", () => {
+  expect(safeNext(`/discover?query=${"x".repeat(8192)}`)).toBe("/dashboard");
+});
 it.each([
   "/dashboard",
   "/profile",
