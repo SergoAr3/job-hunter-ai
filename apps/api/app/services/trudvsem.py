@@ -56,18 +56,25 @@ class TrudvsemClient:
     ) -> SearchPage:
         if not query.strip() or not 1 <= limit <= 100 or offset < 0:
             raise ValueError("Invalid Trudvsem search parameters")
+        if offset % limit:
+            raise ValueError("Trudvsem item offset must be aligned to limit")
+        # Public offsets count items; Trudvsem offsets count pages.
+        source_page = offset // limit
         path = BASE_URL
         if region_code is not None:
             if not region_code.isdigit():
                 raise ValueError("region_code must contain digits only")
             path = f"{path}/region/{region_code}"
         payload = self._get_json(
-            f"{path}?{urlencode({'text': query.strip(), 'limit': limit, 'offset': offset})}"
+            f"{path}?{urlencode({'text': query.strip(), 'limit': limit, 'offset': source_page})}"
         )
         meta = payload.get("meta")
-        if not isinstance(meta, dict) or not isinstance(meta.get("total"), int):
+        if not isinstance(meta, dict) or type(meta.get("total")) is not int or meta["total"] < 0:
             raise TrudvsemBadResponseError("Missing search metadata")
-        vacancies = _vacancy_list(payload, allow_empty=meta["total"] == 0)
+        exhausted = offset >= meta["total"]
+        vacancies = _vacancy_list(payload, allow_empty=exhausted)
+        if (not vacancies and not exhausted) or (vacancies and exhausted):
+            raise TrudvsemBadResponseError("Search results contradict pagination metadata")
         fetched_at = datetime.now(timezone.utc)
         return SearchPage(
             items=[map_vacancy(item, fetched_at=fetched_at) for item in vacancies],
