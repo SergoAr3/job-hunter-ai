@@ -5,13 +5,25 @@ import {
   screen,
   waitFor,
 } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Discover } from "../components/discover";
 import { ApplicationView } from "../components/application-detail";
 import { Matching } from "../components/vacancy";
 import { applicationStatuses } from "../lib/applications";
 import { statusLabels } from "../lib/application-presentation";
 import { page, saved, vacancy } from "./fixtures";
+import { resetNavigation } from "./discover-navigation";
+vi.mock("next/navigation", async () => {
+  const { testRouter, useTestSearchParams } =
+    await import("./discover-navigation");
+  return { useRouter: () => testRouter, useSearchParams: useTestSearchParams };
+});
+// Profile suggestions have their own integration coverage; keep these search/
+// save regressions independent of the optional Profile GET.
+vi.mock("../components/discover-role-suggestions", () => ({
+  DiscoverRoleSuggestions: () => null,
+}));
+beforeEach(() => resetNavigation());
 const response = (value: unknown, status = 200) => ({
   ok: status < 400,
   status,
@@ -192,7 +204,10 @@ describe("Discover", () => {
     fireEvent.click(screen.getByRole("button", { name: "Сохранить вакансию" }));
     expect(
       await screen.findByRole("link", { name: /Открыть сохранённую/ }),
-    ).toHaveAttribute("href", "/applications/42");
+    ).toHaveAttribute(
+      "href",
+      expect.stringContaining("/applications/42?from="),
+    );
     expect(JSON.parse(fetcher.mock.calls[1][1].body)).toEqual({
       source: vacancy.source,
       source_scope: vacancy.source_scope,
@@ -297,7 +312,10 @@ describe("Discover", () => {
     ).toBeInTheDocument();
     expect(
       screen.getByRole("link", { name: /Открыть сохранённую/ }),
-    ).toHaveAttribute("href", "/applications/73");
+    ).toHaveAttribute(
+      "href",
+      expect.stringContaining("/applications/73?from="),
+    );
     expect(
       screen.queryByRole("button", { name: "Сохранить вакансию" }),
     ).not.toBeInTheDocument();
@@ -333,7 +351,10 @@ describe("Discover", () => {
       ).toBeInTheDocument();
       expect(
         screen.getByRole("link", { name: /Открыть сохранённую/ }),
-      ).toHaveAttribute("href", "/applications/73");
+      ).toHaveAttribute(
+        "href",
+        expect.stringContaining("/applications/73?from="),
+      );
       expect(
         screen.queryByRole("button", { name: "Сохранить вакансию" }),
       ).not.toBeInTheDocument();
@@ -409,7 +430,10 @@ describe("Discover", () => {
     ).not.toBeInTheDocument();
     expect(
       screen.getByRole("link", { name: /Открыть сохранённую/ }),
-    ).toHaveAttribute("href", "/applications/42");
+    ).toHaveAttribute(
+      "href",
+      expect.stringContaining("/applications/42?from="),
+    );
   });
   it.each(["search first", "save first"])(
     "reconciles successful Save with an overlapping unsaved snapshot: %s",
@@ -450,7 +474,10 @@ describe("Discover", () => {
       }
       expect(
         screen.getByRole("link", { name: /Открыть сохранённую/ }),
-      ).toHaveAttribute("href", "/applications/42");
+      ).toHaveAttribute(
+        "href",
+        expect.stringContaining("/applications/42?from="),
+      );
       expect(
         screen.getByText("Текущий статус: Собеседование"),
       ).toBeInTheDocument();
