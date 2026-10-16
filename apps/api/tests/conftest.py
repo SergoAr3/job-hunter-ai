@@ -58,8 +58,11 @@ main_module.enrichment_service = StubEnrichmentService()
 
 
 @pytest.fixture(autouse=True)
-def reset_database():
+def reset_database(monkeypatch):
     from app.services import auth_limits, auth_mail
+    from app.services.source_search_cache import SourceSearchCache
+    # The production store is process-local; tests must not share source pages.
+    monkeypatch.setattr(main_module, "discover_source_cache", SourceSearchCache())
     auth_limits.limiter.buckets.clear()
     auth_mail.get_mailer.cache_clear()
     for mail in Path(os.environ["AUTH_MAIL_SINK_DIR"]).glob("*.json"):
