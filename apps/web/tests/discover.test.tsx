@@ -37,10 +37,15 @@ function submit(query = "Python") {
   fireEvent.click(screen.getByRole("button", { name: "Найти вакансии" }));
 }
 async function select() {
+  await waitFor(() =>
+    expect(
+      screen.getByRole("button", {
+        name: /Python developer.*Test company/,
+      }),
+    ).toBeEnabled(),
+  );
   fireEvent.click(
-    await screen.findByRole("button", {
-      name: /Python developer.*Test company/,
-    }),
+    screen.getByRole("button", { name: /Python developer.*Test company/ }),
   );
 }
 describe("Discover", () => {

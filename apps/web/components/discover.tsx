@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import {
   discoverUrl,
@@ -8,6 +8,7 @@ import {
   type DiscoverState,
 } from "../lib/discover";
 import { DiscoverRoleSuggestions } from "./discover-role-suggestions";
+import { DiscoverLoading, DiscoverPaginationLoading } from "./discover-loading";
 import Link from "next/link";
 import type { DiscoverPage, SaveResult, Vacancy } from "../lib/contracts";
 import { webRequest } from "../lib/client";
@@ -72,14 +73,46 @@ export function Discover() {
   const requestKey = `${searchUrl}:${draft.revision}:${attempt}`;
   const [result, setResult] = useState<{
     key: string;
+    searchUrl: string;
     page: DiscoverPage | null;
     error: string;
   } | null>(null);
-  const page = result?.key === requestKey ? result.page : null;
+  const currentPage = result?.key === requestKey ? result.page : null;
   const error = result?.key === requestKey ? result.error : "";
   const loading = !!state.query && result?.key !== requestKey;
+  const [slowRequestKey, setSlowRequestKey] = useState<string | null>(null);
+  useEffect(() => {
+    if (!loading) return;
+    let active = true;
+    const timer = window.setTimeout(() => {
+      if (active) setSlowRequestKey(requestKey);
+    }, 2800);
+    return () => {
+      active = false;
+      window.clearTimeout(timer);
+    };
+  }, [loading, requestKey]);
+  const slow = loading && slowRequestKey === requestKey;
+  // Retain only the last displayed page as a disabled loading placeholder.
+  // It never supplies current selection, actions or authoritative URL state.
+  const page = currentPage ?? (loading ? result?.page : null);
+  const stale = loading && !!page;
+  const previousState = result
+    ? parseDiscoverState(new URLSearchParams(result.searchUrl.split("?")[1]))
+    : null;
+  const sameSearch =
+    previousState?.query === state.query &&
+    previousState?.remote === state.remote;
+  const loadingMode = !page
+    ? "initial"
+    : sameSearch && state.offset > page.offset
+      ? "next"
+      : sameSearch && state.offset < page.offset
+        ? "previous"
+        : "refresh";
+  const loadingId = useId();
   const selected =
-    page?.items.find((item) => keyOf(item) === state.selected) ?? null;
+    currentPage?.items.find((item) => keyOf(item) === state.selected) ?? null;
   const [saveErrors, setSaveErrors] = useState<Record<string, string>>({});
   const [saveFeedback, setSaveFeedback] = useState<Record<string, boolean>>({});
   // Outcomes only bridge a search that overlapped Save. Rendered Application
@@ -135,6 +168,7 @@ export function Discover() {
         if (!active || generation.current !== current) return;
         setResult({
           key: requestKey,
+          searchUrl,
           error: "",
           page: {
             ...fresh,
@@ -151,6 +185,7 @@ export function Discover() {
         if (active && generation.current === current)
           setResult({
             key: requestKey,
+            searchUrl,
             page: null,
             error: errorMessage(failure),
           });
@@ -166,7 +201,7 @@ export function Discover() {
         if (pendingRequest.subscribers === 0) pendingRequest.controller.abort();
       });
     };
-  }, [confirmedQuery, confirmedRemote, offset, requestKey]);
+  }, [confirmedQuery, confirmedRemote, offset, requestKey, searchUrl]);
 
   useEffect(() => {
     function refresh(event: PageTransitionEvent) {
@@ -313,13 +348,10 @@ export function Discover() {
           onSelect={(role) => setDraft({ ...draft, query: role })}
         />
       </form>
+      {loading && (
+        <DiscoverLoading mode={loadingMode} id={loadingId} slow={slow} />
+      )}
       <div aria-live="polite">
-        {loading && (
-          <div className="state loading-state" role="status">
-            <span className="loading-dot" aria-hidden="true" />
-            Ищем вакансии у источника…
-          </div>
-        )}
         {error && (
           <div className="notice error" role="alert">
             <p>{error}</p>
@@ -342,9 +374,20 @@ export function Discover() {
         </div>
       )}
       {page && (
-        <>
+        <section
+          className={`discover-results${stale ? " is-stale" : ""}`}
+          aria-label="Результаты поиска"
+          aria-busy={stale}
+          aria-describedby={stale ? loadingId : undefined}
+        >
           <div className="results-heading">
             <h2>Результаты поиска</h2>
+            {stale && (
+              <span className="discover-stale-label">
+                Предыдущие результаты · страница{" "}
+                {Math.floor(page.offset / page.limit) + 1}
+              </span>
+            )}
             <span>
               {page.returned_count} на странице
               {page.locally_filtered ? " · фильтр удалённой работы" : ""}
@@ -368,6 +411,7 @@ export function Discover() {
                   <button
                     className={`vacancy-card ${selected && keyOf(selected) === keyOf(item) ? "selected" : ""}`}
                     key={keyOf(item)}
+                    disabled={stale}
                     aria-label={cardAccessibleName(item, page.items, index)}
                     onClick={() => selectIdentity(keyOf(item))}
                     aria-pressed={
@@ -415,9 +459,12 @@ export function Discover() {
                   </button>
                 );
               })}
-              <nav className="pagination" aria-label="Страницы результатов">
+              <nav
+                className="pagination discover-pagination"
+                aria-label="Страницы результатов"
+              >
                 <button
-                  disabled={page.offset === 0}
+                  disabled={stale || page.offset === 0}
                   onClick={() =>
                     navigate({
                       ...state,
@@ -428,9 +475,17 @@ export function Discover() {
                 >
                   ← Назад
                 </button>
-                <span>Страница {Math.floor(page.offset / page.limit) + 1}</span>
+                <div className="discover-pagination-position">
+                  {stale ? (
+                    <DiscoverPaginationLoading mode={loadingMode} slow={slow} />
+                  ) : (
+                    <span>
+                      Страница {Math.floor(page.offset / page.limit) + 1}
+                    </span>
+                  )}
+                </div>
                 <button
-                  disabled={page.next_offset === null}
+                  disabled={stale || page.next_offset === null}
                   onClick={() =>
                     page.next_offset !== null &&
                     navigate({
@@ -524,7 +579,7 @@ export function Discover() {
               </article>
             )}
           </div>
-        </>
+        </section>
       )}
     </>
   );
