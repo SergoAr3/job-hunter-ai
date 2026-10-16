@@ -54,34 +54,8 @@ class TrudvsemClient:
         offset: int,
         region_code: str | None = None,
     ) -> SearchPage:
-        if not query.strip() or not 1 <= limit <= 100 or offset < 0:
-            raise ValueError("Invalid Trudvsem search parameters")
-        if offset % limit:
-            raise ValueError("Trudvsem item offset must be aligned to limit")
-        # Public offsets count items; Trudvsem offsets count pages.
-        source_page = offset // limit
-        path = BASE_URL
-        if region_code is not None:
-            if not region_code.isdigit():
-                raise ValueError("region_code must contain digits only")
-            path = f"{path}/region/{region_code}"
-        payload = self._get_json(
-            f"{path}?{urlencode({'text': query.strip(), 'limit': limit, 'offset': source_page})}"
-        )
-        meta = payload.get("meta")
-        if not isinstance(meta, dict) or type(meta.get("total")) is not int or meta["total"] < 0:
-            raise TrudvsemBadResponseError("Missing search metadata")
-        exhausted = offset >= meta["total"]
-        vacancies = _vacancy_list(payload, allow_empty=exhausted)
-        if (not vacancies and not exhausted) or (vacancies and exhausted):
-            raise TrudvsemBadResponseError("Search results contradict pagination metadata")
-        fetched_at = datetime.now(timezone.utc)
-        return SearchPage(
-            items=[map_vacancy(item, fetched_at=fetched_at) for item in vacancies],
-            total=meta["total"],
-            limit=limit,
-            offset=offset,
-        )
+        url = _search_url(query, limit=limit, offset=offset, region_code=region_code)
+        return _search_page(self._get_json(url), limit=limit, offset=offset)
 
     def get_detail(self, source_scope: str, external_id: str) -> ExternalVacancy:
         if (
@@ -116,17 +90,7 @@ class TrudvsemClient:
         except OSError as error:
             raise TrudvsemError("Source request failed") from error
 
-        if status_code == 429:
-            raise TrudvsemRateLimitError("Source rate limited the request")
-        if not 200 <= status_code < 300:
-            raise TrudvsemError(f"Source returned HTTP {status_code}")
-        try:
-            payload = json.loads(body.decode("utf-8"))
-        except (UnicodeDecodeError, json.JSONDecodeError) as error:
-            raise TrudvsemBadResponseError("Source returned invalid JSON") from error
-        if not isinstance(payload, dict) or str(payload.get("status")) != "200":
-            raise TrudvsemBadResponseError("Source returned a logical error")
-        return payload
+        return _decode_response(status_code, body)
 
 
 class TrudvsemProvider:
@@ -152,6 +116,52 @@ class TrudvsemProvider:
 
     def get_detail(self, source_scope: str, external_id: str) -> ExternalVacancy:
         return self._client.get_detail(source_scope, external_id)
+
+
+def _search_url(query: str, *, limit: int, offset: int, region_code: str | None) -> str:
+    if not query.strip() or not 1 <= limit <= 100 or offset < 0:
+        raise ValueError("Invalid Trudvsem search parameters")
+    if offset % limit:
+        raise ValueError("Trudvsem item offset must be aligned to limit")
+    # Public offsets count items; Trudvsem offsets count pages.
+    source_page = offset // limit
+    path = BASE_URL
+    if region_code is not None:
+        if not region_code.isdigit():
+            raise ValueError("region_code must contain digits only")
+        path = f"{path}/region/{region_code}"
+    return f"{path}?{urlencode({'text': query.strip(), 'limit': limit, 'offset': source_page})}"
+
+
+def _search_page(payload: dict[str, object], *, limit: int, offset: int) -> SearchPage:
+    meta = payload.get("meta")
+    if not isinstance(meta, dict) or type(meta.get("total")) is not int or meta["total"] < 0:
+        raise TrudvsemBadResponseError("Missing search metadata")
+    exhausted = offset >= meta["total"]
+    vacancies = _vacancy_list(payload, allow_empty=exhausted)
+    if (not vacancies and not exhausted) or (vacancies and exhausted):
+        raise TrudvsemBadResponseError("Search results contradict pagination metadata")
+    fetched_at = datetime.now(timezone.utc)
+    return SearchPage(
+        items=[map_vacancy(item, fetched_at=fetched_at) for item in vacancies],
+        total=meta["total"],
+        limit=limit,
+        offset=offset,
+    )
+
+
+def _decode_response(status_code: int, body: bytes) -> dict[str, object]:
+    if status_code == 429:
+        raise TrudvsemRateLimitError("Source rate limited the request")
+    if not 200 <= status_code < 300:
+        raise TrudvsemError(f"Source returned HTTP {status_code}")
+    try:
+        payload = json.loads(body.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise TrudvsemBadResponseError("Source returned invalid JSON") from error
+    if not isinstance(payload, dict) or str(payload.get("status")) != "200":
+        raise TrudvsemBadResponseError("Source returned a logical error")
+    return payload
 
 
 def map_vacancy(item: object, *, fetched_at: datetime) -> ExternalVacancy:
