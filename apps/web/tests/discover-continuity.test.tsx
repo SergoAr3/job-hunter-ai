@@ -96,8 +96,12 @@ function submit(query: string) {
   fireEvent.click(screen.getByRole("button", { name: "Найти вакансии" }));
 }
 async function resultCard() {
-  return screen.findByRole("button", {
-    name: /Python developer.*Test company/,
+  return waitFor(() => {
+    const card = screen.getByRole("button", {
+      name: /Python developer.*Test company/,
+    });
+    expect(card).toBeEnabled();
+    return card;
   });
 }
 
@@ -279,7 +283,7 @@ it("restores selection by the full identity after reorder, never by position or 
   expect(screen.queryByLabelText("Описание вакансии")).not.toBeInTheDocument();
 });
 
-it("never shows cached A on A → B → Back while fresh A is pending, and rejects late B", async () => {
+it("marks old A as a disabled placeholder on A → B → Back until fresh A, and rejects late B", async () => {
   resetNavigation(context("A", false, 0, identity));
   render(<Discover />);
   await resultCard();
@@ -297,7 +301,10 @@ it("never shows cached A on A → B → Back while fresh A is pending, and rejec
   expect(screen.queryByLabelText("Описание вакансии")).not.toBeInTheDocument();
   expect(
     screen.queryByRole("button", { name: /Python developer.*Test company/ }),
-  ).not.toBeInTheDocument();
+  ).toBeDisabled();
+  expect(
+    screen.getByRole("region", { name: "Результаты поиска" }),
+  ).toHaveAttribute("aria-busy", "true");
   await act(async () =>
     finishA(
       searchResponse("/api/discover?offset=0", [
