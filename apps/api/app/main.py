@@ -88,6 +88,7 @@ from app.services.discover import (
     search_discover_jobs,
 )
 from app.services.trudvsem import TrudvsemClient, TrudvsemProvider
+from app.services.source_search_cache import CachedSearchProvider, SourceSearchCache
 from app.services.vacancy_sources import SourceError
 from app.services.cv_profile_draft import (
     ERROR_AI_PROVIDER,
@@ -232,6 +233,7 @@ ai_enrichment_service = JobAIEnrichmentService()
 cv_profile_draft_ai_service = CVProfileDraftAIService()
 app.state.cv_import_ai_service = cv_profile_draft_ai_service
 trudvsem_client = TrudvsemClient()
+discover_source_cache = SourceSearchCache()
 
 CV_DRAFT_ERROR_STATUS = {
     ERROR_USER_NOT_FOUND: status.HTTP_404_NOT_FOUND,
@@ -434,7 +436,7 @@ def discover_jobs(
             offset=offset,
             region_code=region_code,
             remote_only=remote_only,
-            provider=TrudvsemProvider(trudvsem_client),
+            provider=CachedSearchProvider(TrudvsemProvider(trudvsem_client), discover_source_cache),
         )
     except UnsupportedMarketError as error:
         raise HTTPException(status_code=422, detail={"code": error.code}) from error

@@ -267,9 +267,10 @@ def test_saved_lookup_query_count_does_not_grow_with_results(monkeypatch) -> Non
         try:
             response = client.get(
                 f"/users/{user_id}/discover/jobs",
-                params={"market_country": "RU", "query": "Backend"},
+                params={"market_country": "RU", "query": f"Backend {len(items)}"},
             )
             assert response.status_code == 200
+            assert response.json()["returned_count"] == len(items)
             assert all(item["application_id"] is not None for item in response.json()["items"])
         finally:
             event.remove(engine, "before_cursor_execute", record)
@@ -410,7 +411,10 @@ def test_saved_lookup_uses_legacy_url_but_not_a_different_attached_identity(monk
     body = {key: getattr(original, key) for key in ("source", "source_scope", "external_id")}
     assert client.post(f"/users/{user_id}/discover/jobs/save", json=body).status_code == 200
     monkeypatch.setattr(main_module, "trudvsem_client", StubClient([different]))
-    item = client.get(f"/users/{user_id}/discover/jobs", params=params).json()["items"][0]
+    # A different source result needs a distinct search; the first is cached.
+    item = client.get(
+        f"/users/{user_id}/discover/jobs", params={**params, "query": "Backend updated"}
+    ).json()["items"][0]
     assert item["already_saved_for_user"] is False
     assert item["application_id"] is None and item["application_status"] is None
 
