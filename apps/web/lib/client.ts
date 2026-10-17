@@ -1,5 +1,6 @@
 import { loginUrl } from "./auth";
 import { WebError } from "./errors";
+import { validFeedCursor } from "./discover";
 let redirecting = false;
 export async function webRequest<T>(
   url: string,
@@ -36,6 +37,11 @@ export async function webRequest<T>(
           !Array.isArray(value.fieldErrors)
           ? value.fieldErrors
           : undefined,
+        undefined,
+        url.startsWith("/api/discover/feed") &&
+          validFeedCursor(value?.retry_cursor)
+          ? value.retry_cursor
+          : undefined,
       );
     return value;
   } catch (error) {
@@ -43,19 +49,21 @@ export async function webRequest<T>(
     if (url.startsWith("/api/auth/"))
       throw new WebError("auth_unavailable", 503);
     throw new WebError(
-      url.startsWith("/api/profile/work-experiences") &&
-        init?.method &&
-        init.method !== "GET"
-        ? "work_unconfirmed"
-        : init?.method === "PATCH"
-          ? "ambiguous_application"
-          : init?.method === "POST"
-            ? "ambiguous_save"
-            : init?.method === "PUT"
-              ? url === "/api/profile"
-                ? "ambiguous_profile"
-                : "ambiguous_status"
-              : "api_unavailable",
+      url.startsWith("/api/discover/feed")
+        ? "feed_unavailable"
+        : url.startsWith("/api/profile/work-experiences") &&
+            init?.method &&
+            init.method !== "GET"
+          ? "work_unconfirmed"
+          : init?.method === "PATCH"
+            ? "ambiguous_application"
+            : init?.method === "POST"
+              ? "ambiguous_save"
+              : init?.method === "PUT"
+                ? url === "/api/profile"
+                  ? "ambiguous_profile"
+                  : "ambiguous_status"
+                : "api_unavailable",
     );
   }
 }

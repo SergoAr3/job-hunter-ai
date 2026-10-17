@@ -53,3 +53,14 @@ export const saved: SaveResult = {
   application_created: false,
   job_created: false,
 };
+
+export const feedPage: import("../lib/contracts").DiscoverFeedPage = {
+  items: [{ ...vacancy, workplace_type: "remote" }],
+  returned_count: 1,
+  cursor: "A".repeat(32),
+  prev_cursor: null,
+  next_cursor: "B".repeat(32),
+  next_action: "next",
+  state: "page",
+  expires_at: "2026-10-17T12:00:00Z",
+};

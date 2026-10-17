@@ -87,3 +87,17 @@ it("retains the full supported Unicode query through a login round trip", async 
     `REDIRECT:/login?next=${encodeURIComponent(detailUrl)}`,
   );
 });
+
+it("preserves current cursor and selected through Application and login round trip", async () => {
+  const cursor = "A".repeat(32);
+  const cursorFrom = `/discover?${new URLSearchParams({ query: "Python", remote_only: "true", cursor, selected })}`;
+  render(await Page(props(cursorFrom)));
+  expect(
+    screen.getByRole("link", { name: "← К результатам поиска" }),
+  ).toHaveAttribute("href", cursorFrom);
+  mocks.get.mockRejectedValue(new WebError("unauthenticated", 401));
+  const target = `/applications/42?from=${encodeURIComponent(cursorFrom)}`;
+  await expect(Page(props(cursorFrom))).rejects.toThrow(
+    `REDIRECT:/login?next=${encodeURIComponent(target)}`,
+  );
+});

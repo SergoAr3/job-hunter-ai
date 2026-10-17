@@ -420,3 +420,69 @@ it("cleans the timer and aborts on unmount, including a late response", async ()
   await tick(5000);
   expect(vi.getTimerCount()).toBe(0);
 });
+
+it.each([
+  {
+    initial: "/discover?query=Python&offset=20",
+    next: "/discover?query=QA",
+    copy: "Обновляем результаты…",
+  },
+  {
+    initial: "/discover?query=Python&remote_only=true&offset=20",
+    next: "/discover?query=Python",
+    copy: "Обновляем результаты…",
+  },
+  {
+    initial: "/discover?query=Python&offset=20",
+    next: "/discover?query=Python&offset=10",
+    copy: "Загружаем предыдущую страницу…",
+  },
+  {
+    initial: "/discover?query=Python&offset=20",
+    next: "/discover?query=Python&offset=30",
+    copy: "Загружаем следующую страницу…",
+  },
+])(
+  "classifies legacy loading by query/filter identity: $initial → $next",
+  async ({ initial, next, copy }) => {
+    resetNavigation(initial);
+    const first = deferred(),
+      pending = deferred();
+    fetcher.mockReturnValueOnce(first.promise).mockReturnValue(pending.promise);
+    render(<Discover />);
+    await finish(first, { ...firstPage, offset: 20, next_offset: 30 });
+    if (next.includes("offset")) {
+      fireEvent.click(
+        screen.getByRole("button", {
+          name: next.endsWith("10") ? "← Назад" : "Далее →",
+        }),
+      );
+    } else {
+      fireEvent.change(screen.getByLabelText("Должность или ключевые слова"), {
+        target: { value: next.includes("QA") ? "QA" : "Python" },
+      });
+      const remote = screen.getByLabelText(
+        "Только удалённая работа",
+      ) as HTMLInputElement;
+      if (remote.checked) fireEvent.click(remote);
+      fireEvent.click(screen.getByRole("button", { name: "Найти вакансии" }));
+    }
+    expect(navigationUrl()).toBe(next);
+    expect(screen.getByRole("status")).toHaveTextContent(copy);
+    expect(card()).toBeDisabled();
+    expect(
+      document.querySelector(".discover-pagination-feedback"),
+    ).toHaveTextContent(copy);
+    await tick(2799);
+    expect(screen.queryByText(slowText)).not.toBeInTheDocument();
+    await tick(1);
+    expect(screen.getByRole("status")).toHaveTextContent(slowText);
+    expect(fetcher).toHaveBeenCalledTimes(2);
+    expect(
+      fetcher.mock.calls.every(([path]) =>
+        String(path).startsWith("/api/discover?"),
+      ),
+    ).toBe(true);
+    await finish(pending);
+  },
+);

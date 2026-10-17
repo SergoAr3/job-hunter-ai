@@ -55,6 +55,16 @@ export interface DiscoverPage {
   next_offset: number | null;
   locally_filtered: boolean;
 }
+export interface DiscoverFeedPage {
+  items: Vacancy[];
+  returned_count: number;
+  cursor: string;
+  prev_cursor: string | null;
+  next_cursor: string | null;
+  next_action: "next" | "continue" | null;
+  state: "page" | "paused" | "end";
+  expires_at: string;
+}
 export type Identity = Pick<Vacancy, "source" | "source_scope" | "external_id">;
 export interface ReminderFields {
   next_action_remind_at?: string | null;

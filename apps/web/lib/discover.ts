@@ -3,6 +3,12 @@ export interface DiscoverState {
   remote: boolean;
   offset: number;
   selected: string | null;
+  mode?: "feed" | "start";
+  cursor?: string;
+}
+
+export function validFeedCursor(value: unknown): value is string {
+  return typeof value === "string" && /^[A-Za-z0-9_-]{32}$/.test(value);
 }
 
 export function vacancyKey(item: {
@@ -41,13 +47,25 @@ export function parseDiscoverState(params: URLSearchParams): DiscoverState {
     return { query: "", remote: false, offset: 0, selected: null };
   const rawOffset = single("offset") ?? "0";
   const offset = Number(rawOffset);
+  const remote = single("remote_only") === "true";
+  const cursor = single("cursor");
+  if (
+    params.has("cursor") &&
+    (!remote || !validFeedCursor(cursor) || params.has("offset"))
+  )
+    return { query: "", remote: false, offset: 0, selected: null };
   return {
     query,
-    remote: single("remote_only") === "true",
+    remote,
     // Offset is the source's record offset, not a page number or an index.
     offset:
       /^\d+$/.test(rawOffset) && Number.isSafeInteger(offset) ? offset : 0,
     selected: selectedIdentity(single("selected")),
+    ...(cursor
+      ? { mode: "feed" as const, cursor }
+      : remote && !params.has("offset")
+        ? { mode: "start" as const }
+        : {}),
   };
 }
 
@@ -56,7 +74,10 @@ export function discoverUrl(state: DiscoverState): string {
   if (state.query) {
     params.set("query", state.query);
     if (state.remote) params.set("remote_only", "true");
-    if (state.offset) params.set("offset", String(state.offset));
+    if (state.mode === "feed" && validFeedCursor(state.cursor))
+      params.set("cursor", state.cursor);
+    else if (state.offset || (state.remote && !state.mode))
+      params.set("offset", String(state.offset));
     if (state.selected) params.set("selected", state.selected);
   }
   return `/discover${params.size ? `?${params}` : ""}`;

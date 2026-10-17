@@ -4,11 +4,15 @@ export class WebError extends Error {
     public status = 502,
     public fieldErrors?: Record<string, string>,
     public retryAfter?: string,
+    public retryCursor?: string,
   ) {
     super(code);
   }
 }
 const messages: Record<string, string> = {
+  feed_busy: "Поиск временно недоступен. Попробуйте ещё раз.",
+  feed_unavailable: "Не удалось загрузить результаты. Повторите попытку.",
+  feed_expired: "Эти результаты больше недоступны.",
   REMINDER_ACTION_REQUIRED: "Сначала укажите следующее действие.",
   REMINDER_TIMEZONE_INVALID: "Выберите корректный часовой пояс.",
   REMINDER_DATETIME_INVALID: "Укажите дату, время и часовой пояс.",
