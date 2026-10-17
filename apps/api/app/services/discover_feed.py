@@ -10,7 +10,7 @@ import secrets
 import time
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 from threading import Event
 from typing import Literal, TypeVar, cast
@@ -62,6 +62,7 @@ class Snapshot:
     next: str | None
     result: Literal["page", "paused", "end"] | None
     fence: str | None = None
+    next_action: Literal["next", "continue"] | None = None
 
 
 class FeedService:
@@ -223,6 +224,23 @@ class FeedService:
         node = session.get(State, token, populate_existing=True)
         if node is None:
             raise FeedError("FEED_STATE_INVALID")
+        outcome = self.snapshot(chain, node)
+        links = [value for value in (node.prev_token, node.next_token) if value is not None]
+        if links:
+            linked = list(session.scalars(select(State).where(State.token.in_(links))))
+            if len(linked) != len(set(links)) or any(item.chain_id != chain.id or item.token == token for item in linked):
+                raise FeedError("FEED_STATE_INVALID")
+            previous = next((item for item in linked if item.token == node.prev_token), None)
+            if previous is not None and (previous.status != "complete" or previous.result_state != "page"):
+                raise FeedError("FEED_STATE_INVALID")
+        return chain, node, outcome
+
+    @staticmethod
+    def snapshot(chain: Chain, node: State) -> Snapshot:
+        """Validate evidence consistently for direct loads and navigation hops."""
+        if any(re.fullmatch(TOKEN_PATTERN, token) is None for token in
+               (node.token, node.prev_token, node.next_token) if token is not None):
+            raise FeedError("FEED_STATE_INVALID")
         try:
             identity = FeedIdentity.model_validate_json(chain.identity_json)
             raw = json.loads(node.payload)
@@ -242,18 +260,43 @@ class FeedService:
             raise FeedError("FEED_STATE_INVALID")
         if stored.checkpoint.offset % 10 or any(item.workplace_type != "remote" for item in stored.items):
             raise FeedError("FEED_STATE_INVALID")
-        if node.result_state == "end" and (node.next_token is not None or not stored.checkpoint.exhausted or stored.checkpoint.remainder):
+        terminal = stored.checkpoint.exhausted and not stored.checkpoint.remainder
+        if ((node.result_state == "end" and (node.next_token is not None or not terminal))
+                or (node.result_state == "paused" and (node.next_token is None or terminal))
+                or (node.result_state == "page" and (node.next_token is None) != terminal)
+                or (node.status != "complete" and node.next_token is not None)
+                or ((node.status == "claimed") != (node.lease_token is not None and node.lease_until is not None))
+                or (node.status != "claimed" and (node.lease_token is not None or node.lease_until is not None))):
             raise FeedError("FEED_STATE_INVALID")
-        links = [value for value in (node.prev_token, node.next_token) if value is not None]
-        if links:
-            linked = list(session.scalars(select(State).where(State.token.in_(links))))
-            if len(linked) != len(set(links)) or any(item.chain_id != chain.id or item.token == token for item in linked):
-                raise FeedError("FEED_STATE_INVALID")
-            previous = next((item for item in linked if item.token == node.prev_token), None)
-            if previous is not None and (previous.status != "complete" or previous.result_state != "page"):
-                raise FeedError("FEED_STATE_INVALID")
         result = cast(Literal["page", "paused", "end"] | None, node.result_state)
-        return chain, node, Snapshot(token, identity, stored, aware(chain.expires_at), node.prev_token, node.next_token, result)
+        action = ("continue" if result == "paused" else "next") if node.next_token is not None else None
+        return Snapshot(node.token, identity, stored, aware(chain.expires_at), node.prev_token, node.next_token,
+                        result, next_action=action)
+
+    def navigation(self, session: Session, chain: Chain, origin: Snapshot) -> Snapshot:
+        """Collapse committed paused transitions without changing stored links."""
+        token, action = origin.next, origin.next_action
+        previous = origin.token if origin.result == "page" else origin.prev
+        visited = {origin.token}
+        # The origin and every visited descendant count toward the chain cap.
+        for _ in range(MAX_CHAIN_STATES - 1):
+            if token is None:
+                return replace(origin, next=None, next_action=None)
+            if token in visited:
+                raise FeedError("FEED_STATE_INVALID")
+            visited.add(token)
+            node = session.get(State, token, populate_existing=True)
+            if node is None or node.chain_id != chain.id or node.prev_token != previous:
+                raise FeedError("FEED_STATE_INVALID")
+            step = self.snapshot(chain, node)
+            if step.result == "end":
+                return replace(origin, next=None, next_action=None)
+            if step.result != "paused":
+                # Ready/claimed is actionable; a completed page is recovered by
+                # idempotent POST of this same token, never skipped on GET.
+                return replace(origin, next=token, next_action=action)
+            token, action = step.next, "continue"
+        raise FeedError("FEED_STATE_INVALID")
 
     def claim(self, session: Session, token: str) -> Snapshot:
         with self.transaction(session):
@@ -332,9 +375,10 @@ class FeedService:
 
     def replay(self, session: Session, token: str) -> Snapshot:
         with self.transaction(session, write=False):
-            _, node, outcome = self.load(session, token)
+            chain, node, outcome = self.load(session, token)
             if node.status != "complete":
                 raise FeedError("FEED_CURSOR_NOT_MATERIALIZED")
+            outcome = self.navigation(session, chain, outcome)
         self.log("replay", token, result=outcome.result, returned=len(outcome.stored.items))
         return outcome
 
@@ -351,7 +395,7 @@ class FeedService:
             raise FeedError("FEED_CURSOR_NOT_MATERIALIZED")
         return FeedOut(items=items, returned_count=len(items), cursor=outcome.token,
                        prev_cursor=outcome.prev, next_cursor=outcome.next,
-                       state=outcome.result, expires_at=outcome.expires_at)
+                       next_action=outcome.next_action, state=outcome.result, expires_at=outcome.expires_at)
 
     @staticmethod
     def log(action: str, token: str, *, result: str | None = None, stats: ScanStats | None = None, elapsed: float = 0, returned: int = 0) -> None:

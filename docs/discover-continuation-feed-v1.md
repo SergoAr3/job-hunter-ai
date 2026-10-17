@@ -34,7 +34,7 @@ GET /users/{user_id}/discover/feed?cursor=<cursor>
 ```
 
 Responses contain `items`, `returned_count`, `cursor`, `prev_cursor`, `next_cursor`,
-`state`, `expires_at`. They contain no source total, offsets, remote total or page
+`next_action`, `state`, `expires_at`. They contain no source total, offsets, remote total or page
 number. Each item retains `(source, source_scope, external_id)` for future selection
 and existing Save handoff. Responses use `Cache-Control: no-store` because enrichment
 is user-specific even though stored source evidence is shareable.
@@ -76,6 +76,52 @@ transaction. A child's Previous points to its parent's visible page, or skips a
 paused parent to the last visible page. Previous is always GET replay, never a scan.
 Materialized ordered composition is stable until expiry, independently of source
 cache TTL or later source mutations.
+
+### Replay navigation and refresh recovery
+
+GET replay keeps the requested `cursor`, its materialized items, state and Previous,
+but resolves current navigation from committed DB evidence. `next_action` is a
+strict `"next" | "continue" | null` enum paired with `next_cursor`:
+
+- `next`: the original next transition is ready/claimed, or already completed with
+  a visible page. POST the returned token; a completed page is recovered
+  idempotently. GET never replaces the current visible page with its successor.
+- `continue`: one or more committed paused transitions have been skipped for
+  navigation. POST the token after the latest paused transition. If that token has
+  already completed with a page, the same POST recovers that page without a scan.
+- `null`: no continuation, including a terminal current page/end or a committed
+  end reached through paused transitions. `next_cursor` is also null.
+
+For `P -> S paused -> C paused -> D`, one GET of visible page P returns D and
+`next_action=continue`. Its URL can keep addressing P while Web restores Continue
+after refresh, Back or Application return, without another request or client-only
+navigation storage. The same resolution applies when replaying an initial paused
+outcome with no visible page yet.
+
+Resolution is read-only: no scan, source/cache lookup, claim, lease mutation or
+stored-link rewrite. It follows only paused descendants and stops at a pending/
+claimed token, a visible page, or end. The origin plus visited descendants are
+bounded by 64 states; cycles, missing/wrong-chain nodes, inconsistent Previous,
+unsupported payload versions and invalid evidence fail with controlled invariant/
+version errors rather than being reported as end. Each visited descendant requires
+one primary-key read and uses the same evidence validation as a direct load. The
+normal replay path uses four graph SELECTs when a next token exists, or fewer for
+terminal pages; Application enrichment remains a single batch query.
+
+Concurrent GET/finalize needs no row lock. PostgreSQL READ COMMITTED can observe
+the pre-finalize ready/claimed token or a committed outcome; finalization publishes
+the outcome and child atomically. Completed transitions are immutable, so following
+committed paused links cannot observe a partially published child. Metadata may
+become outdated after the read; the next explicit POST retains conflict/fencing
+protection. Navigation is public evidence and remains identical across viewers,
+while matching and Application enrichment are freshly computed per viewer.
+
+POST retains the original input-token-to-outcome mapping and original next token;
+it adds `next_action=next` for a page with a child, `continue` for paused, or null
+for a terminal outcome. Repeating a successful POST remains idempotent. GET's
+navigation metadata may evolve as descendants complete; its visible composition
+does not. This distinction preserves response-lost recovery and closes the Web
+single-replay paused-refresh blocker without a schema migration.
 
 ## Scan and remainder
 
@@ -228,6 +274,11 @@ and Uvicorn target formatter for normal GET/POST, redirects, outer 500 and an
 unrelated route. An indexed cleanup regression builds 2048 graph states, checks
 planner eligibility (seqscan disabled only diagnostically), FK SET NULL/cascade
 and preservation of unrelated active chains.
+Replay-navigation regressions cover one/multiple paused outcomes, terminal recovery,
+response-lost page recovery, claimed transitions, the 64-state bound, graph corruption,
+fresh per-user enrichment and exact zero source/cache calls. Independent PostgreSQL
+sessions also replay while a finalizer has flushed but not committed, proving
+nonblocking pre-commit reads and correct navigation after commit.
 
 Run PostgreSQL checks with `RUN_FEED_POSTGRES=1` and an existing local PostgreSQL;
 `IDENTITY_TEST_DATABASE_URL` can select another test database. No runtime restart or
