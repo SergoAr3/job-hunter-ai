@@ -67,7 +67,7 @@ def test_navigation_replay_previous_stable_after_cache_expiry(feed):
     assert replay(user_id, second["prev_cursor"]).json() == first
     assert advance(user_id, first["cursor"]).json() == first  # committed result repeat
     assert cache.fresh_reads == cache.cold_loads == provider.calls == [0]
-    assert set(first) == {"items", "returned_count", "cursor", "prev_cursor", "next_cursor", "state", "expires_at"}
+    assert set(first) == {"items", "returned_count", "cursor", "prev_cursor", "next_cursor", "next_action", "state", "expires_at"}
 
 
 def test_same_advance_response_lost_repeat_returns_same_cursor_no_scan(feed):
@@ -143,8 +143,11 @@ def test_whole_advance_error_retry_checkpoint_unchanged_and_old_page_replayable(
 
 def test_replay_current_application_and_profile_and_other_authenticated_user(feed):
     user_id, service, cache, provider, _ = feed
+    provider.pages = {0: page(remote=[0]), 10: page(10)}
     first = start(user_id, limit=1).json()
     token = first["cursor"]
+    paused = advance(user_id, first["next_cursor"]).json()
+    assert paused["state"] == "paused"
     other = create_user(701)
     put_profile(other)
     with TestSessionLocal() as session:
@@ -165,6 +168,9 @@ def test_replay_current_application_and_profile_and_other_authenticated_user(fee
     assert plain.get(f"/users/{other}/discover/feed", params={"cursor": token}).status_code == 401
     assert plain.get(f"/users/{user_id}/discover/feed", params={"cursor": token}, headers=bearer).status_code == 404
     current = plain.get(f"/users/{other}/discover/feed", params={"cursor": token}, headers=bearer).json()
+    owner = replay(user_id, token).json()
+    assert current["next_cursor"] == owner["next_cursor"] == paused["next_cursor"]
+    assert current["next_action"] == owner["next_action"] == "continue"
     assert current["items"][0]["application_id"] == application_id
     assert current["items"][0]["preview_match"]["available"] is True
     assert first["items"][0]["preview_match"]["available"] is False
@@ -179,7 +185,8 @@ def test_replay_current_application_and_profile_and_other_authenticated_user(fee
         raw = " ".join(node.payload for node in session.scalars(select(State)))
         for forbidden in ("preview_match", "application_id", "application_status", "profile", "already_saved", "score"):
             assert forbidden not in raw
-    assert cache.fresh_reads == cache.cold_loads == provider.calls == [0]
+    assert cache.cold_loads == provider.calls == [0, 10]
+    assert cache.fresh_reads == [0, 10, 20]
 
 
 @pytest.mark.parametrize("method", ["replay", "advance", "previous"])

@@ -100,5 +100,6 @@ class FeedOut(StrictModel):
     cursor: str
     prev_cursor: str | None
     next_cursor: str | None
+    next_action: Literal["next", "continue"] | None
     state: Literal["page", "paused", "end"]
     expires_at: datetime
