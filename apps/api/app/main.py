@@ -157,6 +157,9 @@ from app.telegram_auth_routes import router as telegram_auth_router
 app.include_router(telegram_auth_router)
 from app.cv_import_routes import router as cv_import_router
 app.include_router(cv_import_router)
+from app.discover_feed_routes import FeedAccessLogRedaction, router as discover_feed_router
+app.include_router(discover_feed_router)
+app.add_middleware(FeedAccessLogRedaction)
 
 
 @app.exception_handler(ReminderError)
