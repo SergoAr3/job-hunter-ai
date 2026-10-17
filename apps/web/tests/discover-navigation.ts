@@ -33,17 +33,22 @@ export function resetNavigation(url = "/discover") {
   vi.spyOn(window.history, "replaceState").mockImplementation(
     (_data, _unused, url) => testRouter.replace(String(url)),
   );
+  vi.spyOn(window.history, "pushState").mockImplementation(
+    (_data, _unused, url) => testRouter.push(String(url)),
+  );
 }
 export function back() {
   if (index > 0) {
     index--;
     notify();
+    window.dispatchEvent(new PopStateEvent("popstate"));
   }
 }
 export function forward() {
   if (index < entries.length - 1) {
     index++;
     notify();
+    window.dispatchEvent(new PopStateEvent("popstate"));
   }
 }
 export function useTestSearchParams() {

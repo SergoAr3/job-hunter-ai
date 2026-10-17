@@ -4006,3 +4006,24 @@ summary {
     justify-self: start;
   }
 }
+
+.feed-navigation-message,
+.feed-navigation-error {
+  margin: 12px 0 0;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+.feed-navigation-error p {
+  margin: 0 0 6px;
+}
+.feed-navigation .discover-pagination button {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+@media (max-width: 520px) {
+  .feed-navigation .discover-pagination > button {
+    max-width: 100%;
+  }
+}

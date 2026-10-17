@@ -1,8 +1,13 @@
 "use client";
 
-type LoadingMode = "initial" | "next" | "previous" | "refresh";
+type LoadingMode = "initial" | "next" | "previous" | "refresh" | "replay";
 
 function loadingCopy(mode: LoadingMode, slow: boolean) {
+  if (mode === "replay")
+    return {
+      title: "Загружаем результаты…",
+      description: "Обновляем данные сохранённых результатов",
+    };
   const title = slow
     ? "Источник отвечает медленнее обычного"
     : mode === "next"

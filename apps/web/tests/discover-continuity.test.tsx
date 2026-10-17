@@ -8,7 +8,7 @@ import {
 } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { Discover } from "../components/discover";
-import { page, vacancy } from "./fixtures";
+import { page, vacancy, feedPage } from "./fixtures";
 import {
   back,
   forward,
@@ -35,7 +35,7 @@ const context = (
 ) => {
   const params = new URLSearchParams({ query });
   if (remote) params.set("remote_only", "true");
-  if (offset) params.set("offset", String(offset));
+  if (offset || remote) params.set("offset", String(offset));
   if (selected) params.set("selected", selected);
   return `/discover?${params}`;
 };
@@ -74,7 +74,9 @@ beforeEach(() => {
       Promise.resolve(
         url === "/api/profile"
           ? Response.json({ target_roles: ["Backend Developer", "QA"] })
-          : searchResponse(url),
+          : url.startsWith("/api/discover/feed")
+            ? Response.json(feedPage)
+            : searchResponse(url),
       ),
     );
   vi.stubGlobal("fetch", fetcher);
@@ -122,19 +124,28 @@ it("uses profile roles only as editable draft suggestions; submit alone confirms
   expect(navigationUrl()).toBe("/discover");
   fireEvent.click(screen.getByRole("button", { name: "Найти вакансии" }));
   await resultCard();
-  expect(navigationUrl()).toBe(context("Python", true));
-  expect(searchCalls()).toHaveLength(1);
-  expect(searchCalls()[0][0]).toBe(
-    "/api/discover?query=Python&remote_only=true&offset=0",
+  expect(navigationUrl()).toBe(
+    `/discover?query=Python&remote_only=true&cursor=${feedPage.cursor}`,
   );
+  expect(searchCalls()).toHaveLength(0);
+  expect(
+    fetcher.mock.calls.filter(([url]) => url === "/api/discover/feed"),
+  ).toHaveLength(1);
   submit("draft submitted");
-  await waitFor(() => expect(searchCalls()).toHaveLength(2));
+  await waitFor(() =>
+    expect(
+      fetcher.mock.calls.filter(([url]) => url === "/api/discover/feed"),
+    ).toHaveLength(2),
+  );
+  await resultCard();
   fireEvent.change(screen.getByLabelText("Должность или ключевые слова"), {
     target: { value: "unsubmitted" },
   });
   fireEvent.click(screen.getByLabelText("Только удалённая работа"));
-  expect(navigationUrl()).toBe(context("draft submitted", true));
-  expect(searchCalls()).toHaveLength(2);
+  expect(navigationUrl()).toBe(
+    `/discover?query=draft+submitted&remote_only=true&cursor=${feedPage.cursor}`,
+  );
+  expect(searchCalls()).toHaveLength(0);
   expect(await resultCard()).toBeInTheDocument();
 });
 
@@ -184,21 +195,21 @@ it("Back and Forward restore a changed remote filter, not its unsubmitted draft"
 });
 
 it("paginates confirmed params, resets offset on submit, and restores Back/Forward controls and results", async () => {
-  resetNavigation(context("Python", true, 10));
+  resetNavigation(context("Python", false, 10));
   render(<Discover />);
   await resultCard();
   fireEvent.click(screen.getByRole("button", { name: "Далее →" }));
   await screen.findByText("Страница 3");
-  expect(navigationUrl()).toBe(context("Python", true, 20));
+  expect(navigationUrl()).toBe(context("Python", false, 20));
   submit("QA");
   await screen.findByText("Страница 1");
-  expect(navigationUrl()).toBe(context("QA", true));
+  expect(navigationUrl()).toBe(context("QA", false));
   act(back);
   await screen.findByText("Страница 3");
   expect(screen.getByLabelText("Должность или ключевые слова")).toHaveValue(
     "Python",
   );
-  expect(screen.getByLabelText("Только удалённая работа")).toBeChecked();
+  expect(screen.getByLabelText("Только удалённая работа")).not.toBeChecked();
   act(back);
   await screen.findByText("Страница 2");
   act(forward);
@@ -359,7 +370,9 @@ it.each([null, [], "malformed", ["", 3]])(
       Promise.resolve(
         url === "/api/profile"
           ? Response.json({ target_roles: roles })
-          : searchResponse(url),
+          : url.startsWith("/api/discover/feed")
+            ? Response.json(feedPage)
+            : searchResponse(url),
       ),
     );
     render(<Discover />);

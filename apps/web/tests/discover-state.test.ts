@@ -77,3 +77,34 @@ it("preserves the existing Applications list return contract", () => {
   expect(safeApplicationReturn(url)).toBe(url);
   expect(safeApplicationReturn("/applications")).toBe("/applications");
 });
+
+it("round-trips cursor URLs and keeps explicit remote offset zero in legacy mode", () => {
+  const cursor = "A".repeat(32);
+  const value = `/discover?${new URLSearchParams({ query: "C++ & Python", remote_only: "true", cursor, selected: identity })}`;
+  expect(
+    discoverUrl(parseDiscoverState(new URLSearchParams(value.split("?")[1]))),
+  ).toBe(value);
+  expect(safeApplicationReturn(value)).toBe(value);
+  const legacy = parseDiscoverState(
+    new URLSearchParams("query=Python&remote_only=true&offset=0"),
+  );
+  expect(legacy.mode).toBeUndefined();
+  expect(discoverUrl(legacy)).toBe(
+    "/discover?query=Python&remote_only=true&offset=0",
+  );
+  expect(
+    parseDiscoverState(new URLSearchParams("query=Python&remote_only=true"))
+      .mode,
+  ).toBe("start");
+});
+it.each([
+  "cursor=bad",
+  `cursor=${"A".repeat(32)}&offset=0`,
+  `cursor=${"A".repeat(32)}&cursor=${"B".repeat(32)}`,
+])("rejects unsafe/mixed cursor mode %s", (suffix) => {
+  const value = `/discover?query=Python&remote_only=true&${suffix}`;
+  expect(
+    discoverUrl(parseDiscoverState(new URLSearchParams(value.split("?")[1]))),
+  ).toBe("/discover");
+  expect(safeApplicationReturn(value)).toBe("/applications");
+});

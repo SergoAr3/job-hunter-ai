@@ -65,3 +65,14 @@ it.each([
     expect(safeNext(login.searchParams.get("next"))).toBe(next);
   },
 );
+
+it("retains a cursor and selected identity in direct/nested login return URLs", () => {
+  const from = `/discover?${new URLSearchParams({ query: "開".repeat(200), remote_only: "true", cursor: "A".repeat(32), selected: JSON.stringify(["trudvsem", "company", "job"]) })}`;
+  for (const target of [
+    from,
+    `/applications/42?from=${encodeURIComponent(from)}`,
+  ]) {
+    const login = new URL(loginUrl(target), "http://local");
+    expect(safeNext(login.searchParams.get("next"))).toBe(target);
+  }
+});
