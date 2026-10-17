@@ -580,3 +580,44 @@ class UserSkill(Base):
     __table_args__ = (PrimaryKeyConstraint("user_profile_id", "skill_id", name="pk_user_skills"),)
     user_profile_id: Mapped[int] = mapped_column(ForeignKey("user_profiles.id", ondelete="CASCADE", name="fk_user_skills_profile"), primary_key=True)
     skill_id: Mapped[int] = mapped_column(ForeignKey("skills.id", ondelete="RESTRICT", name="fk_user_skills_skill"), primary_key=True)
+
+
+class DiscoverFeedChain(Base):
+    __tablename__ = "discover_feed_chains"
+    __table_args__ = (
+        CheckConstraint("state_count BETWEEN 1 AND 64 AND page_count BETWEEN 0 AND 32", name="ck_feed_chain_capacity"),
+        CheckConstraint("expires_at > created_at", name="ck_feed_chain_expiry"),
+        Index("ix_feed_chain_expiry", "expires_at"),
+        Index("ix_feed_chain_creator_expiry", "creator_id", "expires_at"),
+    )
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    # Quota attribution only. Cursors are shareable, not creator-authorized.
+    creator_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    version: Mapped[int] = mapped_column(nullable=False)
+    identity_json: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    state_count: Mapped[int] = mapped_column(nullable=False, default=1, server_default="1")
+    page_count: Mapped[int] = mapped_column(nullable=False, default=0, server_default="0")
+
+
+class DiscoverFeedState(Base):
+    __tablename__ = "discover_feed_states"
+    __table_args__ = (
+        CheckConstraint("status IN ('ready','claimed','complete')", name="ck_feed_state_status"),
+        CheckConstraint("(status = 'claimed' AND lease_token IS NOT NULL AND lease_until IS NOT NULL) OR (status <> 'claimed' AND lease_token IS NULL AND lease_until IS NULL)", name="ck_feed_state_lease"),
+        CheckConstraint("(status = 'complete' AND result_state IS NOT NULL AND result_state IN ('page','paused','end')) OR (status <> 'complete' AND result_state IS NULL)", name="ck_feed_state_result"),
+        CheckConstraint("length(payload) <= 262144", name="ck_feed_state_payload"),
+        Index("ix_feed_state_chain", "chain_id"),
+        Index("ix_feed_state_prev", "prev_token"),
+        Index("ix_feed_state_next", "next_token"),
+    )
+    token: Mapped[str] = mapped_column(String(32), primary_key=True)
+    chain_id: Mapped[str] = mapped_column(ForeignKey("discover_feed_chains.id", ondelete="CASCADE"), nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False)
+    payload: Mapped[str] = mapped_column(Text, nullable=False)
+    result_state: Mapped[str | None] = mapped_column(String(16))
+    prev_token: Mapped[str | None] = mapped_column(ForeignKey("discover_feed_states.token", ondelete="SET NULL"))
+    next_token: Mapped[str | None] = mapped_column(ForeignKey("discover_feed_states.token", ondelete="SET NULL"))
+    lease_token: Mapped[str | None] = mapped_column(String(32))
+    lease_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
