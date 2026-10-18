@@ -3,7 +3,7 @@ from uuid import UUID
 from decimal import Decimal
 from enum import Enum
 
-from sqlalchemy import BigInteger, Boolean, CheckConstraint, Date, DateTime, ForeignKey, Index, JSON, Numeric, String, Text, UniqueConstraint, PrimaryKeyConstraint, Uuid, func
+from sqlalchemy import BigInteger, Boolean, CheckConstraint, Date, DateTime, ForeignKey, Index, JSON, Numeric, String, Text, UniqueConstraint, PrimaryKeyConstraint, Uuid, func, text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -621,3 +621,103 @@ class DiscoverFeedState(Base):
     next_token: Mapped[str | None] = mapped_column(ForeignKey("discover_feed_states.token", ondelete="SET NULL"))
     lease_token: Mapped[str | None] = mapped_column(String(32))
     lease_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class DiscoverInventoryKey(Base):
+    __tablename__ = "discover_inventory_keys"
+    __table_args__ = (
+        UniqueConstraint("identity_digest", name="uq_inventory_key_digest"),
+        CheckConstraint("length(identity_digest) = 64", name="ck_inventory_key_digest"),
+        CheckConstraint("length(canonical_identity) > 0", name="ck_inventory_key_identity"),
+        CheckConstraint("updated_at >= created_at", name="ck_inventory_key_time"),
+    )
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    identity_digest: Mapped[str] = mapped_column(String(64), nullable=False)
+    canonical_identity: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class DiscoverInventoryGeneration(Base):
+    __tablename__ = "discover_inventory_generations"
+    __table_args__ = (
+        CheckConstraint("status IN ('building','ready','failed','expired')", name="ck_inventory_generation_status"),
+        CheckConstraint("source_page_size = 100 AND next_source_page = pages_committed AND pages_committed BETWEEN 0 AND 101", name="ck_inventory_generation_pages"),
+        CheckConstraint("records_examined BETWEEN 0 AND 10000 AND item_count BETWEEN 0 AND 1000 AND item_count <= records_examined AND payload_bytes BETWEEN 0 AND 16777216", name="ck_inventory_generation_capacity"),
+        CheckConstraint("source_total IS NULL OR (source_total BETWEEN 0 AND 10000 AND records_examined <= source_total)", name="ck_inventory_generation_total"),
+        CheckConstraint("page_attempts >= 0 AND total_retry_count >= 0", name="ck_inventory_generation_attempts"),
+        CheckConstraint("(lease_token IS NULL AND lease_until IS NULL) OR (lease_token IS NOT NULL AND lease_until IS NOT NULL AND status = 'building')", name="ck_inventory_generation_lease"),
+        CheckConstraint("status <> 'building' OR (completed_at IS NULL AND failed_at IS NULL AND fresh_until IS NULL AND failure_code IS NULL)", name="ck_inventory_generation_building"),
+        CheckConstraint("status <> 'ready' OR (source_exhausted AND source_total IS NOT NULL AND completed_at IS NOT NULL AND fresh_until IS NOT NULL AND fresh_until > completed_at AND failed_at IS NULL AND failure_code IS NULL AND lease_token IS NULL)", name="ck_inventory_generation_ready"),
+        CheckConstraint("status <> 'failed' OR (failed_at IS NOT NULL AND failure_code IS NOT NULL AND length(trim(failure_code)) > 0 AND completed_at IS NULL AND fresh_until IS NULL AND lease_token IS NULL)", name="ck_inventory_generation_failed"),
+        CheckConstraint("(started_at IS NULL OR started_at >= created_at) AND (completed_at IS NULL OR completed_at >= created_at) AND (failed_at IS NULL OR failed_at >= created_at)", name="ck_inventory_generation_time"),
+        Index("uq_inventory_building_key", "key_id", unique=True,
+              postgresql_where=text("status = 'building'"), sqlite_where=text("status = 'building'")),
+        Index("ix_inventory_generation_fresh", "key_id", "status", "fresh_until"),
+        Index("ix_inventory_generation_due", "status", "next_attempt_at"),
+        Index("ix_inventory_generation_lease", "status", "lease_until"),
+    )
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    key_id: Mapped[str] = mapped_column(ForeignKey("discover_inventory_keys.id", ondelete="RESTRICT"), nullable=False)
+    status: Mapped[str] = mapped_column(String(8), nullable=False, default="building", server_default="building")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    failed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    fresh_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    failure_code: Mapped[str | None] = mapped_column(String(64))
+    source_page_size: Mapped[int] = mapped_column(nullable=False, default=100, server_default="100")
+    next_source_page: Mapped[int] = mapped_column(nullable=False, default=0, server_default="0")
+    source_total: Mapped[int | None] = mapped_column()
+    source_exhausted: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default=text("false"))
+    pages_committed: Mapped[int] = mapped_column(nullable=False, default=0, server_default="0")
+    records_examined: Mapped[int] = mapped_column(nullable=False, default=0, server_default="0")
+    item_count: Mapped[int] = mapped_column(nullable=False, default=0, server_default="0")
+    payload_bytes: Mapped[int] = mapped_column(nullable=False, default=0, server_default="0")
+    last_successful_fetch_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_worked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    page_attempts: Mapped[int] = mapped_column(nullable=False, default=0, server_default="0")
+    total_retry_count: Mapped[int] = mapped_column(nullable=False, default=0, server_default="0")
+    next_attempt_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    lease_token: Mapped[str | None] = mapped_column(String(32))
+    lease_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    source_cooldown_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_source_error: Mapped[str | None] = mapped_column(String(64))
+
+
+class DiscoverInventoryItem(Base):
+    __tablename__ = "discover_inventory_items"
+    __table_args__ = (
+        UniqueConstraint("generation_id", "source", "source_scope", "external_id", name="uq_inventory_item_identity"),
+        CheckConstraint("ordinal >= 0", name="ck_inventory_item_ordinal"),
+        CheckConstraint("length(trim(source)) > 0 AND length(trim(source_scope)) > 0 AND length(trim(external_id)) > 0", name="ck_inventory_item_identity"),
+    )
+    generation_id: Mapped[str] = mapped_column(ForeignKey("discover_inventory_generations.id", ondelete="RESTRICT"), primary_key=True)
+    ordinal: Mapped[int] = mapped_column(primary_key=True)
+    source: Mapped[str] = mapped_column(String(32), nullable=False)
+    source_scope: Mapped[str] = mapped_column(String(255), nullable=False)
+    external_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    snapshot: Mapped[dict] = mapped_column(JSON().with_variant(JSONB, "postgresql"), nullable=False)
+    remote_evidence: Mapped[dict] = mapped_column(JSON().with_variant(JSONB, "postgresql"), nullable=False)
+    source_updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class DiscoverInventoryView(Base):
+    __tablename__ = "discover_inventory_views"
+    __table_args__ = (
+        UniqueConstraint("token_digest", name="uq_inventory_view_digest"),
+        CheckConstraint("length(token_digest) = 64", name="ck_inventory_view_digest"),
+        CheckConstraint("page_size BETWEEN 1 AND 10", name="ck_inventory_view_page_size"),
+        CheckConstraint("expires_at > created_at", name="ck_inventory_view_expiry"),
+        Index("ix_inventory_view_generation_expiry", "generation_id", "expires_at"),
+        Index("ix_inventory_view_expiry", "expires_at"),
+        Index("ix_inventory_view_creator_expiry", "creator_user_id", "expires_at"),
+    )
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    token_digest: Mapped[str] = mapped_column(String(64), nullable=False)
+    generation_id: Mapped[str] = mapped_column(ForeignKey("discover_inventory_generations.id", ondelete="RESTRICT"), nullable=False)
+    page_size: Mapped[int] = mapped_column(nullable=False, default=10, server_default="10")
+    creator_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
