@@ -79,5 +79,5 @@ def test_single_alembic_head_and_expected_parent():
     config = Config(str(Path(__file__).parents[1] / "alembic.ini"))
     config.set_main_option("script_location", str(Path(__file__).parents[1] / "alembic"))
     scripts = ScriptDirectory.from_config(config)
-    assert scripts.get_heads() == ["20261016_21"]
+    assert scripts.get_heads() == ["20261018_22"]
     assert scripts.get_revision("20261016_21").down_revision == "20261009_20"
