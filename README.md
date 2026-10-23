@@ -1,28 +1,53 @@
 # Veylinq
 
-Veylinq — персональное пространство для поиска вакансий, оценки их релевантности и ведения откликов.
+> **AI-assisted job search and application tracking in one workspace.**
+>
+> Veylinq helps users discover vacancies, save and manage applications, turn a CV into a structured profile, and estimate how well a job matches that profile.
 
-## Что умеет сейчас
+**Status:** actively in development. The core user flows already work; additional job sources, market coverage, and matching improvements are still being built.
 
-### Discover
+## What already works
 
-- Поиск вакансий в «Работа России» (Trudvsem) для рынка RU через Web и Telegram.
-- Просмотр результатов и деталей вакансии, предварительная оценка совпадения с профилем пользователя.
-- Сохранение вакансии в Applications и переход к её карточке. При сохранении API получает детали из источника и приводит их к общей модели вакансии.
+- **Job discovery** from an external source through the web app and Telegram bot.
+- **Application tracking** with saved jobs, statuses, notes, and status history.
+- **Profile management** with manual editing and an AI-generated draft from a CV.
+- **Job matching** that compares a user's profile with vacancy requirements and explains the result.
+- **Web + Telegram** clients using the same backend API.
 
-### Applications
+## Where AI is used
 
-- Web-раздел `/applications`: сохранённые вакансии, поиск по названию или компании, фильтр по статусу, сортировка и пагинация.
-- Карточка `/applications/{applicationId}`: детали вакансии, изменение статуса и история статусов, загружаемая при раскрытии блока. Web подтверждает изменение повторным чтением из API после `PUT`.
-- Карточка показывает текущую оценку соответствия профилю: обязательные и желательные навыки, другие критерии и неизвестные данные. Подробнее: [Match UI v1](docs/match-ui-v1.md).
-- В Telegram доступны список откликов и работа со статусами; API также хранит заметки и следующие действия по откликам.
+AI is part of the product workflow rather than a separate demo feature:
 
-### Профиль и Telegram
+1. **CV parsing** — a PDF/DOCX resume is converted into a structured profile draft that the user can review and confirm.
+2. **Job data enrichment** — vacancy data can be normalized and enriched before it is used by the matching layer.
+3. **Candidate-to-job matching** — Veylinq evaluates how well a vacancy fits the user's profile, including required and desired skills and other criteria.
 
-- Профиль пользователя с ручным заполнением и подтверждаемым AI-черновиком из PDF/DOCX резюме; matching использует данные профиля и вакансии.
-- Telegram-бот на aiogram поддерживает Discover, сохранение вакансий и ведение откликов. Бот обращается к API, не работает с БД напрямую.
+## Product flow
 
-## Архитектура
+```text
+Find a vacancy
+      ↓
+Review details + match
+      ↓
+Save to Applications
+      ↓
+Track status / notes / next action
+```
+
+A CV can also be uploaded to create an AI-assisted profile draft used by the matching flow.
+
+## Product screenshots
+
+> Screenshots are being added. The product already has working Web screens for Discover, Applications, job details, profile, and matching, plus Telegram flows.
+
+Recommended screenshots for the repository:
+
+1. **Discover** — vacancy search results with match information.
+2. **Application details** — saved job, status, and match explanation.
+3. **Profile / CV import** — AI-generated profile draft from an uploaded CV.
+4. **Telegram bot** — discovery or application tracking flow.
+
+## Architecture
 
 ```text
 Telegram → Bot ─┐
@@ -31,38 +56,97 @@ Browser  → Web ─┘       ├→ OpenAI API
                         └→ Trudvsem
 ```
 
-`apps/api` содержит бизнес-логику, matching, интеграции с источниками и доступ к данным. `apps/bot` и `apps/web` — клиенты API; Web использует серверный транспорт Next.js. Миграции БД находятся в `apps/api/alembic`, проектная документация — в `docs`.
+The API is the central layer for business logic, matching, integrations, and data access. The web app and Telegram bot are API clients and do not access the database directly.
 
-Matching Foundation v1 добавляет внутренний derived слой `Skill`/`SkillAlias` и
-связи `UserSkill`/`JobSkill` поверх сохранённых semantic JSON skills. Profile PUT,
-CV Apply и Job AI enrichment синхронизируют связи атомарно. Текущий matcher
-`job-match-v2.1` остаётся production default и продолжает читать прежние поля.
-Hybrid [job-match-v2.2](docs/job-match-v22.md) включается только явным
-`MATCH_ALGORITHM_VERSION=job-match-v2.2`; при небезопасных данных полностью
-возвращается к v2.1. Match UI объясняет фактический результат выбранной версии.
-[Matching Foundation v1](docs/matching-foundation-v1.md) описывает normalization,
-migration, bounded backfill и rollback.
+## Tech stack
 
-## Технологии
+**Backend:** Python, FastAPI, SQLAlchemy, Alembic, PostgreSQL  
+**Bot:** aiogram  
+**Web:** Next.js, React, TypeScript  
+**AI:** OpenAI API  
+**Infra:** Docker Compose  
+**Tests:** pytest, Vitest, React Testing Library
 
-Python, FastAPI, SQLAlchemy, Alembic, PostgreSQL, aiogram, Next.js, React, TypeScript, OpenAI API и Docker Compose. Для проверок используются pytest, Vitest и React Testing Library.
+## Current implementation
 
-## Локальный запуск
+### Discover
 
-Основной способ — `make dev` из корня репозитория. Подготовьте Docker Compose, Python, Node.js 22.12+ и npm; создайте корневой `.env` по `.env.example`, установите зависимости API, Bot и Web по [инструкции локального запуска](RUN_LOCAL.md). Для Telegram нужен `TELEGRAM_BOT_TOKEN`; для функций с OpenAI — `OPENAI_API_KEY`.
+- Search vacancies from the currently connected source (Trudvsem / Работа России).
+- View vacancy details and a preliminary profile match.
+- Save a vacancy to Applications.
+- Normalize external vacancy data into the internal job model.
 
-Откройте Web и войдите по email/password после подтверждения email или через Telegram. `make dev` сохраняет verification/reset links в private dev mail capture; recovery flow описан в [RUN_LOCAL.md](RUN_LOCAL.md). Для доступа к существующим данным Bot используйте Telegram login: он открывает тот же аккаунт. `make dev` задаёт `API_BASE_URL=http://127.0.0.1:8000` для Bot и Web; внутренний users.id настраивать не нужно.
+### Applications
+
+- Search, filter, sort, and paginate saved applications.
+- Open an application details page.
+- Change application status and view status history.
+- Store notes and next actions.
+- Show match results with required skills, desired skills, other criteria, and unknown data.
+
+### Profile
+
+- Create and edit a user profile manually.
+- Upload a PDF/DOCX CV.
+- Generate an AI-assisted profile draft.
+- Review and confirm extracted information before it becomes part of the profile.
+
+### Telegram
+
+- Discover vacancies.
+- Save jobs.
+- View applications.
+- Update application statuses.
+
+## Matching
+
+Veylinq currently has a structured matching layer for user and job skills.
+
+The current production matcher remains the default. A newer hybrid version can be enabled explicitly and falls back to the stable matcher when input data is incomplete or unsafe.
+
+The goal is not only to return a score, but to make the result understandable to the user.
+
+## Local development
+
+The primary local workflow is:
 
 ```bash
 make dev
 ```
 
-Команда поднимает PostgreSQL, применяет миграции Alembic и запускает API, Bot и Web. Web: [Discover](http://127.0.0.1:3100/discover) и [Applications](http://127.0.0.1:3100/applications); API и Swagger: [API](http://127.0.0.1:8000) и [Swagger](http://127.0.0.1:8000/docs). `Ctrl+C` останавливает приложения; PostgreSQL остаётся запущенным. Подробности настройки и остановки БД — в [RUN_LOCAL.md](RUN_LOCAL.md).
+This starts PostgreSQL, applies Alembic migrations, and runs the API, bot, and web app.
 
-Проверки: из `apps/api` и `apps/bot` — `.venv/bin/python -m pytest tests`; из `apps/web` — `npm test`, `npm run lint`, `npm run typecheck`, `npm run build`.
+Main local endpoints:
 
-## Статус проекта и планы
+- Web: `http://127.0.0.1:3100`
+- API: `http://127.0.0.1:8000`
+- Swagger: `http://127.0.0.1:8000/docs`
 
-Проект активно развивается. Web MVP с Discover и Applications и Telegram-сценарии уже работают; центральный слой для них — API. Поиск Discover сейчас подключён к «Работа России» для RU. Поддержка нескольких рынков и источников ещё в разработке.
+Environment variables include `TELEGRAM_BOT_TOKEN` for Telegram functionality and `OPENAI_API_KEY` for AI-powered features.
 
-Ближайшие направления: подготовка GitHub-страницы и демо, официальный доступ к источникам вакансий Армении, семантика нескольких рынков и интеграции Армении, международные remote-источники и ATS компаний, улучшение качества Discover и matching v2, развитие учёта откликов и follow-up. Это планы, а не доступные интеграции или функции.
+Tests:
+
+```bash
+# API / Bot
+python -m pytest tests
+
+# Web
+npm test
+npm run lint
+npm run typecheck
+npm run build
+```
+
+## What is still in development
+
+- More job sources and markets.
+- Armenia-specific vacancy integrations.
+- International remote and ATS sources.
+- Matching quality improvements.
+- Better Discover ranking and filtering.
+- More complete application follow-up workflows.
+- Public demo and presentation improvements.
+
+---
+
+Veylinq is an actively developed product focused on making job discovery and application tracking more structured, with AI used where it can remove repetitive manual work and improve matching quality.
